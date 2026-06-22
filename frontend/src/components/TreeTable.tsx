@@ -55,6 +55,21 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   const rows = buildVisibleRows(nodes, collapsed);
   const dataColumns = columns.filter((c) => !c.is_label);
 
+  // Predictable per-type column widths (a user-resized width from the view wins).
+  // With table-layout:fixed + a horizontal-scroll viewport, the table grows as
+  // wide as its columns and the viewport scrolls — so a 16-column matrix stays
+  // fully reachable instead of being squeezed to fit (UX review D1/D3).
+  const colWidth = (c: SnapshotColumn): number => {
+    if (c.width) return c.width;
+    switch (c.type) {
+      case "number": return 104;
+      case "multiline-text": return 300;
+      case "single-select-split":
+      case "multi-select-split": return 184;
+      default: return 160;
+    }
+  };
+
   const handleDrop = (target: SnapshotNode, position: DropPosition) => {
     const src = dragged.current;
     dragged.current = null;
@@ -74,7 +89,15 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   }
 
   return (
+   <div className="arbor-table-viewport" data-testid="table-viewport">
     <table className="arbor-tree" data-testid="tree-table">
+      <colgroup>
+        <col className="arbor-col-label" />
+        {dataColumns.map((c) => (
+          <col key={c.name} style={{ width: colWidth(c) }} />
+        ))}
+        {onDeleteNode && <col className="arbor-col-actions" />}
+      </colgroup>
       <thead>
         <tr>
           <th className="arbor-label-head">
@@ -130,5 +153,6 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         ))}
       </tbody>
     </table>
+   </div>
   );
 }

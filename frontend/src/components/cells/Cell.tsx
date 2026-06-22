@@ -135,7 +135,9 @@ function TextLikeCell({
   if (!editing) {
     return (
       <div
-        className={`arbor-cell ${canEdit ? "is-editable" : "is-suggest"}`}
+        className={`arbor-cell ${canEdit ? "is-editable" : "is-suggest"}${
+          column.type === "multiline-text" ? " is-longtext" : ""
+        }`}
         data-testid="cell"
         data-mode={canEdit ? "edit" : "suggest"}
         data-pending={pending ? "true" : undefined}

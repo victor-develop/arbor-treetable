@@ -99,4 +99,32 @@ describe("App — snapshot-driven shell wiring", () => {
     expect(banner).toHaveTextContent("Suggestion sent to D");
     expect(banner).toHaveTextContent("co-approver: A");
   });
+
+  it("row-density toggle sets data-density on the tree card (UX D2)", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    const { container } = render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const card = container.querySelector(".arbor-tree-card") as HTMLElement;
+    expect(card).toHaveAttribute("data-density", "comfortable"); // default = Cozy
+    fireEvent.click(screen.getByTestId("density-compact"));
+    expect(card).toHaveAttribute("data-density", "compact");
+    expect(screen.getByTestId("density-compact")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("density-expand"));
+    expect(card).toHaveAttribute("data-density", "expand");
+  });
+
+  it("mobile agent FAB toggles the rail drawer open/closed (UX M1)", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    const { container } = render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const rail = container.querySelector(".arbor-rail") as HTMLElement;
+    const fab = screen.getByTestId("agent-fab");
+    expect(rail).not.toHaveClass("is-open"); // table owns the screen by default
+    expect(fab).toHaveTextContent("Ask agent");
+    fireEvent.click(fab);
+    expect(rail).toHaveClass("is-open");
+    expect(fab).toHaveTextContent("Close");
+    fireEvent.click(fab);
+    expect(rail).not.toHaveClass("is-open");
+  });
 });

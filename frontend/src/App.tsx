@@ -217,6 +217,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // ColumnSettings surface (configure / delete / reassign ownership) was built +
   // tested but never mounted; the header gear opens it here.
   const [editingColumn, setEditingColumn] = useState<SnapshotColumn | null>(null);
+  // Row density for long-text cells (line-clamp): compact/comfortable/expand —
+  // the pro "row height" control. Drives data-density on the tree card.
+  const [density, setDensity] = useState<"compact" | "comfortable" | "expand">("comfortable");
+  // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
+  // table owns the screen by default (desktop always shows the rail).
+  const [agentOpen, setAgentOpen] = useState(false);
   const columnOp = (action: string, params: Record<string, unknown>) => {
     // updateColumn/deleteColumn/grantColumn funnel through dispatch like every
     // other mutation. An executed op refetches (label/width/ownership/removal
@@ -467,8 +473,23 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                   onChange={sheet.setView}
                 />
               </details>
+              {/* Row-density control: clamp long-text cells to 2/3 lines or
+                  expand them — keeps the dense matrix scannable (UX review D2). */}
+              <div className="arbor-density" role="group" aria-label="Row density" data-testid="density-toggle">
+                {(["compact", "comfortable", "expand"] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={density === d}
+                    data-testid={`density-${d}`}
+                    onClick={() => setDensity(d)}
+                  >
+                    {d === "compact" ? "Compact" : d === "comfortable" ? "Cozy" : "Expand"}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="arbor-tree-card">
+            <div className="arbor-tree-card" data-density={density}>
               <TreeTable
                 columns={sheet.columns}
                 nodes={sheet.nodes}
@@ -532,14 +553,25 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               delegations={delegationSlot}
             />
           </section>
-          {/* Sticky full-height agent rail (see .arbor-rail in styles.css). */}
-          <div className="arbor-rail">
+          {/* Sticky full-height agent rail on desktop; a toggled bottom drawer on
+              mobile (see .arbor-rail + the @media block in styles.css). */}
+          <div className={`arbor-rail${agentOpen ? " is-open" : ""}`}>
             <AgentSidebar
               client={client}
               sheet={sheetName}
               onActionObserved={() => void sheet.refetch()}
             />
           </div>
+          {/* Mobile-only FAB to open/close the agent drawer (hidden ≥820px). */}
+          <button
+            type="button"
+            className="arbor-agent-fab"
+            data-testid="agent-fab"
+            aria-expanded={agentOpen}
+            onClick={() => setAgentOpen((o) => !o)}
+          >
+            {agentOpen ? "Close" : "Ask agent"}
+          </button>
         </div>
       ) : (
         <p data-testid="empty-shell">Loading…</p>

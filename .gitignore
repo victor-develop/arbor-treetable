@@ -13,3 +13,4 @@ test-results/
 playwright-report/
 demo/hyperframes/*/out/
 *.mp4
+/package-lock.json
