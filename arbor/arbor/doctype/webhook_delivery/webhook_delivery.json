@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "endpoint",
+  "tree_event",
+  "status",
+  "attempts",
+  "signature",
+  "next_retry_at",
+  "last_response"
+ ],
+ "fields": [
+  {
+   "fieldname": "endpoint",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Endpoint",
+   "options": "Webhook Endpoint",
+   "reqd": 1
+  },
+  {
+   "description": "Payload source.",
+   "fieldname": "tree_event",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Tree Event",
+   "options": "Tree Event",
+   "reqd": 1
+  },
+  {
+   "default": "pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "pending\ndelivered\nfailed\nexhausted"
+  },
+  {
+   "default": "0",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts"
+  },
+  {
+   "description": "sha256=<hmac> sent in X-Arbor-Signature.",
+   "fieldname": "signature",
+   "fieldtype": "Data",
+   "label": "Signature"
+  },
+  {
+   "description": "Backoff schedule next attempt time.",
+   "fieldname": "next_retry_at",
+   "fieldtype": "Datetime",
+   "label": "Next Retry At"
+  },
+  {
+   "description": "Last HTTP status/body excerpt.",
+   "fieldname": "last_response",
+   "fieldtype": "Text",
+   "label": "Last Response"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Webhook Delivery",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

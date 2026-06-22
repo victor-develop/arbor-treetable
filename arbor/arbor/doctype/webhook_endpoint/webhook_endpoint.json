@@ -1,0 +1,92 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "url",
+  "secret",
+  "active",
+  "scope",
+  "target_doctype",
+  "target",
+  "event_types"
+ ],
+ "fields": [
+  {
+   "description": "Delivery URL.",
+   "fieldname": "url",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "URL",
+   "options": "URL",
+   "reqd": 1
+  },
+  {
+   "description": "HMAC-SHA256 signing secret.",
+   "fieldname": "secret",
+   "fieldtype": "Password",
+   "label": "Secret"
+  },
+  {
+   "default": "1",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "label": "Active"
+  },
+  {
+   "default": "sheet",
+   "fieldname": "scope",
+   "fieldtype": "Select",
+   "label": "Scope",
+   "options": "sheet\nbranch\ncolumn"
+  },
+  {
+   "default": "Tree Sheet",
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target DocType",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "description": "Scope target: Tree Sheet | Tree Node | Tree Column.",
+   "fieldname": "target",
+   "fieldtype": "Dynamic Link",
+   "label": "Target",
+   "options": "target_doctype"
+  },
+  {
+   "description": "Subscribed Tree Event types.",
+   "fieldname": "event_types",
+   "fieldtype": "JSON",
+   "label": "Event Types"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Webhook Endpoint",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

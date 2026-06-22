@@ -1,0 +1,37 @@
+{
+ "actions": [],
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "action",
+  "target_kind",
+  "operation",
+  "payload",
+  "resolved_approver",
+  "item_approved",
+  "approved_by"
+ ],
+ "fields": [
+  {"fieldname": "action", "fieldtype": "Data", "in_list_view": 1, "label": "Action", "reqd": 1, "description": "Capability id of this change (e.g. updateCell, addNode)."},
+  {"fieldname": "target_kind", "fieldtype": "Data", "label": "Target Kind"},
+  {"fieldname": "operation", "fieldtype": "Data", "label": "Operation"},
+  {"fieldname": "payload", "fieldtype": "JSON", "label": "Payload", "description": "The capability params for this change."},
+  {"fieldname": "resolved_approver", "fieldtype": "Data", "in_list_view": 1, "label": "Resolved Approver", "description": "Approver at proposal time (re-resolved at decision time)."},
+  {"fieldname": "item_approved", "fieldtype": "Check", "in_list_view": 1, "label": "Approved", "default": "0"},
+  {"fieldname": "approved_by", "fieldtype": "Data", "label": "Approved By"}
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Change Request Change",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

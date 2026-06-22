@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "subscriber",
+  "subscriber_kind",
+  "scope",
+  "target_doctype",
+  "target",
+  "event_types",
+  "delivery",
+  "requires_ack"
+ ],
+ "fields": [
+  {
+   "description": "User name OR external system identifier.",
+   "fieldname": "subscriber",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Subscriber",
+   "reqd": 1
+  },
+  {
+   "default": "user",
+   "fieldname": "subscriber_kind",
+   "fieldtype": "Select",
+   "label": "Subscriber Kind",
+   "options": "user\nexternal"
+  },
+  {
+   "default": "sheet",
+   "fieldname": "scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Scope",
+   "options": "sheet\nbranch\ncolumn",
+   "reqd": 1
+  },
+  {
+   "default": "Tree Sheet",
+   "description": "Resolved from scope: sheet->Tree Sheet, branch->Tree Node, column->Tree Column.",
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target DocType",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "description": "Tree Sheet | Tree Node (branch root) | Tree Column.",
+   "fieldname": "target",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "label": "Target",
+   "options": "target_doctype",
+   "reqd": 1
+  },
+  {
+   "description": "Subset of Tree Event types, e.g. [\"CHANGE_PROPOSED\",\"CHANGE_APPROVED\"].",
+   "fieldname": "event_types",
+   "fieldtype": "JSON",
+   "label": "Event Types"
+  },
+  {
+   "default": "in-app",
+   "fieldname": "delivery",
+   "fieldtype": "Select",
+   "label": "Delivery",
+   "options": "in-app\nemail\nwebhook"
+  },
+  {
+   "default": "0",
+   "description": "If set, recipient must acknowledge (powers the accountability report).",
+   "fieldname": "requires_ack",
+   "fieldtype": "Check",
+   "label": "Requires Ack"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Subscription",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

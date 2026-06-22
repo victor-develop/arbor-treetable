@@ -1,0 +1,1725 @@
+/* Arbor thin-shell styling — aligned to the Frappe UI (Espresso) design system.
+   Tokens mirror Frappe UI's generated palette: a single neutral gray scale
+   (#f8f8f8 → #0f0f0f) projected into semantic ink (text) / surface (bg) /
+   outline (border) roles, Inter as the interface typeface, subtle elevation,
+   8px radii, and the Frappe button/input/card idioms. Class names + data-testid
+   are unchanged — this file is pure presentation. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Frappe UI neutral gray scale (lightMode/gray) */
+  --gray-50: #f8f8f8;
+  --gray-100: #f3f3f3;
+  --gray-200: #ededed;
+  --gray-300: #e2e2e2;
+  --gray-400: #c7c7c7;
+  --gray-500: #999999;
+  --gray-600: #7c7c7c;
+  --gray-700: #525252;
+  --gray-800: #383838;
+  --gray-900: #171717;
+  --gray-950: #0f0f0f;
+
+  /* Semantic roles */
+  --ink: #171717; /* headings / strong text (ink-gray-8/9) */
+  --ink-2: #383838; /* body text (ink-gray-7) */
+  --ink-muted: #525252; /* secondary (ink-gray-6) */
+  --ink-subtle: #7c7c7c; /* tertiary / hints (ink-gray-5) */
+  --ink-placeholder: #999999; /* placeholders (ink-gray-4) */
+
+  --surface: #ffffff;
+  --surface-1: #f8f8f8; /* page bg / subtle fill */
+  --surface-2: #f3f3f3; /* input fill / hover */
+  --surface-3: #ededed; /* pressed / track */
+
+  --outline: #e2e2e2; /* default border (outline-gray-2) */
+  --outline-subtle: #ededed; /* hairline (outline-gray-1) */
+  --outline-strong: #c7c7c7; /* emphasized border (outline-gray-3) */
+
+  /* Frappe blue accent (links, focus, selection) */
+  --accent: #2490ef;
+  --accent-ink: #1579d0;
+  --accent-ring: rgba(36, 144, 239, 0.35);
+  --accent-tint: #eaf4fd;
+
+  /* State colors (Frappe semantic, subtle surfaces) */
+  --green: #198038;
+  --green-bg: #e9f7ee;
+  --green-border: #bce3c9;
+  --amber: #9d5b00;
+  --amber-bg: #fdf3e7;
+  --amber-border: #f3d6a8;
+  --red: #c2371f;
+  --red-bg: #fdeceb;
+  --red-border: #f3c6bf;
+
+  /* Back-compat aliases for legacy var names used across components */
+  --arbor-border: var(--outline);
+  --arbor-accent: var(--accent);
+  --arbor-suggest: var(--amber);
+  --arbor-pending: var(--amber);
+  --arbor-saved: var(--green);
+  --arbor-error: var(--red);
+  --arbor-bg-muted: var(--surface-1);
+
+  /* Radius + elevation */
+  --r-sm: 6px;
+  --r: 8px;
+  --r-lg: 10px;
+  --r-full: 9999px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
+  --shadow-card: 0 1px 2px rgba(15, 15, 15, 0.04), 0 0 0 1px var(--outline-subtle);
+  --shadow-modal: 0 12px 40px rgba(15, 15, 15, 0.14), 0 2px 8px rgba(15, 15, 15, 0.08);
+
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  font-feature-settings: "cv05", "ss01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-1);
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- layout -- */
+.arbor-app {
+  padding: 24px;
+  max-width: 1360px;
+  margin: 0 auto;
+}
+.arbor-header {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.arbor-header-titles {
+  flex: 1;
+  min-width: 0;
+}
+.arbor-header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+.arbor-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.arbor-header-meta [data-testid="node-count"] {
+  padding-left: 16px;
+  border-left: 1px solid var(--outline);
+}
+/* The banner spans the full header width below the title row. */
+.arbor-header .arbor-banner {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+.arbor-body {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+.arbor-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Shared card surface for the stacked panels. */
+.arbor-toolbar,
+.arbor-io,
+.arbor-notif-inbox,
+.arbor-cr-inbox,
+.arbor-delegation {
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
+  margin: 0;
+}
+/* Toolbar: add-column form (grows) + subscribe control (hugs right). */
+.arbor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.arbor-toolbar .arbor-add-column {
+  flex: 1;
+  min-width: 0;
+}
+.arbor-toolbar .arbor-subscription {
+  margin-left: auto;
+}
+/* The tree table sits in its own card with no inner padding (the table owns it). */
+.arbor-tree-card {
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+/* Section headings inside cards. */
+.arbor-notif-inbox > h2,
+.arbor-cr-inbox > h2,
+.arbor-delegation > h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+/* Trailing count reads as quiet metadata, not part of the bold title. */
+.arbor-count {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+/* -------------------------------------------------------------- controls -- */
+/* Frappe button idioms. Default = subtle gray; primary = solid near-black;
+   destructive = subtle red. All share radius, weight, and focus ring. */
+/* Secondary buttons are a subtle gray fill (no border); inputs carry a resting
+   hairline (below), so fields read as editable wells and buttons as flat pressable
+   controls — distinct without bordering every ghost/icon button. Primary = solid
+   near-black (per-action); tertiary = ghost/icon (per-action). */
+.arbor-app button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r);
+  border: 1px solid var(--outline);
+  padding: 5px 12px;
+  min-height: 32px;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  color: var(--ink-2);
+  background: var(--surface);
+  line-height: 1.4;
+}
+.arbor-app button:hover:not(:disabled) {
+  background: var(--surface-1);
+  border-color: var(--outline-strong);
+}
+.arbor-app button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+}
+.arbor-app button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* Solid (near-black) primaries keep full strength when enabled and read as a
+   clearly-disabled light gray when off — never a washed-out dark button. */
+.arbor-app [data-testid="agent-send"],
+.arbor-app [data-testid="import-confirm"],
+.arbor-app [data-testid="cs-save"],
+.arbor-app [data-testid="delegate-submit"] {
+  background: var(--ink);
+  color: #fff;
+  border-color: transparent;
+}
+.arbor-app [data-testid="agent-send"]:hover:not(:disabled),
+.arbor-app [data-testid="import-confirm"]:hover:not(:disabled),
+.arbor-app [data-testid="cs-save"]:hover:not(:disabled),
+.arbor-app [data-testid="delegate-submit"]:hover:not(:disabled) {
+  background: var(--gray-800);
+  border-color: transparent;
+}
+.arbor-app [data-testid="agent-send"]:disabled,
+.arbor-app [data-testid="import-confirm"]:disabled,
+.arbor-app [data-testid="delegate-submit"]:disabled {
+  background: var(--surface-3);
+  color: var(--ink-muted); /* ≥4.5:1 on the light disabled fill */
+  border-color: transparent;
+  opacity: 1;
+}
+
+/* Styled file picker (native input hidden; label is the affordance). */
+.arbor-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.arbor-file input[type="file"] {
+  display: none;
+}
+.arbor-file-btn {
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r);
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  color: var(--ink-2);
+}
+.arbor-file:hover .arbor-file-btn {
+  background: var(--surface-1);
+  border-color: var(--outline-strong);
+}
+.arbor-file-name {
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+/* Frappe inputs: subtle gray fill, hairline border, white + ring on focus. */
+.arbor-app input,
+.arbor-app textarea,
+.arbor-app select {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-2); /* gray well — distinct from white+hairline buttons */
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  padding: 6px 10px;
+  min-height: 32px;
+  box-sizing: border-box;
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.arbor-app textarea {
+  min-height: 38px;
+}
+.arbor-app input::placeholder,
+.arbor-app textarea::placeholder {
+  color: var(--ink-subtle);
+}
+.arbor-app input:focus,
+.arbor-app textarea:focus,
+.arbor-app select:focus {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--outline-strong);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+/* Subscribe / unsubscribe control. */
+.arbor-subscription {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Add-column form: inline field row. */
+.arbor-add-column {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.arbor-add-column [data-testid="ac-duplicate"] {
+  color: var(--red);
+  font-size: 12px;
+}
+/* The add-column submit is a secondary action (inherits the white+hairline base
+   button), so the toolbar reads as one consistent secondary family; its disabled
+   empty-form state recedes (base :disabled opacity) rather than dominating. */
+
+/* ------------------------------------------------------------- tree grid -- */
+.arbor-tree {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.arbor-tree thead th {
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--outline);
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted); /* #525252 — clears AA (7.4:1) at 11px */
+  vertical-align: middle;
+}
+.arbor-tree tbody td {
+  border-bottom: 1px solid var(--outline-subtle);
+  text-align: left;
+  padding: 8px 12px;
+  vertical-align: middle;
+  color: var(--ink-2);
+}
+.arbor-cell-empty {
+  color: var(--ink-placeholder);
+}
+.arbor-tree tbody tr:last-child td {
+  border-bottom: none;
+}
+/* Numeric columns right-align with tabular figures (Frappe list-view idiom). */
+.arbor-tree th.is-numeric,
+.arbor-tree td.is-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.arbor-tree td.is-numeric .arbor-cell {
+  justify-content: flex-end;
+}
+.arbor-tree th.is-numeric .arbor-col-head {
+  justify-content: flex-end;
+}
+.arbor-row {
+  transition: background-color 0.1s ease;
+}
+.arbor-row:hover {
+  background: var(--surface-1);
+}
+.arbor-row[data-pending-move="true"] {
+  outline: 1px dashed var(--amber);
+  outline-offset: -1px;
+  background: var(--amber-bg);
+}
+/* The row awaiting delete-confirm is visually bound to its confirm cluster. */
+.arbor-row[data-pending-delete="true"] {
+  background: var(--red-bg);
+  box-shadow: inset 2px 0 0 var(--red);
+}
+.arbor-label-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.arbor-label {
+  font-weight: 500;
+  color: var(--ink);
+}
+.arbor-chevron,
+.arbor-chevron-spacer {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none !important;
+  background: none !important;
+  cursor: pointer;
+  color: var(--ink-subtle);
+  font-size: 10px;
+  border-radius: var(--r-sm);
+  padding: 0 !important;
+}
+.arbor-chevron:hover {
+  background: var(--surface-3) !important;
+  color: var(--ink-2);
+}
+
+/* Column header + schema-editor gear. */
+.arbor-col-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Icon buttons are borderless/transparent (the global secondary-button border
+   must not leak onto them). */
+.arbor-col-head .arbor-col-settings-open {
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  color: var(--ink-subtle);
+  padding: 0 2px !important;
+  min-height: 0 !important;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.arbor-col-head .arbor-col-settings-open:hover {
+  color: var(--accent) !important;
+  background: none !important;
+}
+
+/* Trailing per-row actions cell (right-aligned, narrow) — keeps the delete
+   affordance out of the Name column so it never displaces the label. */
+.arbor-actions-head {
+  width: 44px;
+}
+.arbor-actions-cell {
+  width: 1%; /* shrink to content; grows only for the confirm cluster */
+  text-align: right;
+  white-space: nowrap;
+}
+.arbor-actions-cell .arbor-row-confirm {
+  justify-content: flex-end;
+}
+.arbor-row-delete {
+  border: none !important;
+  background: none !important;
+  cursor: pointer;
+  opacity: 0;
+  color: var(--ink-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0 !important;
+  border-radius: var(--r-sm);
+}
+.arbor-row:hover .arbor-row-delete {
+  opacity: 0.75;
+}
+.arbor-row-delete:hover {
+  opacity: 1;
+  background: var(--red-bg) !important;
+  color: var(--red);
+}
+.arbor-row-delete:focus-visible {
+  opacity: 1;
+}
+.arbor-row-confirm {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+.arbor-row-confirm-label {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-right: 2px;
+}
+/* Confirmed-destructive step: calm subtle-red (red-bg fill, red text/border) —
+   the SAME treatment as the modal's cs-delete-confirm, so destructive confirms
+   read identically everywhere and stay restrained on the neutral row. */
+/* Confirm/Cancel share the global button scale (32px / 13px) so they don't
+   introduce a second button size on the screen. */
+.arbor-row-delete-confirm {
+  border: 1px solid var(--red-border) !important;
+  color: var(--red) !important;
+  background: var(--red-bg) !important;
+  border-radius: var(--r) !important; /* match the global 8px button radius */
+  font-weight: 500;
+}
+.arbor-row-delete-cancel {
+  border: 1px solid var(--outline) !important;
+  background: var(--surface) !important;
+  border-radius: var(--r) !important;
+  font-weight: 500;
+}
+.arbor-row-confirm-label {
+  margin-right: 8px;
+}
+
+/* ------------------------------------------------------------------ cells -- */
+.arbor-cell {
+  min-height: 26px; /* matches the segmented toggle so toggle/em-dash rows stay equal height */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-sm);
+}
+.arbor-cell.is-editable,
+.arbor-cell.is-suggest {
+  margin: -2px -6px;
+  padding: 2px 6px;
+  cursor: text;
+  color: var(--ink-2); /* committed data is neutral ink, never a state color */
+}
+.arbor-cell.is-editable:hover,
+.arbor-cell.is-suggest:hover {
+  background: var(--surface-2);
+}
+.arbor-cell.is-suggest {
+  cursor: cell;
+}
+.arbor-cell.is-readonly {
+  color: var(--ink-subtle);
+  cursor: default;
+}
+.arbor-cell.is-editing {
+  margin: -2px -6px;
+}
+.arbor-cell.is-editing input,
+.arbor-cell.is-editing textarea {
+  width: 100%;
+  min-width: 80px;
+}
+/* Edit/suggest affordances: monochrome, revealed on row hover only — never a
+   persistent colored glyph competing with the data. */
+.arbor-edit-hint,
+.arbor-suggest-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-placeholder);
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease;
+}
+/* Reveal the affordance only on the hovered cell — not the whole row — so a
+   hovered row never fills with repeated pencils (e.g. in empty cells). */
+.arbor-cell.is-editable:hover .arbor-edit-hint,
+.arbor-cell.is-suggest:hover .arbor-suggest-hint {
+  opacity: 1;
+}
+.arbor-cell.is-suggest:hover .arbor-suggest-hint {
+  color: var(--amber); /* amber only on intent-to-suggest hover, not at rest */
+}
+.arbor-cell.is-editable:hover .arbor-edit-hint {
+  color: var(--ink-subtle);
+}
+.arbor-suggest-label {
+  font-size: 11px;
+  color: var(--amber);
+}
+.arbor-invalid {
+  font-size: 11px;
+  color: var(--red);
+}
+.arbor-pending {
+  color: var(--amber);
+  font-weight: 700;
+}
+/* When a cell has >1 open suggestion the marker shows the count as a small amber
+   badge (single suggestion stays a bare dot). */
+.arbor-pending[data-count]:not([data-count="1"]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* Split (segmented) control — Frappe toggle: gray track, white active pill. */
+.arbor-split {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  padding: 2px;
+  gap: 2px;
+}
+.arbor-cell:hover .arbor-split {
+  border-color: var(--outline);
+}
+.arbor-segment {
+  border: none !important;
+  background: none !important;
+  padding: 2px 9px !important;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--ink-muted);
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+.arbor-segment:hover:not(.is-active) {
+  color: var(--ink);
+}
+.arbor-segment.is-active {
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--outline) !important;
+  font-weight: 500;
+}
+.arbor-segment.is-unknown {
+  background: var(--amber-bg) !important;
+  color: var(--amber) !important;
+}
+/* Unset cells (no chosen segment — common on parent/aggregate rows) recede to a
+   quiet placeholder so they don't add a row of noisy empty toggles; the control
+   surfaces on hover. */
+/* At rest, an unset cell collapses to the same quiet em-dash placeholder used on
+   parent rows (no track, no option labels); the full toggle is revealed on hover
+   so empty state reads consistently across the whole STATUS column. */
+.arbor-split:not(:has(.is-active)) {
+  background: transparent;
+  border-color: transparent;
+  padding: 0;
+}
+.arbor-split:not(:has(.is-active)) .arbor-segment {
+  display: none;
+}
+.arbor-split:not(:has(.is-active))::before {
+  content: "—";
+  color: var(--ink-placeholder);
+}
+.arbor-cell:hover .arbor-split:not(:has(.is-active)) {
+  background: var(--surface-2);
+  border-color: var(--outline);
+  padding: 2px;
+}
+.arbor-cell:hover .arbor-split:not(:has(.is-active)) .arbor-segment {
+  display: inline-flex;
+  color: var(--ink-muted);
+}
+.arbor-cell:hover .arbor-split:not(:has(.is-active))::before {
+  content: none;
+}
+
+/* ----------------------------------------------------------------- banner -- */
+.arbor-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: var(--r);
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.arbor-banner.is-saved {
+  background: var(--green-bg);
+  color: var(--green);
+  border-color: var(--green-border);
+}
+.arbor-banner.is-suggested {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: var(--amber-border);
+}
+.arbor-banner.is-error {
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-border);
+}
+.arbor-banner [data-testid="banner-cr"] {
+  opacity: 0.8;
+  font-weight: 400;
+}
+
+/* ----------------------------------------------------------- agent sidebar -- */
+.arbor-agent {
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.arbor-agent > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.arbor-agent > header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+.arbor-agent [data-testid="agent-tools-toggle"] {
+  font-size: 12px;
+  font-weight: 400;
+  padding: 0 !important;
+  background: none !important;
+  border: none !important;
+  min-height: 0 !important;
+  text-decoration: none; /* quiet inline link, subordinate to the 'Agent' title */
+  color: var(--accent-ink); /* #1579d0 — link text clears AA on white */
+}
+.arbor-agent [data-testid="agent-tools-toggle"]:hover {
+  text-decoration: underline;
+}
+.arbor-agent-tools-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-agent-tools-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.arbor-agent [data-testid="agent-tools"] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: var(--ink-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Read-only capability tags — small subtle-gray metadata chips (distinct from
+   the white+hairline buttons), each individually scannable. */
+/* Capabilities are read-only metadata chips — a subtle-gray fill + hairline keeps
+   each item individually scannable and avoids the wrap-separator artifacts of a
+   middot list; cursor:default signals they are non-interactive. */
+/* Flat gray fill, NO border — perceptible as a tag yet distinct from the app's
+   white+hairline buttons, so the read-only capability list never reads as a grid
+   of pressable controls. */
+.arbor-agent [data-testid="agent-tools"] li {
+  background: var(--surface-2);
+  border: none;
+  color: var(--ink-muted);
+  border-radius: var(--r-sm);
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: default;
+}
+.arbor-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Empty-state for the full-height rail (UX: kill the dead gutter). The transcript
+   flex-fills the rail; this empty state in turn flex-fills the transcript and
+   vertically centers its content, so the idle illustration + lead + starter
+   prompts claim the whole space above the docked composer instead of clustering
+   at the top and leaving a ~350px void. */
+.arbor-agent-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 14px;
+  padding: 8px 2px;
+}
+/* Quiet idle mark — a centered glyph in a soft well, so the idle rail reads as a
+   deliberate "ask the agent" affordance rather than blank canvas. */
+.arbor-agent-empty-mark {
+  align-self: center;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink-subtle);
+  margin-bottom: 2px;
+}
+.arbor-agent-empty-lead {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+  line-height: 1.45;
+  text-align: center;
+}
+.arbor-agent-empty-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-subtle);
+}
+.arbor-agent-suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Starter prompts read as quiet white+hairline pills (the app's secondary idiom),
+   left-aligned and full-width so they scan as a suggestion list, not a toolbar. */
+.arbor-agent-suggestion {
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.arbor-agent-suggestion:hover:not(:disabled) {
+  border-color: var(--ink-subtle);
+  background: var(--surface-hover, var(--surface));
+}
+.arbor-turn {
+  font-size: 13px;
+}
+.arbor-frame.is-user {
+  display: inline-block;
+  align-self: flex-end;
+  background: var(--ink);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: var(--r-lg);
+  border-bottom-right-radius: 3px;
+  margin: 0;
+}
+.arbor-turn.is-user {
+  text-align: right;
+}
+.arbor-frame.is-thought {
+  color: var(--ink-subtle);
+  font-style: italic;
+  margin: 2px 0;
+}
+.arbor-frame.is-action {
+  color: var(--ink-muted);
+  margin: 2px 0;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.arbor-frame.is-action [data-testid="frame-action-tool"] {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.arbor-frame.is-action code {
+  font-size: 11px;
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-muted);
+}
+.arbor-frame.is-observation {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin: 2px 0;
+}
+.arbor-frame.is-final {
+  color: var(--ink);
+  margin: 2px 0;
+}
+.arbor-cr-chip {
+  margin-left: 6px;
+  border: 1px solid var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-tint) !important;
+  border-radius: var(--r-full);
+  padding: 1px 10px !important;
+  cursor: pointer;
+  font-size: 11px;
+}
+.arbor-agent-error {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red-border);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.arbor-agent-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  background: var(--surface); /* white well on the white card — avoids gray-on-gray stacking */
+  padding: 8px;
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.arbor-agent-input:focus-within {
+  background: var(--surface);
+  border-color: var(--outline-strong);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.arbor-agent-input textarea {
+  resize: vertical;
+  min-height: 38px;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+.arbor-agent-input textarea:focus {
+  box-shadow: none !important;
+}
+.arbor-agent-input [data-testid="agent-send"] {
+  align-self: flex-end;
+  background: var(--ink);
+  color: #fff;
+}
+.arbor-agent-input [data-testid="agent-send"]:hover:not(:disabled) {
+  background: var(--gray-800);
+}
+/* Disabled (empty input) Send sits on the gray composer well — give it a white
+   fill + hairline so the control shape stays legible (no gray-on-gray). */
+.arbor-agent-input [data-testid="agent-send"]:disabled {
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  color: var(--ink-muted); /* ~7:1 on white — clears AA for the 13px label */
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------- import/export -- */
+.arbor-io {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.arbor-io textarea {
+  flex: 1;
+  min-width: 220px;
+  resize: vertical;
+}
+.arbor-io [data-testid="import-preview"] {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--outline-subtle);
+}
+.arbor-io [data-testid="import-summary"] {
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin: 0;
+}
+.arbor-io [data-testid="import-confirm"] {
+  background: var(--ink);
+  color: #fff;
+}
+.arbor-io [data-testid="import-error"] {
+  width: 100%;
+  color: var(--red);
+  font-size: 12px;
+  margin: 0;
+}
+.arbor-io input[type="file"] {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* ------------------------------------------------------------------ modal -- */
+.arbor-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.3);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 50;
+}
+.arbor-modal {
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-lg);
+  min-width: 360px;
+  max-width: 480px;
+  box-shadow: var(--shadow-modal);
+}
+.arbor-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink);
+  padding: 16px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-modal-head button {
+  background: none !important;
+  border: none !important;
+  min-height: 0 !important;
+  color: var(--ink-subtle);
+  font-size: 14px;
+  padding: 2px 6px !important;
+}
+.arbor-modal-head button:hover {
+  color: var(--ink);
+}
+.arbor-column-settings {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.arbor-column-settings section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+/* Inputs use the shared subtle-gray well idiom (now visually distinct from the
+   white+hairline secondary buttons). Match heights so a flex-end row aligns. */
+.arbor-column-settings input {
+  height: 32px;
+  box-sizing: border-box;
+}
+.arbor-column-settings button {
+  height: 32px;
+  box-sizing: border-box;
+}
+/* Single solid primary in the dialog = 'Save' (label/width). The editors section
+   commits are gray secondaries (blue is reserved for links/focus, never actions),
+   kept visually subordinate to the lead 'Save'. 'Save ownership' is pushed to the
+   row end so it reads as the section-level commit, paired-but-separate from the
+   '+ editor' add affordance next to its input. */
+/* Dialog footer action bar: the lead 'Save' lives here, hairline-separated from
+   the field body (Frappe dialog idiom), not inline with a field row. */
+.arbor-cs-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--outline-subtle);
+}
+/* Editors row: '+ editor' is a quiet ghost add-affordance tied to the input;
+   'Update editors' is the section commit pushed to the row end so the two roles
+   read distinctly (not two equal secondaries). */
+.arbor-column-settings [data-testid="cs-editor-add"] {
+  background: none;
+  border: none;
+  color: var(--accent-ink);
+  padding: 4px 6px;
+}
+.arbor-column-settings [data-testid="cs-editor-add"]:hover:not(:disabled) {
+  background: var(--accent-tint);
+}
+.arbor-column-settings [data-testid="cs-grant-save"] {
+  margin-left: auto;
+  background: var(--surface-2); /* flat gray secondary, distinct from the white input wells */
+  border-color: transparent;
+}
+.arbor-column-settings [data-testid="cs-grant-save"]:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+/* Labeled field groups. */
+.arbor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.arbor-field-narrow {
+  flex: 0 0 80px;
+}
+.arbor-field input {
+  width: 100%;
+}
+.arbor-field-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+.arbor-cs-ownership {
+  position: relative;
+}
+/* Section grouping labels rank above field labels (uppercase eyebrow vs the
+   sentence-case field labels), so groups read distinctly from fields. */
+.arbor-cs-section-label,
+.arbor-cs-danger-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--ink-muted); /* both eyebrows identical + AA (7.8:1) on white */
+}
+.arbor-cs-section-label {
+  flex-basis: 100%;
+  margin-bottom: -2px;
+}
+.arbor-column-settings [data-testid="cs-save"][data-mode="suggest"] {
+  background: var(--amber-bg) !important;
+  color: var(--amber) !important;
+  border: 1px solid var(--amber-border);
+}
+.arbor-column-settings [data-testid="cs-label-guard"] {
+  color: var(--amber);
+  font-size: 12px;
+  margin: 0;
+}
+/* Danger zone: clearly fenced from routine controls; trigger reads destructive.
+   Higher specificity than `.arbor-column-settings section` so the column layout
+   + left alignment win (the generic section rule is flex-end/row). */
+.arbor-column-settings section.arbor-cs-danger {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--outline);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.arbor-cs-danger-label {
+  font-size: 11px;
+  /* weight/tracking/color governed by the shared eyebrow rule so EDITORS and
+     DANGER ZONE are pixel-identical. */
+}
+.arbor-column-settings [data-testid="cs-delete"] {
+  border: 1px solid var(--red-border) !important;
+  color: var(--red) !important;
+  background: var(--red-bg) !important;
+}
+.arbor-cs-confirm {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.arbor-column-settings [data-testid="cs-delete-confirm"] {
+  border: 1px solid var(--red-border) !important;
+  color: var(--red) !important;
+  background: var(--red-bg) !important;
+}
+
+/* ---------------------------------------------- inboxes + delegation lists -- */
+.arbor-notifications,
+.arbor-grants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.arbor-notification,
+.arbor-grant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  margin-bottom: 8px;
+  font-size: 13px;
+  background: var(--surface-1);
+}
+.arbor-notification:last-child,
+.arbor-grant:last-child {
+  margin-bottom: 0;
+}
+/* Dim only the message when acked — keep the green 'Acknowledged' status legible
+   (full contrast), not faded below readability. */
+.arbor-notification[data-acked="true"] .arbor-notification-msg {
+  color: var(--ink-subtle);
+}
+/* A notification still awaiting acknowledgement (has an Acknowledge button) gets
+   a left accent rule — as an inset shadow so it respects the rounded corners — and
+   a white surface so the actionable item stands clear of passive (acked) rows. */
+.arbor-notification:has([data-testid="ack-btn"]) {
+  background: var(--surface); /* white actionable row stands clear of gray acked rows */
+  border-color: var(--outline);
+  box-shadow: inset 2px 0 0 var(--accent); /* inset shadow respects the rounded corners */
+}
+.arbor-notification [data-testid="ack-btn"] {
+  border: 1px solid var(--outline);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.arbor-notification [data-testid="ack-state"] {
+  font-size: 12px;
+  color: var(--green);
+}
+.arbor-notif-inbox [data-testid="notification-inbox-empty"],
+.arbor-cr-inbox [data-testid="cr-inbox-empty"] {
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin: 0;
+}
+/* Count line above the CR list — quiet metadata + a "you can approve" tally so
+   the actionable subset reads before the scroll. */
+.arbor-cr-inbox-head {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+/* Cap the CR list to a scrollable region so a long queue stays bounded (UX
+   scalability) rather than running the whole page on. The sticky bulk bar lives
+   OUTSIDE this scroller (a sibling in .arbor-cr-zone), so it stays docked while
+   the rows scroll beneath. */
+.arbor-cr-inbox[data-count] {
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+/* Branch delegation control. */
+.arbor-grant [data-testid^="revoke-"] {
+  border: 1px solid var(--red-border) !important;
+  color: var(--red) !important;
+  background: var(--surface) !important;
+}
+.arbor-grant [data-testid^="revoke-"]:hover {
+  background: var(--red-bg) !important;
+}
+.arbor-delegate-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--outline-subtle);
+}
+/* Delegate-form labels use the uppercase tracked label idiom (matching table
+   headers + section labels) so the create-grant form reads as labeled fields. */
+.arbor-delegate-form .arbor-field-label {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+/* Grant row subject: branch leads (strong ink), grantee + arrow recede so the
+   "who has which branch" reads before the Revoke action. */
+.arbor-grant-branch {
+  color: var(--ink);
+  font-weight: 500;
+}
+.arbor-grant-arrow {
+  color: var(--ink-subtle);
+}
+.arbor-grant-grantee {
+  color: var(--ink-muted);
+}
+.arbor-delegate-form select,
+.arbor-delegate-form input {
+  flex: 1;
+  min-width: 0;
+}
+.arbor-delegate-form [data-testid="delegate-submit"] {
+  background: var(--ink);
+  color: #fff;
+}
+
+/* ------------------------------------------------ change request review --- */
+/* Match the sibling list-item treatment used by notifications + grants on the
+   same screen: subtle fill + hairline, with the inner change well kept white. */
+.arbor-cr-panel {
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background: var(--surface-1);
+}
+.arbor-cr-panel:last-child {
+  margin-bottom: 0;
+}
+/* Collapsed default = a single dense line. The header is the row; the diff list +
+   actions only appear when expanded (or for actionable rows, the actions sit at
+   the row's right edge — see below). */
+.arbor-cr-panel > header {
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 0;
+}
+.arbor-cr-panel.is-expanded > header {
+  margin-bottom: 8px;
+}
+/* Human-readable decision lead in the collapsed row (UX): node · column → value,
+   in body ink so the approver reads the decision before any truncation. Flex-grows
+   to push author/Details/actions right; truncates only after the value if the
+   string is very long. The raw monospace op string is demoted into Details. */
+.arbor-cr-decision {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+/* Demoted metadata block inside Details: the CR hash + raw monospace op string. */
+.arbor-cr-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.arbor-cr-rawop {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--ink-subtle);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  word-break: break-all;
+}
+/* Details toggle: a quiet inline link, subordinate to the row id + actions. */
+.arbor-cr-expand {
+  flex: 0 0 auto;
+  padding: 0 !important;
+  background: none !important;
+  border: none !important;
+  min-height: 0 !important;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent-ink);
+}
+.arbor-cr-expand:hover {
+  text-decoration: underline;
+}
+.arbor-cr-id {
+  font-weight: 600;
+}
+.arbor-cr-by,
+.arbor-cr-panel [data-testid="cr-batch-count"] {
+  color: var(--ink-muted); /* clears AA on the panel's subtle-gray fill */
+  font-weight: 400;
+}
+.arbor-cr-changes {
+  list-style: none;
+  margin: 8px 0;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-sm);
+  font-size: 13px; /* decision-critical diff — body weight, not faint metadata */
+  color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.arbor-cr-changes li[data-approved="true"] {
+  color: var(--green);
+}
+.arbor-cr-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* Compact per-row buttons in the dense row. */
+.arbor-cr-actions button {
+  min-height: 0 !important;
+  padding: 4px 10px !important;
+  font-size: 12px !important;
+}
+/* During an active multi-selection the sticky bulk bar is the primary surface,
+   so a selected row's per-row buttons recede (still present + clickable). */
+.arbor-cr-actions.is-deemphasized {
+  opacity: 0.5;
+}
+.arbor-cr-actions.is-deemphasized:hover,
+.arbor-cr-actions.is-deemphasized:focus-within {
+  opacity: 1;
+}
+/* Approve is the clear primary (solid near-black); Reject is a quiet destructive
+   secondary (white + red outline) — one obvious lead action, per Frappe. */
+.arbor-cr-actions [data-testid="cr-approve"] {
+  border: 1px solid transparent !important;
+  color: #fff !important;
+  background: var(--ink) !important;
+}
+.arbor-cr-actions [data-testid="cr-approve"]:hover:not(:disabled) {
+  background: var(--gray-800) !important;
+}
+.arbor-cr-actions [data-testid="cr-reject"] {
+  border: 1px solid var(--red-border) !important;
+  color: var(--red) !important;
+  background: var(--surface) !important;
+}
+.arbor-cr-actions [data-testid="cr-reject"]:hover:not(:disabled) {
+  background: var(--red-bg) !important;
+}
+.arbor-cr-panel [data-testid="cr-withdraw"] {
+  border: 1px solid var(--outline) !important;
+  background: var(--surface) !important;
+}
+.arbor-cr-panel [data-testid="cr-readonly"] {
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+/* ------------------------------------------------------- bulk CR triage (P2) -- */
+/* Header row: "select all I can approve". Quiet, hugs the panel's left edge. */
+.arbor-cr-select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.arbor-cr-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Per-row select checkbox sits before the CR id. */
+.arbor-cr-select {
+  margin: 0;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+/* Muted "Approver: X" caption for rows the viewer cannot decide (no checkbox). */
+.arbor-cr-approver-caption {
+  color: var(--ink-subtle);
+  font-weight: 400;
+  font-size: 12px;
+}
+/* A row mid-flight in a bulk run reads as quietly busy. */
+.arbor-cr-panel[data-processing="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Sticky bulk action bar docked at the panel bottom; matches the Frappe
+   secondary/primary button treatment used elsewhere. */
+.arbor-cr-bulk-bar {
+  position: sticky;
+  bottom: 0;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  box-shadow: 0 -2px 8px rgb(0 0 0 / 4%);
+}
+.arbor-cr-bulk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.arbor-cr-bulk-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.arbor-cr-bulk-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.arbor-cr-bulk-actions [data-testid="cr-bulk-approve"] {
+  border: 1px solid transparent !important;
+  color: #fff !important;
+  background: var(--ink) !important;
+}
+.arbor-cr-bulk-actions [data-testid="cr-bulk-approve"]:hover:not(:disabled) {
+  background: var(--gray-800) !important;
+}
+.arbor-cr-bulk-reject {
+  width: 100%;
+}
+.arbor-cr-bulk-warn {
+  font-size: 12px;
+  color: var(--red);
+  margin: 0 0 8px;
+}
+.arbor-cr-bulk-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.arbor-cr-bulk-summary {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+/* While a bulk run is in flight the bar reads as busy (the in-flight rows
+   themselves dim via .arbor-cr-panel[data-processing]). */
+.arbor-cr-bulk-bar[data-processing="true"] {
+  opacity: 0.85;
+  cursor: progress;
+}
+/* A run that left failures behind tints the summary with the error ink and the
+   [Retry failed] button as a subtle destructive-adjacent control. */
+.arbor-cr-bulk-summary[data-failed="true"] {
+  color: var(--red);
+  font-weight: 500;
+}
+.arbor-cr-bulk-summary-row [data-testid="cr-bulk-retry"] {
+  color: var(--red);
+}
+/* In-progress label replaces "N selected" while the bulk loop runs — a visible
+   busy state so the operation never looks frozen mid-flight. */
+.arbor-cr-bulk-progress {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------- empty state -- */
+.arbor-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--ink-subtle);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------- header controls cluster -- */
+/* Subscription control + the "Data" disclosure sit together on the header's
+   right edge, hugging right while the title block grows. */
+.arbor-header-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* "Data" disclosure: a white + hairline secondary control whose summary toggles
+   the ImportExport panel below it (popover-style). Matches the secondary button
+   treatment used elsewhere. */
+.arbor-data-disclosure {
+  position: relative;
+}
+.arbor-data-disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  user-select: none;
+}
+.arbor-data-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.arbor-data-disclosure > summary::after {
+  content: "▾";
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.arbor-data-disclosure[open] > summary::after {
+  content: "▴";
+}
+.arbor-data-disclosure > summary:hover {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--ink-subtle);
+}
+/* Float the panel as a popover so it doesn't reflow the header row. */
+.arbor-data-disclosure-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: 360px;
+  max-width: min(90vw, 360px);
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md, var(--shadow-sm));
+  padding: 16px;
+}
+
+/* ----------------------------------------------------- sticky agent rail --- */
+/* The rail pins below the header and runs the FULL viewport height (not just a
+   max), so the agent card fills the column beside BOTH the tree table and the
+   governance inbox — no dead gutter. A DEFINITE height (not max-height) is what
+   lets the inner .arbor-agent { height:100% } resolve, so the transcript
+   flex-fills and the composer pins to the rail bottom. On short content the rail
+   still reaches viewport bottom; the transcript's empty state fills the space. */
+.arbor-rail {
+  width: 340px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 24px;
+  align-self: flex-start;
+  height: calc(100vh - 48px);
+  display: flex;
+}
+
+/* --------------------------------------------------- governance panel ------ */
+/* ONE consolidated card replacing the three stacked governance sections. The
+   inner inbox cards (.arbor-cr-inbox / .arbor-notif-inbox / .arbor-delegation)
+   keep their own surface, so we strip their outer chrome here to avoid a
+   card-in-card double border. */
+.arbor-governance {
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+}
+.arbor-governance-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--outline-subtle);
+  padding: 4px 4px 0;
+}
+.arbor-governance-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.arbor-governance-tab:hover {
+  color: var(--ink);
+}
+.arbor-governance-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.arbor-governance-body {
+  padding: 16px;
+}
+/* Inbox cards live inside the governance body — drop their standalone chrome. */
+.arbor-governance-body .arbor-cr-inbox,
+.arbor-governance-body .arbor-notif-inbox,
+.arbor-governance-body .arbor-delegation {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
+.arbor-governance-empty {
+  padding: 10px 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+/* All-zero collapse: the whole inbox shrinks to a slim header bar + one quiet
+   line. Soften the tab strip (no work to route to) and tighten the tab padding so
+   the bar reads as dormant, not a full panel awaiting input. */
+.arbor-governance.is-collapsed .arbor-governance-tabs {
+  border-bottom: none;
+}
+.arbor-governance.is-collapsed .arbor-governance-tab {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+/* Active-but-empty tab: collapse its body to one quiet line (no inbox shell). */
+.arbor-governance-tab-empty {
+  padding: 14px 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+/* Zero-count tabs + badges de-emphasize so attention routes to tabs with work. */
+.arbor-governance-tab.is-zero {
+  color: var(--ink-subtle);
+}
+.arbor-count.is-zero {
+  opacity: 0.55;
+}

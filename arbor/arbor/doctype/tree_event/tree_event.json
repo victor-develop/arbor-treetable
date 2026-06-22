@@ -1,0 +1,86 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "type",
+  "actor",
+  "actor_type",
+  "change_request",
+  "payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Type",
+   "options": "NODE_CREATED\nNODE_DELETED\nNODE_MOVED\nNODE_VALUE_UPDATED\nCOLUMN_CONFIG_UPDATED\nCHANGE_PROPOSED\nCHANGE_APPROVED\nCHANGE_REJECTED\nSUBSCRIPTION_CHANGED\nDELEGATION_CHANGED\nIMPORT_COMPLETED",
+   "reqd": 1
+  },
+  {
+   "description": "Acting identity (the agent uses its own User).",
+   "fieldname": "actor",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Actor",
+   "options": "User"
+  },
+  {
+   "default": "human",
+   "fieldname": "actor_type",
+   "fieldtype": "Select",
+   "label": "Actor Type",
+   "options": "human\nagent\nsystem"
+  },
+  {
+   "description": "Nullable; set for CR-related events.",
+   "fieldname": "change_request",
+   "fieldtype": "Link",
+   "label": "Change Request",
+   "options": "Change Request"
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "JSON",
+   "label": "Payload"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Tree Event",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

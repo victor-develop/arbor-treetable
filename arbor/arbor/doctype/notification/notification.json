@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tree_event",
+  "change_request",
+  "recipient",
+  "channel",
+  "requires_ack",
+  "delivered_at"
+ ],
+ "fields": [
+  {
+   "description": "Source event.",
+   "fieldname": "tree_event",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Tree Event",
+   "options": "Tree Event",
+   "reqd": 1
+  },
+  {
+   "description": "Nullable; set when the event relates to a CR.",
+   "fieldname": "change_request",
+   "fieldtype": "Link",
+   "label": "Change Request",
+   "options": "Change Request"
+  },
+  {
+   "description": "Resolved subscriber.",
+   "fieldname": "recipient",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Recipient",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "in-app",
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "in-app\nemail\nwebhook"
+  },
+  {
+   "default": "0",
+   "description": "Copied from the subscription.",
+   "fieldname": "requires_ack",
+   "fieldtype": "Check",
+   "label": "Requires Ack"
+  },
+  {
+   "fieldname": "delivered_at",
+   "fieldtype": "Datetime",
+   "label": "Delivered At"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Notification",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

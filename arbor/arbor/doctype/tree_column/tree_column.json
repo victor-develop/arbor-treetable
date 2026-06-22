@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "field",
+  "label",
+  "type",
+  "options",
+  "width",
+  "editable",
+  "is_label",
+  "authority_section",
+  "column_owner",
+  "editors",
+  "read_acl_section",
+  "read_level",
+  "readers"
+ ],
+ "fields": [
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "description": "Internal key, stable and unique within the sheet (e.g. name, budget).",
+   "fieldname": "field",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Field",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "reqd": 1
+  },
+  {
+   "default": "text",
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "text\nmultiline-text\nnumber\nsingle-select-split\nmulti-select-split",
+   "reqd": 1
+  },
+  {
+   "description": "For select types: option list / split config. Null otherwise.",
+   "fieldname": "options",
+   "fieldtype": "JSON",
+   "label": "Options"
+  },
+  {
+   "default": "150",
+   "fieldname": "width",
+   "fieldtype": "Int",
+   "label": "Width (px)"
+  },
+  {
+   "default": "1",
+   "description": "Whether the column accepts value edits at all.",
+   "fieldname": "editable",
+   "fieldtype": "Check",
+   "label": "Editable"
+  },
+  {
+   "default": "0",
+   "description": "Exactly one column per sheet has is_label=1; it supplies the node display label.",
+   "fieldname": "is_label",
+   "fieldtype": "Check",
+   "label": "Is Label"
+  },
+  {
+   "fieldname": "authority_section",
+   "fieldtype": "Section Break",
+   "label": "Axis-2 Authority"
+  },
+  {
+   "description": "Axis-2 owner of this column (personas B, C, ...).",
+   "fieldname": "column_owner",
+   "fieldtype": "Link",
+   "label": "Column Owner",
+   "options": "User"
+  },
+  {
+   "description": "Extra users who may approve/edit this column.",
+   "fieldname": "editors",
+   "fieldtype": "Table",
+   "label": "Editors",
+   "options": "Tree Column Editor"
+  },
+  {
+   "fieldname": "read_acl_section",
+   "fieldtype": "Section Break",
+   "label": "Read Access"
+  },
+  {
+   "default": "public",
+   "description": "Who may READ this column's values. public: everyone. explicit-readers: only listed readers (plus owner/editors/admin). owner-only: only the owner/editors/admin. The label column is always readable regardless.",
+   "fieldname": "read_level",
+   "fieldtype": "Select",
+   "label": "Read Level",
+   "options": "public\nexplicit-readers\nowner-only",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.read_level=='explicit-readers'",
+   "description": "Users granted read access when read_level is explicit-readers.",
+   "fieldname": "readers",
+   "fieldtype": "Table",
+   "label": "Readers",
+   "options": "Tree Column Reader"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Tree Column",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

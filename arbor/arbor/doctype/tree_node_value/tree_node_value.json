@@ -1,0 +1,85 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "node",
+  "column",
+  "value",
+  "version"
+ ],
+ "fields": [
+  {
+   "description": "Denormalized for fast sheet-scoped queries.",
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "fieldname": "node",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Node",
+   "options": "Tree Node",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Column",
+   "options": "Tree Column",
+   "reqd": 1
+  },
+  {
+   "description": "Typed per column.type; select types store arrays.",
+   "fieldname": "value",
+   "fieldtype": "JSON",
+   "label": "Value"
+  },
+  {
+   "default": "1",
+   "description": "Incremented on each value update (per-cell history).",
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "label": "Version",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Tree Node Value",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

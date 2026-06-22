@@ -1,0 +1,144 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-19 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "target_kind",
+  "operation",
+  "status",
+  "requester",
+  "resolved_approver",
+  "approvals",
+  "changes",
+  "payload",
+  "decision_section",
+  "decided_by",
+  "decided_at",
+  "resulting_event"
+ ],
+ "fields": [
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "fieldname": "target_kind",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Target Kind",
+   "options": "node-structure\ncell-value\ncolumn-schema\nbatch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "operation",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Operation",
+   "options": "add\nupdate\nmove\ndelete\nmulti",
+   "reqd": 1
+  },
+  {
+   "default": "proposed",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "proposed\napproved\nrejected\nwithdrawn"
+  },
+  {
+   "description": "Who suggested (human or agent user).",
+   "fieldname": "requester",
+   "fieldtype": "Link",
+   "label": "Requester",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "description": "Computed via the ACL resolver; re-checked at decision time.",
+   "fieldname": "resolved_approver",
+   "fieldtype": "Link",
+   "label": "Resolved Approver",
+   "options": "User"
+  },
+  {
+   "description": "Users who have approved so far (moveNode multi-approval: resolved_approver AND every payload.co_approver).",
+   "fieldname": "approvals",
+   "fieldtype": "Table",
+   "label": "Approvals",
+   "options": "Change Request Approval"
+  },
+  {
+   "description": "The exact capability params to replay on approval (may carry co_approvers).",
+   "fieldname": "payload",
+   "fieldtype": "JSON",
+   "label": "Payload"
+  },
+  {
+   "fieldname": "decision_section",
+   "fieldtype": "Section Break",
+   "label": "Decision"
+  },
+  {
+   "fieldname": "decided_by",
+   "fieldtype": "Link",
+   "label": "Decided By",
+   "options": "User"
+  },
+  {
+   "fieldname": "decided_at",
+   "fieldtype": "Datetime",
+   "label": "Decided At"
+  },
+  {
+   "description": "The mutation event produced on approval.",
+   "fieldname": "resulting_event",
+   "fieldtype": "Link",
+   "label": "Resulting Event",
+   "options": "Tree Event"
+  },
+  {
+   "fieldname": "changes",
+   "fieldtype": "Table",
+   "label": "Changes",
+   "options": "Change Request Change",
+   "description": "For a multi-change CR: the ordered set of changes approved/applied atomically. Empty for a single-change CR (which uses the scalar target_kind/operation/payload)."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Change Request",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

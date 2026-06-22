@@ -1,0 +1,75 @@
+[project]
+name = "arbor"
+version = "0.1.0"
+description = "Governed, API-first, agent-native tree-table SaaS (Frappe app + pure domain core)"
+requires-python = ">=3.10"
+# The pure domain core (arbor.core) has ZERO third-party runtime dependencies;
+# it is importable and testable without Frappe. Frappe itself is NOT declared
+# here — it is provided by the bench at deploy time, so the open-source core
+# stays installable standalone.
+dependencies = []
+
+[project.optional-dependencies]
+# Bench-free test toolchain for the pure core. Installing these does NOT pull in
+# Frappe — that is the whole point of the ports-and-adapters split.
+test = ["pytest>=7.4"]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+# Deployment dependencies of the FRAPPE ADAPTER (arbor.arbor.*). These are NOT
+# needed to import or test the pure core; bench installs them alongside frappe.
+#   requests  — webhook dispatcher transport (dispatchers lane)
+#   litellm   — server-side agent LLM provider (agent lane; imported lazily)
+#   PyJWT     — OIDC / employee SSO JWT + JWKS verification (auth-sso lane; lazy)
+#   cryptography — PyJWT transitive (RS256/ES256 signature verification)
+app = [
+    "requests>=2.31",
+    "litellm>=1.40",
+    "PyJWT>=2.8",
+    "cryptography>=42",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Ship the importable core package. The Frappe app layout (arbor/arbor/...) is
+# installed by bench in deployment; for standalone core use we expose arbor.core.
+packages = ["arbor", "arbor.core"]
+
+[tool.pytest.ini_options]
+# Markers. The bench-free tiers (core/dispatch/webhooks/api parity/agent
+# orchestration/auth/adapter parity/doctype) run with plain pytest from the repo
+# root. The `bench`/`parity` tiers require a live Frappe site and auto-skip when
+# frappe is absent (see each lane's conftest.py).
+markers = [
+    "core: pure-domain core tests, runnable without a Frappe bench",
+    "dispatch: bench-free dispatch-lane tests (notification + webhook dispatchers)",
+    "webhooks: bench-free webhook lane tests (in-memory store + loopback receiver)",
+    "agent: bench-free agent orchestration/governance tests",
+    "auth: bench-free auth-seam tests (mocked providers)",
+    "adapter: adapter-lane tests (seed parity is bench-free; API integration needs a bench)",
+    "parity: cross-surface parity tests (bench-free harness half)",
+    "bench: requires a Frappe bench + site (skipped when frappe is absent)",
+]
+# Default to the pure-core tier so `pytest` is always safe. Run the wider
+# bench-free suite with explicit paths (see RUNNING.md):
+#   pytest tests/core tests/dispatch tests/webhooks tests/api tests/agent \
+#          tests/auth tests/adapter tests/doctype
+testpaths = ["tests/core"]
+# Make `arbor`, `arbor.core` and `tests.fixtures` importable from the repo root.
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+# The pure core must never import frappe; keep it lint-clean and standalone.
+src = ["arbor", "tests"]
+exclude = ["frontend", "node_modules", "sites", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # long lines tolerated in declarative schema/registry tables
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

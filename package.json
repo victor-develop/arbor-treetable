@@ -1,0 +1,8 @@
+{
+  "name": "arbor-e2e-runner",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "@types/node": "^22.19.21"
+  }
+}
