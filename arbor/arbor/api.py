@@ -256,16 +256,29 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     # Per-cell values + parallel versions, keyed by (node, column). Feature 1:
     # the versions map seeds each FE cell's base_version, built from the SAME
     # Tree Node Value rows so a forbidden column never gets a version either.
+    # Bulk-load every cell for the sheet in ONE query. A wide sheet has
+    # nodes×columns cells; the previous per-cell get_value + get_value_version
+    # was an N+1 round-trip storm (hundreds of queries → tens of seconds on a
+    # 16-column sheet). Filter to the read-ACL-visible columns + present nodes so
+    # nothing forbidden leaks (same guarantee as iterating the passed columns).
+    visible_col_names = {c.name for c in columns}
+    node_names = {n.name for n in nodes}
     values: dict[tuple[str, str], Any] = {}
     versions: dict[tuple[str, str], int] = {}
-    for n in nodes:
-        for c in columns:
-            v = repo.get_value(n.name, c.name)
-            if v is not None:
-                values[(n.name, c.name)] = v
-            ver = repo.get_value_version(n.name, c.name)
-            if ver:
-                versions[(n.name, c.name)] = ver
+    for row in frappe.get_all(
+        "Tree Node Value",
+        filters={"sheet": sheet},
+        fields=["node", "column", "value", "version"],
+    ):
+        if row.column not in visible_col_names or row.node not in node_names:
+            continue
+        key = (row.node, row.column)
+        raw = row.value
+        v = frappe.parse_json(raw) if isinstance(raw, str) and raw else raw
+        if v is not None:
+            values[key] = v
+        if row.version:
+            versions[key] = int(row.version)
 
     # Per-cell pending suggestions: open (proposed) Change Requests targeting a
     # cell, so the grid can light a marker that SURVIVES refresh and is visible

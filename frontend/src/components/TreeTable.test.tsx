@@ -52,6 +52,46 @@ describe("TreeTable render", () => {
     fireEvent.click(screen.getByTestId("chevron-P2"));
     expect(onToggle).toHaveBeenCalledWith("P2");
   });
+
+  it("wraps the table in a horizontal scroll viewport (UX D1)", () => {
+    renderTable();
+    const vp = screen.getByTestId("table-viewport");
+    expect(vp).toBeInTheDocument();
+    expect(vp).toContainElement(screen.getByTestId("tree-table"));
+  });
+
+  it("colgroup assigns predictable widths by column type + honors a user width (UX D3)", () => {
+    // Craft one column of each type so every colWidth branch is exercised.
+    const mk = (over: Record<string, unknown>) => ({
+      name: String(over.name),
+      field: String(over.name),
+      label: String(over.name),
+      is_label: false,
+      column_owner: "o",
+      editors: [],
+      can_edit: false,
+      ...over,
+    });
+    const columns = [
+      mk({ name: "L", type: "text", is_label: true }),
+      mk({ name: "txt", type: "text" }),
+      mk({ name: "num", type: "number" }),
+      mk({ name: "sel", type: "single-select-split" }),
+      mk({ name: "msel", type: "multi-select-split" }),
+      mk({ name: "long", type: "multiline-text" }),
+      mk({ name: "fixed", type: "text", width: 277 }),
+    ] as unknown as Parameters<typeof TreeTable>[0]["columns"];
+    const { container } = renderTable({ columns, labelColumn: "L" });
+    const cols = Array.from(container.querySelectorAll("colgroup col"));
+    expect(cols[0]).toHaveClass("arbor-col-label"); // label col
+    const widthOf = (i: number) => (cols[i] as HTMLElement).style.width;
+    expect(widthOf(1)).toBe("160px"); // text default
+    expect(widthOf(2)).toBe("104px"); // number
+    expect(widthOf(3)).toBe("184px"); // single-select-split
+    expect(widthOf(4)).toBe("184px"); // multi-select-split
+    expect(widthOf(5)).toBe("300px"); // multiline-text
+    expect(widthOf(6)).toBe("277px"); // explicit user width wins
+  });
 });
 
 describe("TreeTable drag-and-drop → moveNode", () => {
