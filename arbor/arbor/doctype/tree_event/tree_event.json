@@ -14,12 +14,12 @@
  ],
  "fields": [
   {
+   "description": "Nullable: site-wide events (e.g. role lifecycle) carry no sheet.",
    "fieldname": "sheet",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Sheet",
-   "options": "Tree Sheet",
-   "reqd": 1
+   "options": "Tree Sheet"
   },
   {
    "fieldname": "type",

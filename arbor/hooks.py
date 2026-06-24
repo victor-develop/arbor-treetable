@@ -87,6 +87,7 @@ override_whitelisted_methods = {
     "arbor.delete_column": "arbor.arbor.api.delete_column",
     "arbor.suggest_change": "arbor.arbor.api.suggest_change",
     "arbor.suggest_changes": "arbor.arbor.api.suggest_changes",
+    "arbor.list_sheets": "arbor.arbor.api.list_sheets",
     "arbor.list_change_requests": "arbor.arbor.api.list_change_requests",
     "arbor.list_notifications": "arbor.arbor.api.list_notifications",
     "arbor.approve_change": "arbor.arbor.api.approve_change",
@@ -99,6 +100,16 @@ override_whitelisted_methods = {
     "arbor.revoke_delegation": "arbor.arbor.api.revoke_delegation",
     "arbor.grant_column": "arbor.arbor.api.grant_column",
     "arbor.internal_reset": "arbor.arbor.api.internal_reset",
+    # Role management (Feature: roles)
+    "arbor.assign_role": "arbor.arbor.api.assign_role",
+    "arbor.revoke_role": "arbor.arbor.api.revoke_role",
+    "arbor.apply_for_role": "arbor.arbor.api.apply_for_role",
+    "arbor.approve_role_application": "arbor.arbor.api.approve_role_application",
+    "arbor.reject_role_application": "arbor.arbor.api.reject_role_application",
+    "arbor.withdraw_role_application": "arbor.arbor.api.withdraw_role_application",
+    "arbor.list_roles": "arbor.arbor.api.list_roles",
+    "arbor.list_role_grants": "arbor.arbor.api.list_role_grants",
+    "arbor.list_role_applications": "arbor.arbor.api.list_role_applications",
     # Server-side Re-Act agent
     "arbor.agent.chat": "arbor.arbor.agent.chat.chat",
     # Accountability aggregate (N notified / M acked)

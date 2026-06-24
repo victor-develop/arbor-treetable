@@ -1870,3 +1870,172 @@ body {
     font-weight: 600;
   }
 }
+
+/* ── Role management (Feature: roles) ─────────────────────────────────────
+   Reuses the delegation/grant/field primitives; only the bits unique to roles
+   (status pills, applications list, the header request control) are styled here. */
+.arbor-roles h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 8px;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+.arbor-roles h2:first-child {
+  margin-top: 0;
+}
+.arbor-role-apps {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arbor-role-app {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+}
+.arbor-role-app-who {
+  font-weight: 600;
+  color: var(--ink);
+}
+.arbor-role-app-why {
+  color: var(--ink-subtle);
+}
+.arbor-role-app-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.arbor-role-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  font-size: 0.74rem;
+  font-weight: 600;
+  border: 1px solid var(--outline);
+  color: var(--ink-muted);
+  background: var(--surface-1);
+}
+.arbor-role-status.is-proposed {
+  color: var(--amber);
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+}
+.arbor-role-status.is-approved {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
+.arbor-role-status.is-rejected,
+.arbor-role-status.is-withdrawn {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: var(--red-border);
+}
+.arbor-role-source {
+  color: var(--ink-subtle);
+  font-size: 0.82rem;
+}
+/* Header "My roles" / request-a-role control (mirrors the Data disclosure). */
+.arbor-role-request > summary {
+  cursor: pointer;
+  user-select: none;
+}
+.arbor-role-request-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.arbor-role-held {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.arbor-role-chip {
+  padding: 2px 10px;
+  border-radius: var(--r-full);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* ── Sheet List home page (no ?sheet=) ────────────────────────────────────── */
+.arbor-sheet-list-page {
+  max-width: 760px;
+}
+.arbor-sheet-list-zone {
+  margin-top: 14px;
+}
+.arbor-sheet-list-toolbar {
+  margin-bottom: 12px;
+}
+.arbor-sheet-filter {
+  width: 100%;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-sm);
+  font-size: 0.9rem;
+  background: var(--surface-0, #fff);
+}
+.arbor-sheet-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.arbor-sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.arbor-sheet-row + .arbor-sheet-row {
+  border-top: 1px solid var(--outline);
+}
+.arbor-sheet-link {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.arbor-sheet-link:hover {
+  background: var(--surface-1);
+}
+.arbor-sheet-name {
+  font-weight: 600;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+.arbor-sheet-owner {
+  color: var(--ink-subtle);
+  font-size: 0.85rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arbor-sheet-count {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}

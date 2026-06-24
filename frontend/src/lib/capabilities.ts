@@ -23,7 +23,13 @@ export type CapabilityId =
   | "delegateBranch"
   | "revokeDelegation"
   | "grantColumn"
-  | "internalReset";
+  | "internalReset"
+  | "assignRole"
+  | "revokeRole"
+  | "applyForRole"
+  | "approveRoleApplication"
+  | "rejectRoleApplication"
+  | "withdrawRoleApplication";
 
 export type CapabilityMeta = {
   id: CapabilityId;
@@ -52,6 +58,15 @@ export const CAPABILITIES: CapabilityMeta[] = [
   { id: "revokeDelegation", name: "Revoke delegation", is_exposed_to_llm: true },
   { id: "grantColumn", name: "Grant column", is_exposed_to_llm: true },
   { id: "internalReset", name: "Internal reset", is_exposed_to_llm: false },
+  // role management (Feature: roles). Privilege-granting caps are hidden from the
+  // agent (it must never self-escalate or approve a role); applyForRole +
+  // withdrawRoleApplication stay exposed (they still require admin approval).
+  { id: "assignRole", name: "Assign role", is_exposed_to_llm: false },
+  { id: "revokeRole", name: "Revoke role", is_exposed_to_llm: false },
+  { id: "applyForRole", name: "Apply for role", is_exposed_to_llm: true },
+  { id: "approveRoleApplication", name: "Approve role application", is_exposed_to_llm: false },
+  { id: "rejectRoleApplication", name: "Reject role application", is_exposed_to_llm: false },
+  { id: "withdrawRoleApplication", name: "Withdraw role application", is_exposed_to_llm: true },
 ];
 
 // The agent tool affordance (WEB_UI-070): excludes internalReset.

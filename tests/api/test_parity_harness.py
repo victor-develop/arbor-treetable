@@ -72,6 +72,12 @@ REST_METHODS = {
     "delegateBranch": "delegate_branch",
     "revokeDelegation": "revoke_delegation",
     "grantColumn": "grant_column",
+    # role management (Feature: roles) — only the LLM-exposed caps. The admin /
+    # decision caps (assignRole, revokeRole, approve/rejectRoleApplication) are
+    # is_exposed_to_llm=False (the agent must never self-escalate or approve a
+    # role), so they are NOT in the exposed set and intentionally absent here.
+    "applyForRole": "apply_for_role",
+    "withdrawRoleApplication": "withdraw_role_application",
 }
 
 

@@ -21,6 +21,7 @@ from typing import Any
 from . import change_request as cr_module
 from . import explore
 from . import registry
+from . import role_app as role_module
 from .acl import resolve_authority
 from .ports import EventSink, Repository
 from .schema import validate_schema
@@ -52,7 +53,20 @@ _CONTROL = {
     "subscribe",
     "unsubscribe",
     "acknowledge",
+    # role management (Feature: roles)
+    "assignRole",
+    "revokeRole",
+    "applyForRole",
+    "approveRoleApplication",
+    "rejectRoleApplication",
+    "withdrawRoleApplication",
 }
+
+# Role capabilities gated on platform admin (System Manager) at dispatch time —
+# the framework-free axis resolver has no notion of platform roles, so (like
+# internalReset) the gate is explicit here. ``actor.is_admin`` is recomputed by
+# the surface per request, so this IS decision-time re-resolution.
+_ADMIN_ROLE_CAPS = {"assignRole", "revokeRole", "approveRoleApplication", "rejectRoleApplication"}
 
 # Bounded read capabilities (the *explore* surface). All route to pure
 # functions in ``explore`` and return ``Outcome(kind="read", data=...)``; none
@@ -238,7 +252,43 @@ def _dispatch_control(
     if cap.id == "acknowledge":
         return _acknowledge(params, actor, repo)
 
+    if cap.id in _ADMIN_ROLE_CAPS or cap.id in ("applyForRole", "withdrawRoleApplication"):
+        return _dispatch_role(cap, params, actor, repo, sink)
+
     raise AuthorizationError(f"unhandled control capability {cap.id}")  # pragma: no cover
+
+
+def _dispatch_role(
+    cap: Capability, params: dict, actor: Actor, repo: Repository, sink: EventSink
+) -> Outcome:
+    """Role-management control dispatch (Feature: roles). Admin caps are gated on
+    ``actor.is_admin`` HERE (explicit platform-role gate, like internalReset);
+    applyForRole is open to any authenticated actor (with role_app enforcing the
+    applicable/active gate); withdraw is requester-gated inside role_app."""
+    if cap.id in _ADMIN_ROLE_CAPS and not getattr(actor, "is_admin", False):
+        raise AuthorizationError(f"{cap.id} is admin only")
+
+    if cap.id == "assignRole":
+        return role_module.assign(repo, sink, params["role"], params["grantee"], actor)
+    if cap.id == "revokeRole":
+        return role_module.revoke(repo, sink, params["role"], params["grantee"], actor)
+    if cap.id == "applyForRole":
+        return role_module.create_application(
+            repo, sink, params["role"], actor, justification=params.get("justification")
+        )
+    if cap.id == "approveRoleApplication":
+        return role_module.approve_application(
+            repo, sink, params["role_application"], actor, comment=params.get("comment")
+        )
+    if cap.id == "rejectRoleApplication":
+        return role_module.reject_application(
+            repo, sink, params["role_application"], actor, comment=params.get("comment")
+        )
+    if cap.id == "withdrawRoleApplication":
+        return role_module.withdraw_application(
+            repo, sink, params["role_application"], actor, comment=params.get("comment")
+        )
+    raise AuthorizationError(f"unhandled role capability {cap.id}")  # pragma: no cover
 
 
 def _dispatch_read(cap: Capability, params: dict, actor: Actor, repo: Repository) -> Outcome:

@@ -13,23 +13,31 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 
-export type GovernanceTabKey = "changeRequests" | "notifications" | "delegations";
+export type GovernanceTabKey = "changeRequests" | "notifications" | "delegations" | "roles";
 
 export function GovernancePanel({
   changeRequestCount,
   notificationCount,
   delegationCount,
+  roleCount,
   changeRequests,
   notifications,
   delegations,
+  roles,
 }: {
   changeRequestCount: number;
   notificationCount: number;
   delegationCount: number;
+  // Count badge for the Roles tab: pending applications the viewer can act on
+  // (admins) + the viewer's own open applications. 0 when there is no role work.
+  roleCount: number;
   // already-built content nodes; only the active one is mounted
   changeRequests: ReactNode;
   notifications: ReactNode;
   delegations: ReactNode;
+  // Roles tab body: admin assign/revoke + applications inbox (Feature: roles).
+  // null when there is nothing to show (no admin panel and no applications).
+  roles: ReactNode;
 }): JSX.Element {
   // Fixed order; CR first so it wins ties on default selection.
   const tabs = useMemo(
@@ -38,8 +46,9 @@ export function GovernancePanel({
         { key: "changeRequests" as const, label: "Change Requests", count: changeRequestCount, slot: changeRequests },
         { key: "notifications" as const, label: "Notifications", count: notificationCount, slot: notifications },
         { key: "delegations" as const, label: "Delegations", count: delegationCount, slot: delegations },
-      ],
-    [changeRequestCount, notificationCount, delegationCount, changeRequests, notifications, delegations],
+        { key: "roles" as const, label: "Roles", count: roleCount, slot: roles },
+      ].filter((t) => t.slot != null),
+    [changeRequestCount, notificationCount, delegationCount, roleCount, changeRequests, notifications, delegations, roles],
   );
 
   // Default = first tab with count>0 (CR preferred by order); fall back to CR.
@@ -49,7 +58,14 @@ export function GovernancePanel({
   );
   const [active, setActive] = useState<GovernanceTabKey>(defaultKey);
 
-  const allZero = changeRequestCount === 0 && notificationCount === 0 && delegationCount === 0;
+  // Collapse to the quiet line only when there is genuinely nothing to act on.
+  // A provided roles slot (admin panel, or a user with applications) keeps the
+  // panel open even at count 0 so the admin can always assign/approve.
+  const allZero =
+    changeRequestCount === 0 &&
+    notificationCount === 0 &&
+    delegationCount === 0 &&
+    roles == null;
   const activeTab = tabs.find((t) => t.key === active) ?? tabs[0];
 
   return (
