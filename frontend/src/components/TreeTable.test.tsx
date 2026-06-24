@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TreeTable } from "./TreeTable";
+import { TreeTable, computeOverflowState } from "./TreeTable";
 import { loginAs } from "../test/fixture";
 
 function renderTable(overrides?: Partial<Parameters<typeof TreeTable>[0]>) {
@@ -91,6 +91,59 @@ describe("TreeTable render", () => {
     expect(widthOf(4)).toBe("184px"); // multi-select-split
     expect(widthOf(5)).toBe("300px"); // multiline-text
     expect(widthOf(6)).toBe("277px"); // explicit user width wins
+  });
+});
+
+describe("computeOverflowState (scroll-shadow affordance, UX P1-3)", () => {
+  it("no cues when the table fits (no overflow)", () => {
+    expect(computeOverflowState({ scrollLeft: 0, clientWidth: 800, scrollWidth: 800 })).toEqual({
+      left: false,
+      right: false,
+    });
+  });
+  it("right cue only at the start of a wide table", () => {
+    // 790px visible vs 2203px content — the real clipped case.
+    expect(computeOverflowState({ scrollLeft: 0, clientWidth: 790, scrollWidth: 2203 })).toEqual({
+      left: false,
+      right: true,
+    });
+  });
+  it("both cues when scrolled into the middle", () => {
+    expect(computeOverflowState({ scrollLeft: 600, clientWidth: 790, scrollWidth: 2203 })).toEqual({
+      left: true,
+      right: true,
+    });
+  });
+  it("right cue clears at end-of-travel (within 1px epsilon)", () => {
+    // maxScroll = 2203 - 790 = 1413; landing within 1px counts as the end.
+    expect(computeOverflowState({ scrollLeft: 1413, clientWidth: 790, scrollWidth: 2203 })).toEqual({
+      left: true,
+      right: false,
+    });
+    expect(
+      computeOverflowState({ scrollLeft: 1412.4, clientWidth: 790, scrollWidth: 2203 }).right,
+    ).toBe(false);
+  });
+});
+
+describe("TreeTable scroll-shadow wiring", () => {
+  it("sets data-overflow-right on mount when content is wider than the viewport", () => {
+    renderTable();
+    const vp = screen.getByTestId("table-viewport");
+    // jsdom reports zero layout — stub a clipped geometry then fire a scroll to
+    // run the same handler used on mount.
+    Object.defineProperty(vp, "clientWidth", { configurable: true, value: 790 });
+    Object.defineProperty(vp, "scrollWidth", { configurable: true, value: 2203 });
+    vp.scrollLeft = 0;
+    fireEvent.scroll(vp);
+    expect(vp.hasAttribute("data-overflow-right")).toBe(true);
+    expect(vp.hasAttribute("data-overflow-left")).toBe(false);
+
+    // Scroll to the end → right cue clears, left cue appears.
+    vp.scrollLeft = 2203 - 790;
+    fireEvent.scroll(vp);
+    expect(vp.hasAttribute("data-overflow-right")).toBe(false);
+    expect(vp.hasAttribute("data-overflow-left")).toBe(true);
   });
 });
 

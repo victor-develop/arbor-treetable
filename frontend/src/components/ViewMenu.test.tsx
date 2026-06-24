@@ -6,7 +6,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ViewMenu } from "./ViewMenu";
+import { ViewMenu, reorderByDrag } from "./ViewMenu";
 import type { SheetView } from "../lib/view";
 import type { SnapshotColumn } from "../api";
 
@@ -120,5 +120,64 @@ describe("ViewMenu — interactions emit SheetView, never executeAction", () => 
     expect(executeAction).not.toHaveBeenCalled();
     const next = onChange.mock.calls.at(-1)![0] as SheetView;
     expect(next.width?.["col:status"]).toBe(260);
+  });
+});
+
+describe("reorderByDrag — pure reorder helper", () => {
+  it("moves the dragged name to the drop target's slot (downward)", () => {
+    expect(reorderByDrag(["a", "b", "c"], "a", "c")).toEqual(["b", "c", "a"]);
+  });
+  it("moves the dragged name to the drop target's slot (upward)", () => {
+    expect(reorderByDrag(["a", "b", "c"], "c", "a")).toEqual(["c", "a", "b"]);
+  });
+  it("is a no-op when source and target are the same", () => {
+    expect(reorderByDrag(["a", "b", "c"], "b", "b")).toEqual(["a", "b", "c"]);
+  });
+  it("is a no-op when either name is absent", () => {
+    expect(reorderByDrag(["a", "b"], "x", "a")).toEqual(["a", "b"]);
+    expect(reorderByDrag(["a", "b"], "a", "x")).toEqual(["a", "b"]);
+  });
+  it("returns a new array (does not mutate the input)", () => {
+    const input = ["a", "b", "c"];
+    const out = reorderByDrag(input, "a", "b");
+    expect(out).not.toBe(input);
+    expect(input).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("ViewMenu — drag-to-reorder", () => {
+  it("renders a draggable drag handle on every data-column row", () => {
+    render(<ViewMenu columns={COLS} view={baseView} onChange={vi.fn()} />);
+    const handle = screen.getByTestId("view-handle-col:status");
+    expect(handle).toBeInTheDocument();
+    // the row itself carries draggable so the whole grip-row drags.
+    const row = screen.getByTestId("view-col-col:status");
+    expect(row).toHaveAttribute("draggable", "true");
+  });
+
+  it("drag-dropping a row issues ZERO executeAction and emits the new order", () => {
+    const executeAction = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={baseView}
+        onChange={onChange}
+        client={{ executeAction } as never}
+      />,
+    );
+    const status = screen.getByTestId("view-col-col:status");
+    const budget = screen.getByTestId("view-col-col:budget");
+    // grab status, drag over budget, drop → status lands after budget.
+    fireEvent.dragStart(status);
+    fireEvent.dragEnter(budget);
+    fireEvent.dragOver(budget);
+    fireEvent.drop(budget);
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as SheetView;
+    expect(next.order.indexOf("col:budget")).toBeLessThan(
+      next.order.indexOf("col:status"),
+    );
   });
 });

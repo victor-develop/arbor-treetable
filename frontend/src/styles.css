@@ -342,9 +342,46 @@ body {
   overflow: auto;
   max-height: calc(100vh - 248px);
   -webkit-overflow-scrolling: touch;
-  /* right-edge fade hints there are more columns to scroll to */
-  background:
-    linear-gradient(to left, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0)) right center / 16px 100% no-repeat;
+  /* relative anchors the edge scroll-shadow overlays (below); harmless to the
+     sticky header/first-column which scope to this same scroll container. */
+  position: relative;
+}
+/* Directional scroll-shadow affordance (UX P1-3): a soft fade pinned to the
+   left/right edge of the viewport, shown ONLY when columns are clipped that
+   way. The handler in TreeTable toggles data-overflow-left/-right off the live
+   scrollLeft/clientWidth/scrollWidth, so the right cue vanishes at end-of-travel
+   and the left cue appears once scrolled away from the start. position:sticky
+   keeps each overlay glued to the viewport edge as content scrolls beneath; it
+   is purely decorative (pointer-events:none) so it never eats clicks/scroll. */
+.arbor-table-viewport::before,
+.arbor-table-viewport::after {
+  content: "";
+  position: sticky;
+  top: 0;
+  z-index: 4; /* above the sticky header (z 3) so the fade reads over it too */
+  display: block;
+  width: 24px;
+  height: 100%;
+  margin-bottom: -100%; /* overlay, not flow — don't add a scrollable strip */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.arbor-table-viewport::before {
+  left: 0;
+  float: left;
+  background: linear-gradient(to right, rgba(15, 15, 15, 0.1), rgba(15, 15, 15, 0));
+}
+.arbor-table-viewport::after {
+  right: 0;
+  float: right;
+  background: linear-gradient(to left, rgba(15, 15, 15, 0.1), rgba(15, 15, 15, 0));
+}
+.arbor-table-viewport[data-overflow-left]::before {
+  opacity: 1;
+}
+.arbor-table-viewport[data-overflow-right]::after {
+  opacity: 1;
 }
 .arbor-tree {
   /* grow to content (all columns reachable); viewport scrolls. Fixed layout +
@@ -1693,18 +1730,47 @@ body {
   flex-direction: column;
   gap: 2px;
 }
-/* Each row aligns toggle | ↑ | ↓ | width into shared columns across every row. */
+/* Each row aligns handle | toggle | ↑ | ↓ | width into shared columns across
+   every row. The leading `auto` is the drag grip. */
 .arbor-view-col {
   display: grid;
-  grid-template-columns: 1fr auto auto 64px;
+  grid-template-columns: auto 1fr auto auto 64px;
   align-items: center;
   gap: 8px;
+  /* reserve the drop-indicator border so rows don't jump when one lights up. */
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+}
+/* Drag grip: a quiet 6-dot handle, the whole row is draggable but the grip is
+   the explicit affordance. grab/grabbing cursors signal it's movable. */
+.arbor-view-handle {
+  cursor: grab;
+  user-select: none;
+  color: var(--ink-subtle);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  text-align: center;
+}
+.arbor-view-handle:active {
+  cursor: grabbing;
+}
+/* The row being dragged dims; its drop target lights a top border so the user
+   sees exactly where the row will land. */
+.arbor-view-col.is-dragging {
+  opacity: 0.5;
+}
+.arbor-view-col.is-drop-target {
+  border-top-color: var(--accent, var(--ink-2));
 }
 /* Toggle: left-aligned, full-width, transparent text button so every label
    starts at the same x (no border/fill — it is a list affordance, not a chip). */
 .arbor-view-toggle {
   width: 100%;
   text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: none !important;
   background: none !important;
   box-shadow: none !important;
@@ -1718,6 +1784,43 @@ body {
 }
 .arbor-view-toggle[aria-pressed="false"] {
   color: var(--ink-subtle);
+}
+/* Real (pseudo-)checkbox driven off aria-pressed: a 16px box that fills + shows
+   a check when the column is visible (aria-pressed=true) and is an empty outline
+   when hidden. First content cell, so every label starts at the same x. */
+.arbor-view-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--outline);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  position: relative;
+}
+.arbor-view-toggle[aria-pressed="true"] .arbor-view-check {
+  background: var(--accent, var(--ink-2));
+  border-color: var(--accent, var(--ink-2));
+}
+/* Label text. The trailing " · Visible/Hidden" state word lives in this same
+   text node (so getNodeText never reports the bare label) and is de-emphasized
+   here — the checkbox box is the primary visual cue, the word is a quiet
+   confirmation that stays in the button's accessible name. */
+.arbor-view-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arbor-view-toggle[aria-pressed="true"] .arbor-view-check::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 /* ↑ / ↓ : small square icon buttons consistent with the app's other controls. */
 .arbor-view-up,
@@ -1948,6 +2051,48 @@ body {
     color: #fff !important;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
     font-weight: 600;
+  }
+}
+
+/* True phone breakpoint (UX P2-3) — in ADDITION to the 820px stack above. At
+   ≤480px the header control trio, the add-column form, and the floating popovers
+   need to fit a narrow viewport without ragged wrapping or off-screen overflow.
+   Table density is untouched; the sheet still scrolls horizontally with its
+   scroll-shadow + frozen first column. */
+@media (max-width: 480px) {
+  /* Header trio (Subscribe / My roles / Data): let the three buttons wrap and
+     stack sensibly instead of overflowing the row; each control fills the line. */
+  .arbor-header-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .arbor-header-controls > * {
+    flex: 1 1 auto;
+  }
+  /* Disclosure/role summaries center their label when they span the row. */
+  .arbor-header-controls .arbor-data-disclosure > summary,
+  .arbor-header-controls .arbor-role-request > summary {
+    justify-content: center;
+    width: 100%;
+  }
+  /* Add-column form stacks (single column) so fields read top-to-bottom instead
+     of a ragged inline wrap; each control spans the form width. */
+  .arbor-add-column {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .arbor-add-column > * {
+    width: 100%;
+  }
+  /* Clamp the floating popovers so they can't run off a phone screen. */
+  .arbor-view-disclosure > .arbor-view-menu {
+    max-width: min(92vw, 360px);
+  }
+  .arbor-data-disclosure-body {
+    width: min(92vw, 360px);
+    max-width: min(92vw, 360px);
   }
 }
 

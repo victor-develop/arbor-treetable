@@ -4,11 +4,29 @@
 // dispatch. Move params are computed purely (computeMove) and illegal drops are
 // suppressed before any round-trip (WEB_UI-044/-045).
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SnapshotColumn, SnapshotNode } from "../api";
 import { buildVisibleRows, computeMove, type DropPosition } from "../lib/tree";
 import { TreeRow } from "./TreeRow";
 import { GearIcon } from "./icons";
+
+// Whether a horizontally-scrolling viewport is clipping content to the left
+// and/or right of the current scroll position. Pure + exported so the
+// scroll-shadow logic is unit-testable without a DOM. A 1px epsilon absorbs
+// sub-pixel scrollWidth/clientWidth rounding so the right cue reliably clears
+// at the true end of travel (UX P1-3).
+export type OverflowMetrics = { scrollLeft: number; clientWidth: number; scrollWidth: number };
+export type OverflowState = { left: boolean; right: boolean };
+export function computeOverflowState(m: OverflowMetrics): OverflowState {
+  const EPS = 1;
+  const maxScroll = m.scrollWidth - m.clientWidth;
+  // Nothing overflows (table fits): no cues either side.
+  if (maxScroll <= EPS) return { left: false, right: false };
+  return {
+    left: m.scrollLeft > EPS,
+    right: m.scrollLeft < maxScroll - EPS,
+  };
+}
 
 export type TreeTableProps = {
   columns: SnapshotColumn[];
@@ -52,6 +70,30 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
 
+  // Right/left scroll-shadow affordance: a soft fading overlay on whichever
+  // edge is clipping columns, so a wide matrix doesn't silently lose columns off
+  // the right with no signifier. Toggled via data-overflow-* attributes the CSS
+  // ::before/::after gradients key off (UX P1-3).
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const syncOverflow = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const { left, right } = computeOverflowState({
+      scrollLeft: el.scrollLeft,
+      clientWidth: el.clientWidth,
+      scrollWidth: el.scrollWidth,
+    });
+    el.toggleAttribute("data-overflow-left", left);
+    el.toggleAttribute("data-overflow-right", right);
+  }, []);
+  // Initialize on mount/layout (after the table measures) and keep in sync on
+  // window resize. Scroll is handled inline on the element (see onScroll below).
+  useLayoutEffect(syncOverflow);
+  useEffect(() => {
+    window.addEventListener("resize", syncOverflow);
+    return () => window.removeEventListener("resize", syncOverflow);
+  }, [syncOverflow]);
+
   const rows = buildVisibleRows(nodes, collapsed);
   const dataColumns = columns.filter((c) => !c.is_label);
 
@@ -89,7 +131,12 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   }
 
   return (
-   <div className="arbor-table-viewport" data-testid="table-viewport">
+   <div
+     className="arbor-table-viewport"
+     data-testid="table-viewport"
+     ref={viewportRef}
+     onScroll={syncOverflow}
+   >
     <table className="arbor-tree" data-testid="tree-table">
       <colgroup>
         <col className="arbor-col-label" />
