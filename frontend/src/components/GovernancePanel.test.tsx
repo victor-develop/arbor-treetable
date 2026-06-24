@@ -148,6 +148,93 @@ describe("GovernancePanel — Roles tab (Feature: roles)", () => {
   });
 });
 
+describe("GovernancePanel — active tab follows defaultKey until the user picks", () => {
+  // Reproduces the live default-tab bug: at mount the snapshot already has a
+  // delegation (delegations:1) while the Change-Request list is still loading
+  // (cr:0), so defaultKey resolves to "delegations". Once the 6 CRs arrive the
+  // active tab must re-sync to Change Requests — the admin's main triage queue —
+  // because the user has not manually picked a tab yet.
+  it("late-loading Change Requests win: re-render moves the active tab to CR", () => {
+    const { rerender } = render(
+      <GovernancePanel
+        changeRequestCount={0}
+        notificationCount={0}
+        delegationCount={1}
+        roleCount={0}
+        changeRequests={changeRequestsSlot}
+        notifications={notificationsSlot}
+        delegations={delegationsSlot}
+        roles={null}
+      />,
+    );
+
+    // At mount, only the delegation control is mounted (defaultKey = delegations).
+    expect(screen.getByTestId("delegation-control")).toBeInTheDocument();
+    expect(screen.queryByTestId("cr-inbox")).toBeNull();
+
+    // The 6 CRs finish loading. defaultKey now resolves to Change Requests.
+    rerender(
+      <GovernancePanel
+        changeRequestCount={6}
+        notificationCount={0}
+        delegationCount={1}
+        roleCount={0}
+        changeRequests={changeRequestsSlot}
+        notifications={notificationsSlot}
+        delegations={delegationsSlot}
+        roles={null}
+      />,
+    );
+
+    // Auto-sync moves the active/mounted tab to Change Requests.
+    expect(screen.getByTestId("cr-inbox")).toBeInTheDocument();
+    expect(screen.queryByTestId("delegation-control")).toBeNull();
+    expect(screen.getByTestId("governance-panel").getAttribute("data-active-tab")).toBe(
+      "changeRequests",
+    );
+  });
+
+  it("a manual pick sticks: re-rendering with new counts does not move away from it", () => {
+    const { rerender } = render(
+      <GovernancePanel
+        changeRequestCount={0}
+        notificationCount={0}
+        delegationCount={1}
+        roleCount={0}
+        changeRequests={changeRequestsSlot}
+        notifications={notificationsSlot}
+        delegations={delegationsSlot}
+        roles={null}
+      />,
+    );
+
+    // User deliberately clicks Delegations (even though it is already the default).
+    fireEvent.click(screen.getByRole("tab", { name: /delegations/i }));
+    expect(screen.getByTestId("delegation-control")).toBeInTheDocument();
+
+    // CRs arrive afterwards — but the user's choice must permanently win.
+    rerender(
+      <GovernancePanel
+        changeRequestCount={6}
+        notificationCount={0}
+        delegationCount={1}
+        roleCount={0}
+        changeRequests={changeRequestsSlot}
+        notifications={notificationsSlot}
+        delegations={delegationsSlot}
+        roles={null}
+      />,
+    );
+
+    // Still on Delegations; auto-sync stays disabled after a manual pick.
+    expect(screen.getByTestId("delegation-control")).toBeInTheDocument();
+    expect(screen.queryByTestId("cr-inbox")).toBeNull();
+    expect(screen.getByTestId("governance-panel").getAttribute("data-active-tab")).toBe(
+      "delegations",
+    );
+  });
+});
+
 describe("GovernancePanel — clicking a tab switches the mounted inbox", () => {
   it("clicking Notifications swaps CR content out for the notification inbox", () => {
     renderPanel({ cr: 2, notifications: 1, delegations: 1 });

@@ -1606,7 +1606,7 @@ body {
    right edge, hugging right while the title block grows. */
 .arbor-header-controls {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -1660,6 +1660,86 @@ body {
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-md, var(--shadow-sm));
   padding: 16px;
+}
+
+/* ---------------------------------------------------- View (column manager) -- */
+/* The "View" disclosure floats its column-manager as an absolutely-positioned
+   popover card (mirroring .arbor-data-disclosure-body) so opening it OVERLAYS
+   rather than reflowing the toolbar down into the add-column form. */
+.arbor-view-disclosure {
+  position: relative;
+}
+.arbor-view-disclosure > .arbor-view-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  margin-top: 6px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-md, var(--shadow-modal));
+  padding: 8px;
+  max-height: 60vh;
+  overflow: auto;
+  max-width: min(92vw, 440px);
+}
+/* Tight vertical rhythm — this is a power-user list, density is the point. */
+.arbor-view-cols {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Each row aligns toggle | ↑ | ↓ | width into shared columns across every row. */
+.arbor-view-col {
+  display: grid;
+  grid-template-columns: 1fr auto auto 64px;
+  align-items: center;
+  gap: 8px;
+}
+/* Toggle: left-aligned, full-width, transparent text button so every label
+   starts at the same x (no border/fill — it is a list affordance, not a chip). */
+.arbor-view-toggle {
+  width: 100%;
+  text-align: left;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  padding: 4px 6px !important;
+  min-height: 28px !important;
+  color: var(--ink-2);
+  border-radius: var(--r-sm) !important;
+}
+.arbor-view-toggle:hover:not(:disabled) {
+  background: var(--surface-2) !important;
+}
+.arbor-view-toggle[aria-pressed="false"] {
+  color: var(--ink-subtle);
+}
+/* ↑ / ↓ : small square icon buttons consistent with the app's other controls. */
+.arbor-view-up,
+.arbor-view-down {
+  width: 28px;
+  min-height: 28px !important;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+/* Width field: a real, obviously-editable input (not a mystery grey bar) — app
+   input chrome, fixed 64px, tabular figures so digits don't jitter on type. */
+.arbor-view-width {
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--outline) !important;
+  border-radius: var(--r-sm) !important;
+  padding: 4px 8px !important;
+  min-height: 28px !important;
 }
 
 /* ----------------------------------------------------- sticky agent rail --- */
@@ -1945,10 +2025,38 @@ body {
   color: var(--ink-subtle);
   font-size: 0.82rem;
 }
-/* Header "My roles" / request-a-role control (mirrors the Data disclosure). */
+/* Header "My roles" / request-a-role control — SAME button treatment as the
+   Data disclosure so the header trio (Subscribe / My roles / Data) reads as one
+   consistent secondary-button family. */
 .arbor-role-request > summary {
+  list-style: none;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
   user-select: none;
+}
+.arbor-role-request > summary::-webkit-details-marker {
+  display: none;
+}
+.arbor-role-request > summary::after {
+  content: "▾";
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.arbor-role-request[open] > summary::after {
+  content: "▴";
+}
+.arbor-role-request > summary:hover {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--ink-subtle);
 }
 .arbor-role-request-body {
   margin-top: 8px;
