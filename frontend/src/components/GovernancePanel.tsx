@@ -11,7 +11,7 @@
 // slots are not rendered at all — so e2e must click the tab first; handled in
 // the e2e-update step).
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type GovernanceTabKey = "changeRequests" | "notifications" | "delegations" | "roles";
 
@@ -58,6 +58,17 @@ export function GovernancePanel({
   );
   const [active, setActive] = useState<GovernanceTabKey>(defaultKey);
 
+  // The active tab FOLLOWS defaultKey as counts stream in (e.g. the CR list
+  // loads after the snapshot already supplied a delegation), so the highest
+  // priority queue with work always wins — UNTIL the user manually picks a tab,
+  // after which their choice is permanent and auto-sync stops for good.
+  const userPicked = useRef(false);
+  useEffect(() => {
+    if (!userPicked.current) {
+      setActive(defaultKey);
+    }
+  }, [defaultKey]);
+
   // Collapse to the quiet line only when there is genuinely nothing to act on.
   // A provided roles slot (admin panel, or a user with applications) keeps the
   // panel open even at count 0 so the admin can always assign/approve.
@@ -87,7 +98,10 @@ export function GovernancePanel({
             }`}
             data-testid={`governance-tab-${t.key}`}
             data-count={t.count}
-            onClick={() => setActive(t.key)}
+            onClick={() => {
+              userPicked.current = true;
+              setActive(t.key);
+            }}
           >
             {t.label}{" "}
             {/* Zero-count badges de-emphasize (muted) so attention routes to tabs

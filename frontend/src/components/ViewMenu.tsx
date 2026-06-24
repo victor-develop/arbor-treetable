@@ -115,6 +115,7 @@ export function ViewMenu(props: ViewMenuProps): JSX.Element {
               className="arbor-view-width"
               data-testid={`view-width-${c.name}`}
               aria-label={`Width of ${c.label}`}
+              placeholder="auto"
               min={40}
               value={view.width?.[c.name] ?? ""}
               onChange={(e) => setWidth(c.name, e.currentTarget.value)}
