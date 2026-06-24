@@ -462,6 +462,9 @@ def _acl_hints(actor, repo, sheet, columns, nodes) -> dict[str, Any]:
         "can_change_structure": can_change_structure,
         "actor": actor.user,
         "can_add_column": can_add_column,
+        # Platform-admin hint: the ONLY gate for the admin Roles panel. Follows the
+        # "gate on a server hint, never re-derive ACL" rule (Feature: roles).
+        "is_admin": bool(getattr(actor, "is_admin", False)),
         "subscribed": bool(subscription),
         "subscription": subscription,
         "branch_grants": branch_grants,
@@ -571,6 +574,43 @@ def suggest_changes(sheet, changes):
     """Propose a BATCH of changes as one Change Request (reviewed/applied
     atomically). ``changes`` = [{action, params}, ...]."""
     return _dispatch("suggestChanges", {"sheet": sheet, "changes": _coerce(changes) or []})
+
+
+@frappe.whitelist()
+def list_sheets():
+    """The catalog of sheets for the home page (Sheet List): each ``{name,
+    structural_owner, node_count}``. Read-only; emits no Tree Event.
+
+    Node counts come from ONE grouped query over Tree Node (count per sheet), not
+    N per-sheet COUNTs — so the list stays cheap even with thousands of sheets.
+    The FE sorts by node_count desc (real sheets float above orphan empty test
+    sheets) and offers a client-side text filter."""
+    _actor()
+    # One grouped count: {sheet_name: node_count}. Sheets with zero nodes simply
+    # don't appear in this map and default to 0 below.
+    counts = {
+        row.sheet: row.node_count
+        for row in frappe.get_all(
+            "Tree Node",
+            fields=["sheet", "count(name) as node_count"],
+            group_by="sheet",
+        )
+        if row.sheet
+    }
+    out = []
+    for s in frappe.get_all(
+        "Tree Sheet",
+        fields=["name", "structural_owner"],
+        order_by="modified desc",
+    ):
+        out.append(
+            {
+                "name": s.name,
+                "structural_owner": s.structural_owner,
+                "node_count": int(counts.get(s.name, 0)),
+            }
+        )
+    return out
 
 
 @frappe.whitelist()
@@ -752,3 +792,143 @@ def internal_reset(sheet, confirm=False):
             if isinstance(confirm, (str, int)) else bool(confirm),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Role management (Feature: roles). Mutations funnel through the SAME _dispatch
+# (inheriting the error mapping: admin denial -> 403, terminal/duplicate -> 409,
+# unknown role -> 404). Reads are thin whitelisted shims (like
+# list_change_requests / list_notifications), not through the executor.
+# ---------------------------------------------------------------------------
+@frappe.whitelist()
+def assign_role(role, grantee):
+    return _dispatch("assignRole", {"role": role, "grantee": grantee})
+
+
+@frappe.whitelist()
+def revoke_role(role, grantee):
+    return _dispatch("revokeRole", {"role": role, "grantee": grantee})
+
+
+@frappe.whitelist()
+def apply_for_role(role, justification=None):
+    return _dispatch("applyForRole", {"role": role, "justification": justification})
+
+
+@frappe.whitelist()
+def approve_role_application(role_application, comment=None):
+    return _dispatch(
+        "approveRoleApplication", {"role_application": role_application, "comment": comment}
+    )
+
+
+@frappe.whitelist()
+def reject_role_application(role_application, comment=None):
+    return _dispatch(
+        "rejectRoleApplication", {"role_application": role_application, "comment": comment}
+    )
+
+
+@frappe.whitelist()
+def withdraw_role_application(role_application, comment=None):
+    return _dispatch(
+        "withdrawRoleApplication", {"role_application": role_application, "comment": comment}
+    )
+
+
+@frappe.whitelist()
+def list_roles():
+    """The role catalog with per-viewer flags. Feeds BOTH the admin assign picker
+    and the user 'request a role' picker (which filters to applicable && active &&
+    !viewer_holds && !viewer_has_open_application — enforced server-side too)."""
+    actor = _actor()
+    repo = _repo()
+    held = set(
+        frappe.get_all(
+            "Arbor Role Grant", filters={"grantee": actor.user, "active": 1}, pluck="role"
+        )
+    )
+    open_apps = set(
+        frappe.get_all(
+            "Arbor Role Application",
+            filters={"requester": actor.user, "status": "proposed"},
+            pluck="role",
+        )
+    )
+    out = []
+    for r in frappe.get_all(
+        "Arbor Role",
+        fields=["name", "role", "label", "description", "applicable", "active"],
+        order_by="label asc",
+    ):
+        out.append(
+            {
+                "role": r.role,
+                "label": r.label,
+                "description": r.description,
+                "applicable": bool(r.applicable),
+                "active": bool(r.active),
+                "viewer_holds": r.role in held,
+                "viewer_has_open_application": r.role in open_apps,
+            }
+        )
+    return out
+
+
+@frappe.whitelist()
+def list_role_grants(role=None, grantee=None):
+    """Active role grants (optionally filtered). ``can_revoke`` gates the admin UI
+    affordance; the server re-enforces admin on dispatch regardless."""
+    actor = _actor()
+    filters: dict[str, Any] = {"active": 1}
+    if role:
+        filters["role"] = role
+    if grantee:
+        filters["grantee"] = grantee
+    rows = frappe.get_all(
+        "Arbor Role Grant",
+        filters=filters,
+        fields=["name", "role", "grantee", "granted_by", "source"],
+        order_by="creation asc",
+    )
+    return [
+        {
+            "name": g.name,
+            "role": g.role,
+            "grantee": g.grantee,
+            "granted_by": g.granted_by,
+            "source": g.source,
+            "can_revoke": bool(actor.is_admin),
+        }
+        for g in rows
+    ]
+
+
+@frappe.whitelist()
+def list_role_applications(status="proposed", requester=None):
+    """Role applications for the admin inbox (``status=proposed``) or a user's own
+    applications (``requester=<user>``). ``viewer_is_approver`` mirrors admin."""
+    actor = _actor()
+    filters: dict[str, Any] = {}
+    if status:
+        filters["status"] = status
+    if requester:
+        filters["requester"] = requester
+    rows = frappe.get_all(
+        "Arbor Role Application",
+        filters=filters,
+        fields=["name", "role", "requester", "status", "justification", "decided_by"],
+        order_by="creation desc",
+    )
+    return [
+        {
+            "name": a.name,
+            "role": a.role,
+            "requester": a.requester,
+            "status": a.status,
+            "justification": a.justification,
+            "decided_by": a.decided_by,
+            "viewer_is_approver": bool(actor.is_admin),
+        }
+        for a in rows
+    ]

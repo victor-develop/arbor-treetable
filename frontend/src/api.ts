@@ -88,6 +88,8 @@ export type Snapshot = {
   // optional sheet-level affordances supplied by the server snapshot.
   viewer?: {
     can_add_column?: boolean;
+    // platform-admin hint — the ONLY gate for the admin Roles panel (Feature: roles)
+    is_admin?: boolean;
     // the viewer's own sheet subscription state (for the subscribe/unsubscribe control)
     subscribed?: boolean;
     subscription?: string | null;
@@ -193,14 +195,65 @@ export type NotificationView = {
   acked: boolean;
 };
 
+// ---- role management (Feature: roles) -------------------------------------
+// An Arbor Role from arbor.list_roles, with per-viewer flags. The "request a
+// role" picker filters to applicable && active && !viewer_holds &&
+// !viewer_has_open_application (the server enforces this too).
+export type RoleView = {
+  role: string;
+  label: string;
+  description?: string | null;
+  applicable: boolean;
+  active: boolean;
+  viewer_holds: boolean;
+  viewer_has_open_application: boolean;
+};
+
+// An active role grant from arbor.list_role_grants (admin panel).
+export type RoleGrantView = {
+  name: string;
+  role: string;
+  grantee: string;
+  granted_by: string;
+  source: string;
+  can_revoke: boolean;
+};
+
+// A role application from arbor.list_role_applications (admin inbox / my apps).
+export type RoleApplicationView = {
+  name: string;
+  role: string;
+  requester: string;
+  status: "proposed" | "approved" | "rejected" | "withdrawn";
+  justification?: string | null;
+  decided_by?: string | null;
+  viewer_is_approver?: boolean;
+};
+
+// A sheet summary row from arbor.list_sheets — the home-page Sheet List. Sorted
+// (client-side) by node_count desc so real sheets float above the many orphan
+// empty test sheets; the count is shown per row.
+export type SheetSummary = {
+  name: string;
+  structural_owner: string;
+  node_count: number;
+};
+
 export type ArborClient = {
   executeAction: (actionId: string, params: Record<string, unknown>) => Promise<Outcome>;
   getSheetSnapshot: (sheet: string) => Promise<Snapshot>;
+  // The catalog of sheets (name + owner + node_count) for the home page.
+  // Optional so test/mocked clients need not implement it.
+  listSheets?: () => Promise<SheetSummary[]>;
   // The sheet's Change Requests (default proposed) for the review inbox.
   // Optional so test/mocked clients need not implement it.
   listChangeRequests?: (sheet: string) => Promise<ChangeRequestView[]>;
   // The viewer's in-app notifications for the sheet. Optional (mocked clients).
   listNotifications?: (sheet: string) => Promise<NotificationView[]>;
+  // Role management reads (Feature: roles). Optional so mocked clients can omit.
+  listRoles?: () => Promise<RoleView[]>;
+  listRoleGrants?: (role?: string, grantee?: string) => Promise<RoleGrantView[]>;
+  listRoleApplications?: (status?: string, requester?: string) => Promise<RoleApplicationView[]>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   agentChat: (
@@ -228,6 +281,40 @@ export const api: ArborClient = {
     const res = await fetchImpl(`/api/method/arbor.list_notifications?${qs}`, { headers });
     if (!res.ok) throw new Error(`list_notifications failed: ${res.status}`);
     return unwrap<NotificationView[]>(await res.json());
+  },
+
+  listRoles: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.list_roles`, { headers });
+    if (!res.ok) throw new Error(`list_roles failed: ${res.status}`);
+    return unwrap<RoleView[]>(await res.json());
+  },
+
+  listRoleGrants: async (role, grantee) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams();
+    if (role) qs.set("role", role);
+    if (grantee) qs.set("grantee", grantee);
+    const res = await fetchImpl(`/api/method/arbor.list_role_grants?${qs.toString()}`, { headers });
+    if (!res.ok) throw new Error(`list_role_grants failed: ${res.status}`);
+    return unwrap<RoleGrantView[]>(await res.json());
+  },
+
+  listRoleApplications: async (status, requester) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams();
+    if (status !== undefined) qs.set("status", status);
+    if (requester) qs.set("requester", requester);
+    const res = await fetchImpl(`/api/method/arbor.list_role_applications?${qs.toString()}`, { headers });
+    if (!res.ok) throw new Error(`list_role_applications failed: ${res.status}`);
+    return unwrap<RoleApplicationView[]>(await res.json());
+  },
+
+  listSheets: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.list_sheets`, { headers });
+    if (!res.ok) throw new Error(`list_sheets failed: ${res.status}`);
+    return unwrap<SheetSummary[]>(await res.json());
   },
 
   getSheetSnapshot: async (sheet) => {

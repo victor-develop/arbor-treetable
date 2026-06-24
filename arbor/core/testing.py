@@ -62,6 +62,26 @@ class _Grant:
     active: bool = True
 
 
+@dataclass
+class _Role:
+    name: str
+    role: str
+    label: str = ""
+    applicable: bool = True
+    active: bool = True
+
+
+@dataclass
+class _RoleGrant:
+    name: str
+    role: str
+    grantee: str
+    granted_by: str
+    active: bool = True
+    source: str = "admin-grant"
+    granted_via: Optional[str] = None
+
+
 class InMemoryRepository:
     """A pure Python ``Repository`` with emulated NestedSet bookkeeping."""
 
@@ -76,6 +96,11 @@ class InMemoryRepository:
         self.subscriptions: dict[str, dict[str, Any]] = {}
         self.notifications: dict[str, dict[str, Any]] = {}
         self.acknowledgements: dict[str, dict[str, Any]] = {}
+        # roles (Feature: role management)
+        self.roles: dict[str, _Role] = {}
+        self.role_grants: dict[str, _RoleGrant] = {}
+        self.role_applications: dict[str, dict[str, Any]] = {}
+        self.admins: set[str] = set()
         self._ids = itertools.count(1)
 
     def _id(self, prefix: str) -> str:
@@ -125,6 +150,18 @@ class InMemoryRepository:
     def seed_value(self, sheet: str, node: str, column: str, value: Any) -> None:
         self.values[(node, column)] = value
         self.versions[(node, column)] = 1
+
+    def add_role(self, role: str, label: str = "", applicable: bool = True, active: bool = True) -> str:
+        self.roles[role] = _Role(name=role, role=role, label=label or role, applicable=applicable, active=active)
+        return role
+
+    def add_admin(self, user: str) -> None:
+        self.admins.add(user)
+
+    def add_role_grant(self, role: str, grantee: str, granted_by: str = "system", source: str = "admin-grant") -> str:
+        name = self._id("rgrant")
+        self.role_grants[name] = _RoleGrant(name=name, role=role, grantee=grantee, granted_by=granted_by, source=source)
+        return name
 
     # --- NestedSet emulation ---
     def _rebuild_nested_set(self, sheet: str) -> None:
@@ -340,6 +377,11 @@ class InMemoryRepository:
         self.notifications[name] = {"name": name, "recipient": recipient, **extra}
         return name
 
+    def create_notification(self, data: dict[str, Any]) -> str:
+        name = self._id("notif")
+        self.notifications[name] = {"name": name, **data}
+        return name
+
     def get_notification(self, notification: str) -> dict[str, Any]:
         return self.notifications[notification]
 
@@ -351,6 +393,59 @@ class InMemoryRepository:
             "user": user,
         }
         return name
+
+    # --- roles / role grants / role applications (Feature: role management) ---
+    def get_role(self, role: str) -> Optional[_Role]:
+        return self.roles.get(role)
+
+    def list_active_role_grantees(self, role: str) -> list[str]:
+        return sorted(
+            g.grantee for g in self.role_grants.values() if g.role == role and g.active
+        )
+
+    def find_active_role_grant(self, role: str, grantee: str) -> Optional[_RoleGrant]:
+        for g in self.role_grants.values():
+            if g.role == role and g.grantee == grantee and g.active:
+                return g
+        return None
+
+    def create_role_grant(
+        self,
+        role: str,
+        grantee: str,
+        granted_by: str,
+        source: str = "admin-grant",
+        granted_via: Optional[str] = None,
+    ) -> str:
+        name = self._id("rgrant")
+        self.role_grants[name] = _RoleGrant(
+            name=name, role=role, grantee=grantee, granted_by=granted_by,
+            source=source, granted_via=granted_via,
+        )
+        return name
+
+    def deactivate_role_grant(self, role_grant: str) -> None:
+        self.role_grants[role_grant].active = False
+
+    def create_role_application(self, data: dict[str, Any]) -> str:
+        name = self._id("rapp")
+        self.role_applications[name] = {"name": name, **data}
+        return name
+
+    def get_role_application(self, role_application: str) -> dict[str, Any]:
+        return self.role_applications[role_application]
+
+    def update_role_application(self, role_application: str, patch: dict[str, Any]) -> None:
+        self.role_applications[role_application].update(patch)
+
+    def find_open_role_application(self, role: str, requester: str) -> Optional[dict[str, Any]]:
+        for app in self.role_applications.values():
+            if app["role"] == role and app["requester"] == requester and app["status"] == "proposed":
+                return app
+        return None
+
+    def list_admins(self) -> list[str]:
+        return sorted(self.admins)
 
 
 class RecordingEventSink:

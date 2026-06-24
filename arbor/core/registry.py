@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 26 capabilities are declared here as ``Capability`` records. Four consumers
+All 32 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -248,10 +248,34 @@ _S_INTERNAL_RESET = {
     "required": ["sheet"],
     "properties": {"sheet": {"type": "string"}, "confirm": {"const": True}},
 }
+# --- role management (Feature: roles) -------------------------------------
+_S_ASSIGN_ROLE = {
+    "type": "object",
+    "required": ["role", "grantee"],
+    "properties": {"role": {"type": "string"}, "grantee": {"type": "string"}},
+}
+_S_REVOKE_ROLE = {
+    "type": "object",
+    "required": ["role", "grantee"],
+    "properties": {"role": {"type": "string"}, "grantee": {"type": "string"}},
+}
+_S_APPLY_FOR_ROLE = {
+    "type": "object",
+    "required": ["role"],
+    "properties": {"role": {"type": "string"}, "justification": {"type": "string"}},
+}
+_S_ROLE_APP_DECISION = {
+    "type": "object",
+    "required": ["role_application"],
+    "properties": {
+        "role_application": {"type": "string"},
+        "comment": {"type": "string"},
+    },
+}
 
 
 # ---------------------------------------------------------------------------
-# The 26 capabilities.
+# The 32 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -568,6 +592,81 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="system_or_admin_only",
         emits=(),  # never on the append-only Tree Event stream
         handler=handlers.internal_reset_handler,
+    ),
+    # --- role management (Feature: roles). All Axis.NONE control caps; the
+    # lifecycle lives in core.role_app, dispatched by the executor. They reuse
+    # DELEGATION_CHANGED (op-discriminated) so the closed 11-event set is intact.
+    Capability(
+        id="assignRole",
+        name="Assign a role to a user (admin)",
+        params_schema=_S_ASSIGN_ROLE,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,  # agent must never self-escalate privilege
+        acl_rule="admin_only",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.assign via executor
+    ),
+    Capability(
+        id="revokeRole",
+        name="Revoke a role from a user (admin)",
+        params_schema=_S_REVOKE_ROLE,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,
+        acl_rule="admin_only",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.revoke via executor
+    ),
+    Capability(
+        id="applyForRole",
+        name="Apply for a role",
+        params_schema=_S_APPLY_FOR_ROLE,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,  # safe: still requires admin approval
+        acl_rule="role_is_applicable",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.create_application via executor
+    ),
+    Capability(
+        id="approveRoleApplication",
+        name="Approve a role application (admin)",
+        params_schema=_S_ROLE_APP_DECISION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,
+        acl_rule="admin_only",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.approve_application via executor
+    ),
+    Capability(
+        id="rejectRoleApplication",
+        name="Reject a role application (admin)",
+        params_schema=_S_ROLE_APP_DECISION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,
+        acl_rule="admin_only",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.reject_application via executor
+    ),
+    Capability(
+        id="withdrawRoleApplication",
+        name="Withdraw a role application",
+        params_schema=_S_ROLE_APP_DECISION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,  # requester-only, harmless
+        acl_rule="requester_only",
+        emits=("DELEGATION_CHANGED",),
+        handler=None,  # role_app.withdraw_application via executor
     ),
 )
 

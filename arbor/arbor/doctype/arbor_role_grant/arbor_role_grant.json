@@ -1,0 +1,92 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-23 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "role",
+  "grantee",
+  "granted_by",
+  "source",
+  "granted_via",
+  "active"
+ ],
+ "fields": [
+  {
+   "fieldname": "role",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Role",
+   "options": "Arbor Role",
+   "reqd": 1
+  },
+  {
+   "fieldname": "grantee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Grantee",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "granted_by",
+   "fieldtype": "Link",
+   "label": "Granted By",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "admin-grant",
+   "description": "Provenance of the grant.",
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Source",
+   "options": "admin-grant\napplication"
+  },
+  {
+   "description": "The Arbor Role Application name when source=application.",
+   "fieldname": "granted_via",
+   "fieldtype": "Data",
+   "label": "Granted Via"
+  },
+  {
+   "default": "1",
+   "description": "Resolution considers only active=1 grants.",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "label": "Active"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-23 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Role Grant",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

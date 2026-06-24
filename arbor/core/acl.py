@@ -17,6 +17,28 @@ from .ports import ColumnView, Repository
 from .types import Actor, Authority, Axis, Capability
 
 
+# ---------- Role-as-principal expansion (Feature: roles, ACL addressing) -----
+#: A column owner/editor/reader principal of the form ``role:<key>`` addresses an
+#: Arbor Role: it expands to the set of users holding that role via the ONE
+#: resolver, preserving surface parity (the resolver still yields concrete User
+#: names). A plain principal expands to itself.
+ROLE_PRINCIPAL_PREFIX = "role:"
+
+
+def _expand_principal(repo: Repository, principal: str) -> set[str]:
+    if isinstance(principal, str) and principal.startswith(ROLE_PRINCIPAL_PREFIX):
+        role = principal[len(ROLE_PRINCIPAL_PREFIX):]
+        return set(repo.list_active_role_grantees(role))
+    return {principal} if principal else set()
+
+
+def _expand_principals(repo: Repository, principals) -> set[str]:
+    out: set[str] = set()
+    for p in principals:
+        out |= _expand_principal(repo, p)
+    return out
+
+
 # ---------- Axis 1: STRUCTURAL ----------------------------------------------
 def resolve_structural_approver(repo: Repository, sheet: str, node: Optional[str]) -> str:
     """Authoritative approver for an add/move/delete affecting ``node``.
@@ -45,9 +67,9 @@ def resolve_column_approvers(repo: Repository, sheet: str, column: str) -> set[s
     """The set of users who may edit/approve this column's values: the owner
     plus every editor (PERMISSIONS §1)."""
     col = repo.get_column(sheet, column)
-    approvers = {col.column_owner}
-    approvers |= set(col.editors or [])
-    return approvers
+    # owner + editors, with any ``role:<key>`` principal expanded to its active
+    # holders (ACL addressing). The result is always concrete User names.
+    return _expand_principals(repo, [col.column_owner, *(col.editors or [])])
 
 
 # ---------- Read-ACL (Feature 3, LEAN 3-level) ------------------------------
@@ -85,7 +107,7 @@ def can_read_column(
     if level == "public":
         return True
     if level == "explicit-readers":
-        return actor.user in (col.readers or [])
+        return actor.user in _expand_principals(repo, col.readers or [])
     # owner-only (and any unknown level treated conservatively as owner-only here,
     # because public/explicit are handled above): non-approvers are denied.
     if level == "owner-only":

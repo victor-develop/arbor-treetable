@@ -40,13 +40,31 @@ EXPECTED_IDS = {
     "revokeDelegation",
     "grantColumn",
     "internalReset",
+    # role management (Feature: roles)
+    "assignRole",
+    "revokeRole",
+    "applyForRole",
+    "approveRoleApplication",
+    "rejectRoleApplication",
+    "withdrawRoleApplication",
+}
+
+# Capabilities hidden from the LLM agent: internalReset + the privilege-granting
+# role admin/decision caps (the agent must never self-escalate or approve a role).
+# applyForRole + withdrawRoleApplication stay exposed (they still need approval).
+LLM_HIDDEN = {
+    "internalReset",
+    "assignRole",
+    "revokeRole",
+    "approveRoleApplication",
+    "rejectRoleApplication",
 }
 
 
-def test_all_26_capabilities_registered():
+def test_all_capabilities_registered():
     ids = {c.id for c in all_capabilities()}
     assert ids == EXPECTED_IDS
-    assert len(all_capabilities()) == 26
+    assert len(all_capabilities()) == 32
 
 
 def test_unknown_capability_raises():
@@ -59,9 +77,9 @@ def test_unknown_capability_raises():
 def test_internal_reset_hidden_from_llm():
     tool_names = {t["function"]["name"] for t in get_llm_tools()}
     assert "internalReset" not in tool_names
-    # every OTHER capability is exposed.
-    assert tool_names == EXPECTED_IDS - {"internalReset"}
-    assert len(get_llm_tools()) == 25
+    # every non-privilege-granting capability is exposed.
+    assert tool_names == EXPECTED_IDS - LLM_HIDDEN
+    assert len(get_llm_tools()) == len(EXPECTED_IDS) - len(LLM_HIDDEN)
 
 
 def test_llm_tool_shape():

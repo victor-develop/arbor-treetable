@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { SheetList } from "./components/SheetList";
 import { setAuthHeaderProvider } from "./api";
 import "./styles.css";
 
@@ -17,7 +18,8 @@ setAuthHeaderProvider(async () => {
   return headers;
 });
 
-// The sheet to load comes from ?sheet=… ; absent it renders the idle shell.
+// The sheet to load comes from ?sheet=… ; absent it renders the Sheet List home
+// page (the catalog of sheets to open) instead of the connected shell.
 const sheet = new URLSearchParams(window.location.search).get("sheet") ?? undefined;
 
 const root = document.getElementById("root");
@@ -26,5 +28,5 @@ if (root) {
   // the mount refetch twice; under fast interaction the second refetch can land
   // mid-edit and clobber an optimistic commit. Production createRoot never
   // double-mounts, so this only ever bit the dev server + e2e timing.
-  createRoot(root).render(<App sheetName={sheet} />);
+  createRoot(root).render(sheet ? <App sheetName={sheet} /> : <SheetList />);
 }

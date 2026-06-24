@@ -10,12 +10,17 @@ import {
   type ArborClient,
   type ChangeRequestView,
   type NotificationView,
+  type RoleApplicationView,
+  type RoleGrantView,
+  type RoleView,
   type Snapshot,
   type SnapshotColumn,
   type SnapshotNode,
 } from "./api";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
+import { RolesAdminPanel } from "./components/RolesAdminPanel";
+import { RequestRoleControl } from "./components/RequestRoleControl";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { useSheet, cellKey } from "./hooks/useSheet";
 import { useCrSelection } from "./hooks/useCrSelection";
@@ -101,12 +106,46 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
       .then(setNotifications)
       .catch(() => setNotifications([]));
   }, [client, sheetName]);
+  // Role management (Feature: roles): the catalog (+ per-viewer flags), the
+  // viewer-relevant applications (admin sees pending; everyone sees their own),
+  // and — for admins — the active grants. All refreshed with the snapshot.
+  const [roles, setRoles] = useState<RoleView[]>([]);
+  const [roleApplications, setRoleApplications] = useState<RoleApplicationView[]>([]);
+  const [roleGrants, setRoleGrants] = useState<RoleGrantView[]>([]);
+  const isAdmin = snap?.viewer?.is_admin ?? false;
+  const viewerUser = snap?.actor ?? "";
+  const refreshRoles = useCallback(() => {
+    if (client.listRoles) client.listRoles().then(setRoles).catch(() => setRoles([]));
+    if (client.listRoleApplications) {
+      // Admins triage the pending queue; everyone sees their own applications.
+      const load = isAdmin
+        ? client.listRoleApplications("proposed")
+        : client.listRoleApplications(undefined, viewerUser);
+      load.then(setRoleApplications).catch(() => setRoleApplications([]));
+    }
+    if (isAdmin && client.listRoleGrants) {
+      client.listRoleGrants().then(setRoleGrants).catch(() => setRoleGrants([]));
+    } else {
+      setRoleGrants([]);
+    }
+  }, [client, isAdmin, viewerUser]);
   useEffect(() => {
     if (snap) {
       refreshCRs();
       refreshNotifications();
+      refreshRoles();
     }
-  }, [refreshCRs, refreshNotifications, snap]);
+  }, [refreshCRs, refreshNotifications, refreshRoles, snap]);
+  // Every role mutation funnels through dispatch then refreshes the role views
+  // (and the snapshot, since a grant can change the viewer's ACL affordances).
+  const roleOp = (action: string, params: Record<string, unknown>) => {
+    void sheet.dispatch(action, params).then((o) => {
+      if (!o.error) {
+        refreshRoles();
+        void sheet.refetch();
+      }
+    });
+  };
   const decideCR = (action: string, name: string) => {
     void sheet.dispatch(action, { change_request: name }).then(() => {
       void sheet.refetch();
@@ -370,6 +409,28 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
 
   const delegationCount = snap?.viewer?.branch_grants?.length ?? 0;
 
+  // Roles tab (Feature: roles). Provided (non-null) only for admins or a user who
+  // has applications — so a plain user with nothing pending gets no tab (they use
+  // the header "request a role" control). Count = pending applications (+ grants
+  // for admins) so the badge reflects actionable role work.
+  const rolesSlot =
+    snap && (isAdmin || roleApplications.length > 0) ? (
+      <RolesAdminPanel
+        isAdmin={isAdmin}
+        roles={roles}
+        grants={roleGrants}
+        applications={roleApplications}
+        onAssign={(p) => roleOp("assignRole", p)}
+        onRevoke={(p) => roleOp("revokeRole", p)}
+        onApprove={(p) => roleOp("approveRoleApplication", p)}
+        onReject={(p) => roleOp("rejectRoleApplication", p)}
+        onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+      />
+    ) : null;
+  const roleCount = isAdmin
+    ? roleApplications.filter((a) => a.status === "proposed").length + roleGrants.length
+    : roleApplications.filter((a) => a.status === "proposed").length;
+
   return (
     <main className="arbor-app">
       <header className="arbor-header">
@@ -401,6 +462,10 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 void sheet.dispatch("unsubscribe", params).then(() => sheet.refetch())
               }
             />
+            {/* "Request a role" — the user self-application control (Feature:
+                roles), available to every user. Renders nothing when there is
+                nothing to request and no roles held. */}
+            <RequestRoleControl roles={roles} onApply={(p) => roleOp("applyForRole", p)} />
             {/* ImportExport moves out of the main stack into a collapsible "Data"
                 disclosure here — reclaims the prime post-table slot for governance.
                 The ImportExport API is unchanged; only its mount point moves. */}
@@ -548,9 +613,11 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               changeRequestCount={crs.length}
               notificationCount={notifications.length}
               delegationCount={delegationCount}
+              roleCount={roleCount}
               changeRequests={crSlot}
               notifications={notificationSlot}
               delegations={delegationSlot}
+              roles={rolesSlot}
             />
           </section>
           {/* Sticky full-height agent rail on desktop; a toggled bottom drawer on

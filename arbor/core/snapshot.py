@@ -122,6 +122,8 @@ def serialize_snapshot(
         # viewer's own sheet subscription for the subscribe/unsubscribe control).
         "viewer": {
             "can_add_column": bool(acl_hints.get("can_add_column", False)),
+            # Platform-admin hint — gates the admin Roles panel (Feature: roles).
+            "is_admin": bool(acl_hints.get("is_admin", False)),
             "subscribed": bool(acl_hints.get("subscribed", False)),
             "subscription": acl_hints.get("subscription"),
             # active branch delegations on this sheet (for the delegation control);

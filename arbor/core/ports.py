@@ -60,6 +60,32 @@ class BranchGrantView(Protocol):
     active: bool
 
 
+@runtime_checkable
+class RoleView(Protocol):
+    """An Arbor Role — a site-wide persona (PM/Developer/Marketing...). NOT
+    sheet-scoped. ``applicable`` gates user self-application; ``active`` soft-
+    retires the role (Feature: role management)."""
+
+    name: str  # the Arbor Role docname (== the role key)
+    role: str  # the role key, e.g. "pm"
+    label: str
+    applicable: bool
+    active: bool
+
+
+@runtime_checkable
+class RoleGrantView(Protocol):
+    """The held-role fact (analog of BranchGrant, role-scoped, site-wide). The
+    SINGLE source of truth for who holds which role."""
+
+    name: str
+    role: str
+    grantee: str
+    granted_by: str
+    active: bool
+    source: str  # "admin-grant" | "application"
+
+
 class Repository(Protocol):
     """The data seam. The adapter implements this over Frappe ORM + NestedSet;
     ``core.testing.InMemoryRepository`` implements it in pure Python.
@@ -148,6 +174,41 @@ class Repository(Protocol):
     def get_subscription(self, subscription: str) -> dict[str, Any]: ...
     def create_acknowledgement(self, notification: str, user: str) -> str: ...
     def get_notification(self, notification: str) -> dict[str, Any]: ...
+    def create_notification(self, data: dict[str, Any]) -> str:
+        """Create one in-app Notification row (direct recipient fan-out). Used by
+        the sheet-less role flow, which cannot route through the sheet-scoped
+        subscription matcher (Feature: role management)."""
+        ...
+
+    # --- roles / role grants / role applications (Feature: role management) ---
+    def get_role(self, role: str) -> Optional["RoleView"]:
+        """The Arbor Role by key, or None if it does not exist."""
+        ...
+    def list_active_role_grantees(self, role: str) -> list[str]:
+        """Sorted User names with an ACTIVE grant of ``role`` — the ACL role->user
+        expansion source AND the idempotency check for assign/approve."""
+        ...
+    def find_active_role_grant(self, role: str, grantee: str) -> Optional["RoleGrantView"]: ...
+    def create_role_grant(
+        self,
+        role: str,
+        grantee: str,
+        granted_by: str,
+        source: str = "admin-grant",
+        granted_via: Optional[str] = None,
+    ) -> str: ...
+    def deactivate_role_grant(self, role_grant: str) -> None: ...
+    def create_role_application(self, data: dict[str, Any]) -> str: ...
+    def get_role_application(self, role_application: str) -> dict[str, Any]: ...
+    def update_role_application(self, role_application: str, patch: dict[str, Any]) -> None: ...
+    def find_open_role_application(self, role: str, requester: str) -> Optional[dict[str, Any]]:
+        """A non-terminal (proposed) application by ``requester`` for ``role``, or
+        None — the self-apply de-dupe guard."""
+        ...
+    def list_admins(self) -> list[str]:
+        """User names holding the platform admin role (System Manager) — the
+        recipients of a role-application-submitted notification."""
+        ...
 
 
 class EventSink(Protocol):

@@ -49,6 +49,11 @@ DT_SUBSCRIPTION = "Subscription"
 DT_NOTIFICATION = "Notification"
 DT_ACK = "Acknowledgement"
 DT_EVENT = "Tree Event"
+# role management (Feature: roles)
+DT_ROLE = "Arbor Role"
+DT_ROLE_GRANT = "Arbor Role Grant"
+DT_ROLE_APP = "Arbor Role Application"
+SYSTEM_MANAGER = "System Manager"
 
 
 def _change_item_row(ch: dict[str, Any]) -> dict[str, Any]:
@@ -162,6 +167,26 @@ class _GrantView:
     scope: str = "structure"
     active: bool = True
     granted_by: Optional[str] = None
+
+
+@dataclass
+class _RoleView:
+    name: str
+    role: str
+    label: str = ""
+    applicable: bool = True
+    active: bool = True
+
+
+@dataclass
+class _RoleGrantView:
+    name: str
+    role: str
+    grantee: str
+    granted_by: str
+    active: bool = True
+    source: str = "admin-grant"
+    granted_via: Optional[str] = None
 
 
 class FrappeRepository:
@@ -722,6 +747,124 @@ class FrappeRepository:
             "channel": doc.channel,
             "requires_ack": bool(doc.requires_ack),
         }
+
+    def create_notification(self, data: dict[str, Any]) -> str:
+        """Direct in-app Notification creation (sheet-less role fan-out). Only
+        schema fields are persisted; the role ``op``/``role`` are recoverable
+        from the linked Tree Event's payload (the renderer reads it)."""
+        fields = {"doctype": DT_NOTIFICATION}
+        for k in ("tree_event", "change_request", "recipient", "channel", "requires_ack"):
+            if data.get(k) is not None:
+                fields[k] = data[k]
+        # Idempotent per (tree_event, recipient, channel).
+        if fields.get("tree_event") and frappe.db.exists(
+            DT_NOTIFICATION,
+            {"tree_event": fields["tree_event"], "recipient": fields.get("recipient"), "channel": fields.get("channel", "in-app")},
+        ):
+            return frappe.db.get_value(
+                DT_NOTIFICATION,
+                {"tree_event": fields["tree_event"], "recipient": fields.get("recipient"), "channel": fields.get("channel", "in-app")},
+                "name",
+            )
+        doc = frappe.get_doc(fields)
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    # ---- roles / role grants / role applications (Feature: roles) ---------
+    def get_role(self, role: str) -> Optional[_RoleView]:
+        if not frappe.db.exists(DT_ROLE, role):
+            return None
+        d = frappe.get_doc(DT_ROLE, role)
+        return _RoleView(
+            name=d.name, role=d.role, label=d.get("label") or d.role,
+            applicable=bool(d.applicable), active=bool(d.active),
+        )
+
+    def list_active_role_grantees(self, role: str) -> list[str]:
+        return sorted(
+            frappe.get_all(
+                DT_ROLE_GRANT, filters={"role": role, "active": 1}, pluck="grantee"
+            )
+        )
+
+    def find_active_role_grant(self, role: str, grantee: str) -> Optional[_RoleGrantView]:
+        name = frappe.db.get_value(
+            DT_ROLE_GRANT, {"role": role, "grantee": grantee, "active": 1}, "name"
+        )
+        if not name:
+            return None
+        d = frappe.get_doc(DT_ROLE_GRANT, name)
+        return _RoleGrantView(
+            name=d.name, role=d.role, grantee=d.grantee, granted_by=d.granted_by,
+            active=bool(d.active), source=d.get("source") or "admin-grant",
+            granted_via=d.get("granted_via"),
+        )
+
+    def create_role_grant(
+        self, role: str, grantee: str, granted_by: str,
+        source: str = "admin-grant", granted_via: Optional[str] = None,
+    ) -> str:
+        doc = frappe.new_doc(DT_ROLE_GRANT)
+        doc.role = role
+        doc.grantee = grantee
+        doc.granted_by = granted_by
+        doc.source = source
+        doc.granted_via = granted_via
+        doc.active = 1
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    def deactivate_role_grant(self, role_grant: str) -> None:
+        frappe.db.set_value(DT_ROLE_GRANT, role_grant, "active", 0)
+
+    def create_role_application(self, data: dict[str, Any]) -> str:
+        doc = frappe.new_doc(DT_ROLE_APP)
+        doc.role = data["role"]
+        doc.requester = data["requester"]
+        doc.status = data.get("status", "proposed")
+        doc.justification = data.get("justification")
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    def get_role_application(self, role_application: str) -> dict[str, Any]:
+        d = frappe.get_doc(DT_ROLE_APP, role_application)
+        return {
+            "name": d.name,
+            "role": d.role,
+            "requester": d.requester,
+            "status": d.status,
+            "justification": d.get("justification"),
+            "decided_by": d.get("decided_by"),
+            "resulting_grant": d.get("resulting_grant"),
+            "decided_event": d.get("decided_event"),
+        }
+
+    def update_role_application(self, role_application: str, patch: dict[str, Any]) -> None:
+        doc = frappe.get_doc(DT_ROLE_APP, role_application)
+        for k, v in (patch or {}).items():
+            if k == "decided_by" and v:
+                doc.decided_by = v
+                if doc.meta.has_field("decided_at"):
+                    doc.decided_at = frappe.utils.now()
+            else:
+                doc.set(k, v)
+        doc.save(ignore_permissions=True)
+
+    def find_open_role_application(self, role: str, requester: str) -> Optional[dict[str, Any]]:
+        name = frappe.db.get_value(
+            DT_ROLE_APP, {"role": role, "requester": requester, "status": "proposed"}, "name"
+        )
+        return self.get_role_application(name) if name else None
+
+    def list_admins(self) -> list[str]:
+        """Enabled users holding System Manager — the role-application recipients."""
+        names = frappe.get_all(
+            "Has Role",
+            filters={"role": SYSTEM_MANAGER, "parenttype": "User"},
+            distinct=True,
+            pluck="parent",
+        )
+        return sorted(n for n in names if frappe.db.get_value("User", n, "enabled"))
 
 
 class FrappeEventSink:
