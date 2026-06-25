@@ -26,6 +26,18 @@ watch, and ask the agent — and everything behaves like the real product.
 
 ---
 
+## Screenshots
+
+Captured as **admin** on the seeded `ACME` state by
+[`tests/e2e/acme-capture.e2e.spec.ts`](../tests/e2e/acme-capture.e2e.spec.ts)
+(full set + regeneration steps in [`docs/demo/acme/`](demo/acme/README.md)).
+
+| Sheet list | Tree table (J1) | Change Requests (J2) |
+|---|---|---|
+| [![sheet list](demo/acme/01-sheet-list.png)](demo/acme/01-sheet-list.png) | [![tree](demo/acme/02-tree-table.png)](demo/acme/02-tree-table.png) | [![CRs](demo/acme/03-change-requests.png)](demo/acme/03-change-requests.png) |
+| **Roles (J5)** | **Activity (J13)** | **View manager (J11)** |
+| [![roles](demo/acme/04-roles.png)](demo/acme/04-roles.png) | [![activity](demo/acme/06-activity.png)](demo/acme/06-activity.png) | [![view](demo/acme/08-view-popover.png)](demo/acme/08-view-popover.png) |
+
 ## What ACME contains (so the journeys make sense)
 
 **Tree (18 nodes, depth 3):**
@@ -237,6 +249,8 @@ the same filter.*
 
 ## J5 — Role management & the `role:pm` headline  *(applyForRole, approveRoleApplication, assignRole, role-as-ACL)*
 
+![Role management & the `role:pm` headline](demo/acme/04-roles.png)
+
 Open **Governance → Roles** (the admin Roles inbox).
 
 1. **Open applications (3):** `bob.demo → developer`, `erin.demo → marketing`,
@@ -387,6 +401,8 @@ read API. (The **Capabilities** tab lists every LLM-exposed capability;
 
 ## J11 — Presentation: Views & density  *(UI-only)*
 
+![Presentation: Views & density](demo/acme/08-view-popover.png)
+
 1. Open the **View** menu (top bar). **Hide** a couple of columns (e.g.
    *Marketing Copy*, *Security Review*), **reorder** columns by dragging, and
    **resize** a column.
@@ -416,6 +432,8 @@ effect on the governed data.*
 ---
 
 ## J13 — Activity / change history  *(the audit timeline over the Tree Event stream)*
+
+![Activity / change history](demo/acme/06-activity.png)
 
 1. In the Governance panel, open the **Activity** tab (the 5th tab; its badge
    shows the recent-event count, e.g. **50**). You get a newest-first timeline of
