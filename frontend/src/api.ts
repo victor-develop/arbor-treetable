@@ -230,6 +230,29 @@ export type RoleApplicationView = {
   viewer_is_approver?: boolean;
 };
 
+// One entry in the Activity / change-history feed from arbor.list_activity
+// (newest-first). The feed is "what happened", never the data: it NEVER carries
+// raw cell values, and a column the viewer cannot read is omitted (server-side
+// read-ACL) — `column` is the readable column LABEL or null, `node` the visible
+// node LABEL or null, and `summary` is the server-built human one-liner.
+export type ActivityEvent = {
+  event_id: string;
+  // one of the 11 server EventType values (e.g. CELL_UPDATED, CHANGE_PROPOSED).
+  type: string;
+  actor: string;
+  actor_type: string;
+  // ISO/creation timestamp string.
+  timestamp: string;
+  // present when the event targets/produced a Change Request, else null.
+  change_request: string | null;
+  // visible node label (null when the event isn't node-scoped or is hidden).
+  node: string | null;
+  // readable column label (null when no column, or the viewer can't read it).
+  column: string | null;
+  // human one-liner, e.g. "alice updated the Stage of SSO Federation".
+  summary: string;
+};
+
 // A sheet summary row from arbor.list_sheets — the home-page Sheet List. Sorted
 // (client-side) by node_count desc so real sheets float above the many orphan
 // empty test sheets; the count is shown per row.
@@ -250,6 +273,9 @@ export type ArborClient = {
   listChangeRequests?: (sheet: string) => Promise<ChangeRequestView[]>;
   // The viewer's in-app notifications for the sheet. Optional (mocked clients).
   listNotifications?: (sheet: string) => Promise<NotificationView[]>;
+  // The sheet's Activity / change-history feed (newest-first). Optional so
+  // mocked clients can omit it.
+  listActivity?: (sheet: string, limit?: number) => Promise<ActivityEvent[]>;
   // Role management reads (Feature: roles). Optional so mocked clients can omit.
   listRoles?: () => Promise<RoleView[]>;
   listRoleGrants?: (role?: string, grantee?: string) => Promise<RoleGrantView[]>;
@@ -281,6 +307,14 @@ export const api: ArborClient = {
     const res = await fetchImpl(`/api/method/arbor.list_notifications?${qs}`, { headers });
     if (!res.ok) throw new Error(`list_notifications failed: ${res.status}`);
     return unwrap<NotificationView[]>(await res.json());
+  },
+
+  listActivity: async (sheet, limit = 50) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet, limit: String(limit) }).toString();
+    const res = await fetchImpl(`/api/method/arbor.list_activity?${qs}`, { headers });
+    if (!res.ok) throw new Error(`list_activity failed: ${res.status}`);
+    return unwrap<ActivityEvent[]>(await res.json());
   },
 
   listRoles: async () => {

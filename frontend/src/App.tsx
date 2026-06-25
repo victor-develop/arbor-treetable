@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api as defaultClient,
+  type ActivityEvent,
   type ArborClient,
   type ChangeRequestView,
   type NotificationView,
@@ -17,6 +18,7 @@ import {
   type SnapshotColumn,
   type SnapshotNode,
 } from "./api";
+import { ActivityPanel } from "./components/ActivityPanel";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
 import { RolesAdminPanel } from "./components/RolesAdminPanel";
@@ -106,6 +108,17 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
       .then(setNotifications)
       .catch(() => setNotifications([]));
   }, [client, sheetName]);
+  // Activity / change-history feed: the sheet's events (newest-first), refreshed
+  // whenever the snapshot changes — so a mutation the viewer (or anyone) makes
+  // shows up in the timeline after the snapshot settles.
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const refreshActivity = useCallback(() => {
+    if (!client.listActivity) return;
+    client
+      .listActivity(sheetName)
+      .then(setActivity)
+      .catch(() => setActivity([]));
+  }, [client, sheetName]);
   // Role management (Feature: roles): the catalog (+ per-viewer flags), the
   // viewer-relevant applications (admin sees pending; everyone sees their own),
   // and — for admins — the active grants. All refreshed with the snapshot.
@@ -134,8 +147,9 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
       refreshCRs();
       refreshNotifications();
       refreshRoles();
+      refreshActivity();
     }
-  }, [refreshCRs, refreshNotifications, refreshRoles, snap]);
+  }, [refreshCRs, refreshNotifications, refreshRoles, refreshActivity, snap]);
   // Every role mutation funnels through dispatch then refreshes the role views
   // (and the snapshot, since a grant can change the viewer's ACL affordances).
   const roleOp = (action: string, params: Record<string, unknown>) => {
@@ -431,6 +445,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
     ? roleApplications.filter((a) => a.status === "proposed").length + roleGrants.length
     : roleApplications.filter((a) => a.status === "proposed").length;
 
+  // Activity tab (change history). Always provided when the sheet has loaded — an
+  // always-on slot keeps the governance panel reachable (the ActivityPanel renders
+  // its own empty state). Count = the loaded event count, surfaced as a subtle
+  // badge; it never drives the default-tab rule (Activity is history, not a queue).
+  const activitySlot = snap ? <ActivityPanel events={activity} /> : null;
+
   return (
     <main className="arbor-app">
       <header className="arbor-header">
@@ -614,10 +634,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               notificationCount={notifications.length}
               delegationCount={delegationCount}
               roleCount={roleCount}
+              activityCount={activity.length}
               changeRequests={crSlot}
               notifications={notificationSlot}
               delegations={delegationSlot}
               roles={rolesSlot}
+              activity={activitySlot}
             />
           </section>
           {/* Sticky full-height agent rail on desktop; a toggled bottom drawer on

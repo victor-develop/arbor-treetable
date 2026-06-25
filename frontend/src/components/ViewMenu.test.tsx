@@ -45,6 +45,32 @@ describe("ViewMenu — lists only snapshot-present columns", () => {
     render(<ViewMenu columns={COLS} view={baseView} onChange={vi.fn()} />);
     expect(screen.queryByTestId("view-col-col:name")).not.toBeInTheDocument();
   });
+
+  it("renders the toggle as the bare label and conveys state via aria-pressed + aria-label (no visible '· Visible/Hidden' suffix)", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: ["col:budget"], order: [] }}
+        onChange={vi.fn()}
+      />,
+    );
+    // Visible toggle: bare label text, aria-pressed=true, state only in aria-label.
+    const statusToggle = screen.getByTestId("view-toggle-col:status");
+    expect(statusToggle).toHaveTextContent(/^Status$/);
+    expect(statusToggle).not.toHaveTextContent(/Visible|Hidden/);
+    expect(statusToggle).toHaveAttribute("aria-pressed", "true");
+    expect(statusToggle).toHaveAttribute("aria-label", "Status — visible");
+    // Hidden toggle: bare label text, aria-pressed=false, "hidden" only in aria-label.
+    const budgetToggle = screen.getByTestId("view-toggle-col:budget");
+    expect(budgetToggle).toHaveTextContent(/^Budget$/);
+    expect(budgetToggle).not.toHaveTextContent(/Visible|Hidden/);
+    expect(budgetToggle).toHaveAttribute("aria-pressed", "false");
+    expect(budgetToggle).toHaveAttribute("aria-label", "Budget — hidden");
+    // the styled checkbox is still present to convey state visually.
+    expect(
+      budgetToggle.querySelector(".arbor-view-check"),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("ViewMenu — interactions emit SheetView, never executeAction", () => {

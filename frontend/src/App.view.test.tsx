@@ -4,7 +4,7 @@
 // seeds the collapsed set from view.collapsed, and keeps the URL in sync via
 // history.replaceState. None of this issues an executeAction.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { loginAs, mockClient } from "./test/fixture";
@@ -28,10 +28,11 @@ describe("App — applies ?v= on mount", () => {
     setSearch(`v=${encodeView(view)}`);
     const { client } = mockClient({ snapshot: loginAs("A") });
     render(<App client={client} sheetName="S" />);
-    await screen.findByTestId("tree-table");
-    // budget header is hidden by the shared view; status remains.
-    expect(screen.queryByText("Budget")).not.toBeInTheDocument();
-    expect(screen.getByText("Status")).toBeInTheDocument();
+    const table = within(await screen.findByTestId("tree-table"));
+    // budget header is hidden by the shared view; status remains. Scope to the
+    // table so these resolve to the column headers only, not the ViewMenu toggle.
+    expect(table.queryByText("Budget")).not.toBeInTheDocument();
+    expect(table.getByText("Status")).toBeInTheDocument();
   });
 
   it("a forwarded link can NEVER reveal a column the recipient cannot read", async () => {
@@ -51,8 +52,8 @@ describe("App — applies ?v= on mount", () => {
     };
     const { client } = mockClient({ snapshot: restricted });
     render(<App client={client} sheetName="S" />);
-    await screen.findByTestId("tree-table");
-    expect(screen.queryByText("Budget")).not.toBeInTheDocument();
+    const table = within(await screen.findByTestId("tree-table"));
+    expect(table.queryByText("Budget")).not.toBeInTheDocument();
   });
 
   it("seeds the collapsed set from view.collapsed (P2 subtree hidden on mount)", async () => {
@@ -71,11 +72,12 @@ describe("App — applies ?v= on mount", () => {
     setSearch("v=!!!garbage!!!");
     const { client } = mockClient({ snapshot: loginAs("A") });
     render(<App client={client} sheetName="S" />);
-    await screen.findByTestId("tree-table");
-    // default view shows every readable data column.
-    expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Budget")).toBeInTheDocument();
-    expect(screen.getByText("Notes")).toBeInTheDocument();
+    const table = within(await screen.findByTestId("tree-table"));
+    // default view shows every readable data column (scope to the table so these
+    // resolve to the column headers, not the ViewMenu toggles).
+    expect(table.getByText("Status")).toBeInTheDocument();
+    expect(table.getByText("Budget")).toBeInTheDocument();
+    expect(table.getByText("Notes")).toBeInTheDocument();
   });
 });
 

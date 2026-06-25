@@ -27,14 +27,19 @@ const delegationsSlot = <div data-testid="delegation-control">Delegation control
 
 const rolesSlot = <div data-testid="roles-panel">Roles panel</div>;
 
+const activitySlot = <div data-testid="activity-panel">Activity timeline</div>;
+
 // Render helper mirroring App's call shape: counts + content slots. The Roles tab
 // is opt-in (roles slot null by default) so the original three-tab specs hold.
+// The Activity tab is likewise opt-in (activity slot null by default).
 function renderPanel(counts: {
   cr: number;
   notifications: number;
   delegations: number;
   roles?: number;
   rolesSlot?: React.ReactNode;
+  activity?: number;
+  activitySlot?: React.ReactNode;
 }) {
   return render(
     <GovernancePanel
@@ -42,10 +47,12 @@ function renderPanel(counts: {
       notificationCount={counts.notifications}
       delegationCount={counts.delegations}
       roleCount={counts.roles ?? 0}
+      activityCount={counts.activity ?? 0}
       changeRequests={changeRequestsSlot}
       notifications={notificationsSlot}
       delegations={delegationsSlot}
       roles={counts.rolesSlot ?? null}
+      activity={counts.activitySlot ?? null}
     />,
   );
 }
@@ -148,6 +155,64 @@ describe("GovernancePanel — Roles tab (Feature: roles)", () => {
   });
 });
 
+describe("GovernancePanel — Activity tab (change history)", () => {
+  it("shows an Activity tab only when an activity slot is provided", () => {
+    renderPanel({ cr: 1, notifications: 0, delegations: 0 });
+    expect(screen.queryByRole("tab", { name: /activity/i })).toBeNull();
+
+    renderPanel({ cr: 1, notifications: 0, delegations: 0, activity: 4, activitySlot });
+    expect(screen.getByRole("tab", { name: /activity/i })).toBeInTheDocument();
+  });
+
+  it("renders Activity as the LAST tab", () => {
+    renderPanel({
+      cr: 1,
+      notifications: 0,
+      delegations: 0,
+      roles: 0,
+      rolesSlot,
+      activity: 3,
+      activitySlot,
+    });
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent ?? "");
+    expect(tabs[tabs.length - 1]).toMatch(/activity/i);
+  });
+
+  it("surfaces activityCount as a subtle badge on the tab", () => {
+    renderPanel({ cr: 1, notifications: 0, delegations: 0, activity: 7, activitySlot });
+    const tab = screen.getByRole("tab", { name: /activity/i });
+    expect(tab.querySelector(".arbor-count")?.textContent?.trim()).toBe("7");
+  });
+
+  it("keeps the panel open (no collapse) for a provided Activity slot at zero counts", () => {
+    // Activity is history, not a queue — a provided slot keeps the panel reachable
+    // but must NOT manufacture a phantom 'pending' state. The quiet collapse line
+    // is absent and the Activity tab can be clicked to mount the timeline.
+    renderPanel({ cr: 0, notifications: 0, delegations: 0, activity: 0, activitySlot });
+    expect(screen.queryByText(/no pending governance/i)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
+    expect(screen.getByTestId("activity-panel")).toBeInTheDocument();
+  });
+
+  it("clicking Activity mounts the timeline only", () => {
+    renderPanel({ cr: 2, notifications: 1, delegations: 1, activity: 2, activitySlot });
+    fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
+    expect(screen.getByTestId("activity-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("cr-inbox")).toBeNull();
+    expect(screen.queryByTestId("notification-inbox")).toBeNull();
+  });
+
+  it("does not auto-select Activity even when it is the only non-zero count", () => {
+    // History should never steal default focus from the triage queues; with all
+    // queues empty the panel stays on its CR fallback, not Activity.
+    renderPanel({ cr: 0, notifications: 0, delegations: 0, activity: 9, activitySlot });
+    expect(screen.queryByTestId("activity-panel")).toBeNull();
+    expect(screen.getByTestId("governance-panel").getAttribute("data-active-tab")).toBe(
+      "changeRequests",
+    );
+  });
+});
+
 describe("GovernancePanel — active tab follows defaultKey until the user picks", () => {
   // Reproduces the live default-tab bug: at mount the snapshot already has a
   // delegation (delegations:1) while the Change-Request list is still loading
@@ -165,6 +230,8 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         notifications={notificationsSlot}
         delegations={delegationsSlot}
         roles={null}
+        activity={null}
+        activityCount={0}
       />,
     );
 
@@ -183,6 +250,8 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         notifications={notificationsSlot}
         delegations={delegationsSlot}
         roles={null}
+        activity={null}
+        activityCount={0}
       />,
     );
 
@@ -205,6 +274,8 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         notifications={notificationsSlot}
         delegations={delegationsSlot}
         roles={null}
+        activity={null}
+        activityCount={0}
       />,
     );
 
@@ -223,6 +294,8 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         notifications={notificationsSlot}
         delegations={delegationsSlot}
         roles={null}
+        activity={null}
+        activityCount={0}
       />,
     );
 

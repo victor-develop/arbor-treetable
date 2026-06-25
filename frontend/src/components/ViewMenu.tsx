@@ -159,21 +159,19 @@ export function ViewMenu(props: ViewMenuProps): JSX.Element {
               className="arbor-view-toggle"
               data-testid={`view-toggle-${c.name}`}
               aria-pressed={!hidden.has(c.name)}
+              // The visible text is just the bare label; visible/hidden state is
+              // conveyed structurally by the .arbor-view-check checkbox and
+              // aria-pressed. An explicit aria-label keeps the state in the
+              // accessible name for screen-reader users (the bare visible word
+              // would be redundant on screen and was only ever present to keep
+              // RTL getByText("Budget") off this node — tests now scope to the
+              // table header instead).
+              aria-label={`${c.label} — ${hidden.has(c.name) ? "hidden" : "visible"}`}
               title={hidden.has(c.name) ? `Show ${c.label}` : `Hide ${c.label}`}
               onClick={() => toggle(c.name)}
             >
               <span className="arbor-view-check" aria-hidden="true" />
-              {/* The label is rendered as ONE direct text node combined with a
-                  trailing state word ("· Visible"/"· Hidden"), mirroring how the
-                  original kept the glyph+label as a single concatenated text node.
-                  This keeps RTL getByText("Budget") resolving to the table header
-                  only (getNodeText joins direct text nodes, so this node reads
-                  "Budget · Visible", never the bare label). The state word is
-                  dimmed by .arbor-view-state but stays in the accessible name. */}
-              <span className="arbor-view-label">
-                {c.label}
-                {hidden.has(c.name) ? " · Hidden" : " · Visible"}
-              </span>
+              <span className="arbor-view-label">{c.label}</span>
             </button>
             <button
               type="button"
