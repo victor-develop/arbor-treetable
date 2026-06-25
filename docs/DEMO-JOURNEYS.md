@@ -93,6 +93,7 @@ each capability area to where you experience it.
 | 10 | Server-side agent | `chat` over the explore reads (`listChildren`, `getNode`, `searchNodes`, `getCells`, `getSubtree`) | **J10** |
 | 11 | Presentation (views, density) | hide/reorder/resize columns, row density | **J11** |
 | 12 | Import / Export | snapshot export + import | **J12** |
+| 13 | Activity / change-history (audit timeline) | `list_activity` over the append-only Tree Event stream (read-ACL redacted) | **J13** |
 | — | CR/role withdrawal & rejection | `withdrawChange`, `rejectChange`, `withdrawRoleApplication`, `rejectRoleApplication` | **J2**, **J5** |
 
 \* `addColumn` is demonstrated live in **J3** (the seed creates the initial 9
@@ -411,6 +412,35 @@ effect on the governed data.*
    can't read — import/export inherit the same governance as every other surface.
 
 *Demonstrates governed import/export round-trip.*
+
+---
+
+## J13 — Activity / change history  *(the audit timeline over the Tree Event stream)*
+
+1. In the Governance panel, open the **Activity** tab (the 5th tab; its badge
+   shows the recent-event count, e.g. **50**). You get a newest-first timeline of
+   everything that has happened on this sheet — built from the append-only **Tree
+   Event** log, the same record webhooks and notifications fire from.
+2. Each row carries a **type chip** (`NODE CREATED`, `APPROVED`, `PROPOSED`,
+   `SUBSCRIPTION CHANGED`, `DELEGATION CHANGED`, …), a human one-line **summary**
+   (e.g. *"pm@arbor.example added Device Trust"*, *"alice.demo proposed a
+   change"*), the **actor**, a **timestamp**, and — on change-related events — the
+   **Change Request id** (so you can trace an approval back to its request).
+3. **Read-ACL is enforced on the feed**, just like the grid: an event that
+   touched a column you can't read shows a redacted summary (*"updated a cell"*),
+   never the column name and **never the raw value** — the timeline tells you
+   *what happened*, not the protected data. As admin you see every event in full;
+   a non-owner viewing the same feed sees the redacted form for `revenue_forecast`.
+4. Note the tab **never steals default focus** — the panel still opens on the
+   actionable Change Requests queue; Activity is history you pull up on demand.
+
+*Demonstrates the change-history surface (`list_activity`) over the append-only
+event stream, with the same read-ACL governance as every other surface.*
+
+> **Where the data comes from.** Every governed mutation in J1–J12 emits exactly
+> one Tree Event; that append-only stream IS the version/audit history. There is
+> no separate "undo log" — the event stream is the single source of truth that
+> webhooks, notifications, and this Activity feed all read from.
 
 ---
 
