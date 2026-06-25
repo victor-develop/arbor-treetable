@@ -2292,3 +2292,109 @@ body {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Activity / change-history timeline (Activity governance tab) ──────────────
+   A DENSE, power-user feed — one event per row, newest-first. Each row packs a
+   subtle type chip, the summary one-liner, the actor, an absolute-ish timestamp,
+   and a CR marker on a single tight line so dozens of events stay scannable. It
+   lives inside .arbor-governance-body, so it strips its own outer card chrome
+   (the governance card already provides the surface). */
+.arbor-governance-body .arbor-activity {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
+/* History can run long — cap to a scrollable region so a busy sheet stays bounded
+   rather than running the whole page on (mirrors the CR inbox scroller). */
+.arbor-activity-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+/* Tight, single-line rows: chip | (summary + meta) — hairline separated. */
+.arbor-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--outline-subtle);
+  font-size: 13px;
+}
+.arbor-activity-row:last-child {
+  border-bottom: none;
+}
+/* Subtle event-type chip — a flat gray metadata tag (NOT a pressable button),
+   fixed-ish width so the summaries align into a readable left edge. */
+.arbor-activity-type {
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: 62px;
+  text-align: center;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  border-radius: var(--r-sm);
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Change-request events tint the chip toward the accent so a proposal/approval/
+   rejection stands out from routine edits in the dense stream. */
+.arbor-activity-type[data-type="CHANGE_PROPOSED"],
+.arbor-activity-type[data-type="CHANGE_APPROVED"],
+.arbor-activity-type[data-type="CHANGE_REJECTED"] {
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+.arbor-activity-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* The server-built human one-liner is the row's lead — body ink, may truncate. */
+.arbor-activity-summary {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Quiet metadata line: actor · timestamp · CR marker. */
+.arbor-activity-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+.arbor-activity-actor {
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.arbor-activity-time {
+  color: var(--ink-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* CR marker: a small accent pill linking the event to its change request. */
+.arbor-activity-cr {
+  border-radius: var(--r-full);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  padding: 0 8px;
+  font-weight: 600;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.arbor-activity-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}

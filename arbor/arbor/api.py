@@ -33,6 +33,7 @@ from frappe import _
 
 from arbor.core import executor, registry
 from arbor.core.acl import (
+    can_read_column,
     resolve_column_approvers,
     resolve_structural_approver,
     visible_columns,
@@ -752,6 +753,161 @@ def list_notifications(sheet):
                 "message": f"{ev.actor} {_NOTIF_VERB.get(ev.type, ev.type)}",
                 "requires_ack": bool(r.requires_ack),
                 "acked": acked,
+            }
+        )
+    return out
+
+
+# Friendly PAST-TENSE verbs for the activity feed, keyed by EventType (the
+# closed set of 11 — arbor.core.types.EventType). Mirrors the ``_NOTIF_VERB``
+# idiom above but phrased for a change-history one-liner ("alice <verb> ..."). A
+# node-/column-aware summary is built on top of these in ``list_activity``; an
+# unmapped/unknown type falls back to the raw type string.
+_ACTIVITY_VERB = {
+    "NODE_CREATED": "added",
+    "NODE_DELETED": "deleted",
+    "NODE_MOVED": "moved",
+    "NODE_VALUE_UPDATED": "updated",
+    "COLUMN_CONFIG_UPDATED": "changed",
+    "CHANGE_PROPOSED": "proposed a change",
+    "CHANGE_APPROVED": "approved a change",
+    "CHANGE_REJECTED": "rejected a change",
+    "SUBSCRIPTION_CHANGED": "changed a subscription",
+    "DELEGATION_CHANGED": "changed a delegation",
+    "IMPORT_COMPLETED": "completed an import",
+}
+
+
+def _node_label(repo, sheet, label_col, node):
+    """The human label of ``node`` (value of the sheet's label column), or the
+    raw node id if it has no label. Labels are ALWAYS readable
+    (``can_read_column`` short-circuits on ``is_label``), so no ACL gate here."""
+    if not node:
+        return None
+    if label_col is not None:
+        val = repo.get_value(node, label_col)
+        if val:
+            return val
+    return node
+
+
+def _readable_column_label(repo, sheet, actor, column):
+    """``(label, readable)`` for ``column``: the column's display label when the
+    viewer MAY read it (``arbor.core.acl.can_read_column``), else ``(None, False)``
+    so the caller redacts the name. Never returns a cell VALUE — only the column
+    schema label. A missing column resolves to ``(None, False)``."""
+    if not column:
+        return None, False
+    try:
+        col = repo.get_column(sheet, column)
+    except Exception:
+        return None, False
+    if not can_read_column(repo, sheet, col, actor):
+        return None, False
+    return (getattr(col, "label", None) or col.field), True
+
+
+def _activity_summary(ev_type, actor_name, payload, repo, sheet, actor, label_col):
+    """Build the human one-liner for one Tree Event, resolving node/column LABELS
+    via the repo and REDACTING any column the viewer cannot read (generic
+    "a cell" / "a column" phrasing). NEVER includes a raw cell value."""
+    payload = payload or {}
+    verb = _ACTIVITY_VERB.get(ev_type, ev_type)
+
+    if ev_type == "NODE_CREATED":
+        label = _node_label(repo, sheet, label_col, payload.get("node"))
+        return f"{actor_name} added {label}" if label else f"{actor_name} added a node"
+
+    if ev_type == "NODE_DELETED":
+        # The node row is gone by now; fall back to a generic phrasing.
+        return f"{actor_name} deleted a node"
+
+    if ev_type == "NODE_MOVED":
+        label = _node_label(repo, sheet, label_col, payload.get("node"))
+        return f"{actor_name} moved {label}" if label else f"{actor_name} moved a node"
+
+    if ev_type == "NODE_VALUE_UPDATED":
+        col_label, readable = _readable_column_label(
+            repo, sheet, actor, payload.get("column")
+        )
+        node_label = _node_label(repo, sheet, label_col, payload.get("node"))
+        if readable and node_label:
+            return f"{actor_name} updated the {col_label} of {node_label}"
+        if readable:
+            return f"{actor_name} updated the {col_label}"
+        if node_label:
+            return f"{actor_name} updated a cell of {node_label}"
+        return f"{actor_name} updated a cell"
+
+    if ev_type == "COLUMN_CONFIG_UPDATED":
+        col_label, readable = _readable_column_label(
+            repo, sheet, actor, payload.get("column")
+        )
+        op = payload.get("op")
+        action = {"add": "added", "delete": "deleted", "grant": "changed access to"}.get(
+            op, "changed"
+        )
+        if readable:
+            return f"{actor_name} {action} the {col_label} column"
+        return f"{actor_name} {action} a column"
+
+    # Axis-NONE / lifecycle events carry no node/column to redact — the verb IS
+    # the whole sentence.
+    return f"{actor_name} {verb}"
+
+
+@frappe.whitelist()
+def list_activity(sheet, limit=50):
+    """The sheet's activity / change-history feed (newest first) — a READ SHIM
+    (like ``list_change_requests`` / ``list_notifications``), NOT a registry
+    capability, so it stays off the parity/registry surface.
+
+    Returns one row per Tree Event on ``sheet`` (role/site-wide events have
+    ``sheet=NULL`` and never appear here). Each row carries its event id, type
+    (one of the 11 ``EventType`` values), actor + actor_type, ISO timestamp, the
+    linked Change Request (or null), the resolved node LABEL / column LABEL when
+    the viewer may see them, and a human one-liner ``summary``.
+
+    Read-ACL: the feed is "what happened", never the data — it carries NO raw
+    cell VALUES. A column the viewer cannot read (``arbor.core.acl.can_read_column``)
+    is redacted: its name is dropped from both ``column`` and ``summary`` and the
+    phrasing falls back to a generic "a cell" / "a column"."""
+    actor = _actor()
+    repo = _repo()
+    label_col = next((c.name for c in repo.list_columns(sheet) if c.is_label), None)
+
+    rows = frappe.get_all(
+        "Tree Event",
+        filters={"sheet": sheet},
+        order_by="creation desc",
+        limit_page_length=frappe.utils.cint(limit) if limit is not None else 50,
+        fields=["name", "type", "actor", "actor_type", "change_request", "payload", "creation"],
+    )
+    out = []
+    for r in rows:
+        payload = r.payload
+        if isinstance(payload, str):
+            payload = frappe.parse_json(payload) if payload else {}
+        payload = payload or {}
+
+        node_id = payload.get("node")
+        node_label = _node_label(repo, sheet, label_col, node_id) if node_id else None
+        col_label, col_readable = _readable_column_label(
+            repo, sheet, actor, payload.get("column")
+        )
+        out.append(
+            {
+                "event_id": r.name,
+                "type": r.type,
+                "actor": r.actor,
+                "actor_type": r.actor_type,
+                "timestamp": str(r.creation),
+                "change_request": r.change_request or None,
+                "node": node_label,
+                "column": col_label if col_readable else None,
+                "summary": _activity_summary(
+                    r.type, r.actor, payload, repo, sheet, actor, label_col
+                ),
             }
         )
     return out

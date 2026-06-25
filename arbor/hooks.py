@@ -90,6 +90,7 @@ override_whitelisted_methods = {
     "arbor.list_sheets": "arbor.arbor.api.list_sheets",
     "arbor.list_change_requests": "arbor.arbor.api.list_change_requests",
     "arbor.list_notifications": "arbor.arbor.api.list_notifications",
+    "arbor.list_activity": "arbor.arbor.api.list_activity",
     "arbor.approve_change": "arbor.arbor.api.approve_change",
     "arbor.reject_change": "arbor.arbor.api.reject_change",
     "arbor.withdraw_change": "arbor.arbor.api.withdraw_change",
