@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api as defaultClient,
-  type ActivityEvent,
   type ArborClient,
   type ChangeRequestView,
   type NotificationView,
@@ -108,17 +107,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
       .then(setNotifications)
       .catch(() => setNotifications([]));
   }, [client, sheetName]);
-  // Activity / change-history feed: the sheet's events (newest-first), refreshed
-  // whenever the snapshot changes — so a mutation the viewer (or anyone) makes
-  // shows up in the timeline after the snapshot settles.
-  const [activity, setActivity] = useState<ActivityEvent[]>([]);
-  const refreshActivity = useCallback(() => {
-    if (!client.listActivity) return;
-    client
-      .listActivity(sheetName)
-      .then(setActivity)
-      .catch(() => setActivity([]));
-  }, [client, sheetName]);
+  // Activity / change-history feed: the ActivityPanel now owns its own fetching /
+  // keyset paging / filtering. The shell only (a) bumps a refreshKey so the panel
+  // re-fetches page 1 whenever the viewer (or anyone) mutates, and (b) records the
+  // loaded count + hasMore for the tab badge.
+  const [activityCount, setActivityCount] = useState(0);
+  const [activityHasMore, setActivityHasMore] = useState(false);
   // Role management (Feature: roles): the catalog (+ per-viewer flags), the
   // viewer-relevant applications (admin sees pending; everyone sees their own),
   // and — for admins — the active grants. All refreshed with the snapshot.
@@ -142,14 +136,19 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
       setRoleGrants([]);
     }
   }, [client, isAdmin, viewerUser]);
+  // A monotonically-bumped key handed to ActivityPanel: every time the snapshot
+  // settles after a mutation (snap identity changes), bump it so the panel re-fetches
+  // its page 1 — keeping the timeline in sync with the live tree without the shell
+  // owning the activity fetch itself.
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   useEffect(() => {
     if (snap) {
       refreshCRs();
       refreshNotifications();
       refreshRoles();
-      refreshActivity();
+      setActivityRefreshKey((k) => k + 1);
     }
-  }, [refreshCRs, refreshNotifications, refreshRoles, refreshActivity, snap]);
+  }, [refreshCRs, refreshNotifications, refreshRoles, snap]);
   // Every role mutation funnels through dispatch then refreshes the role views
   // (and the snapshot, since a grant can change the viewer's ACL affordances).
   const roleOp = (action: string, params: Record<string, unknown>) => {
@@ -447,9 +446,19 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
 
   // Activity tab (change history). Always provided when the sheet has loaded — an
   // always-on slot keeps the governance panel reachable (the ActivityPanel renders
-  // its own empty state). Count = the loaded event count, surfaced as a subtle
-  // badge; it never drives the default-tab rule (Activity is history, not a queue).
-  const activitySlot = snap ? <ActivityPanel events={activity} /> : null;
+  // its own empty state). The panel self-fetches/pages/filters; refreshKey re-runs
+  // page 1 after a mutation, and onCount feeds the tab badge (count + hasMore).
+  const activitySlot = snap ? (
+    <ActivityPanel
+      client={client}
+      sheet={sheetName}
+      refreshKey={activityRefreshKey}
+      onCount={(n, more) => {
+        setActivityCount(n);
+        setActivityHasMore(more);
+      }}
+    />
+  ) : null;
 
   return (
     <main className="arbor-app">
@@ -634,7 +643,8 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               notificationCount={notifications.length}
               delegationCount={delegationCount}
               roleCount={roleCount}
-              activityCount={activity.length}
+              activityCount={activityCount}
+              activityHasMore={activityHasMore}
               changeRequests={crSlot}
               notifications={notificationSlot}
               delegations={delegationSlot}

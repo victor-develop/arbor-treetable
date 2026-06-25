@@ -26,6 +26,7 @@ Error contracts (api.md):
 
 from __future__ import annotations
 
+import base64
 from typing import Any, Optional
 
 import frappe
@@ -856,35 +857,107 @@ def _activity_summary(ev_type, actor_name, payload, repo, sheet, actor, label_co
     return f"{actor_name} {verb}"
 
 
+# --- activity-feed keyset cursor codec -------------------------------------
+# The feed paginates newest-first on (creation DESC, name DESC) — name is the
+# stable tiebreak for two events at the same creation timestamp. ``before`` is an
+# OPAQUE token: base64 of "creation_iso|name". The frontend treats it verbatim
+# (passes a prior response's ``next_cursor`` back to get the strictly-older page);
+# it never parses it. A malformed token raises ``ValueError`` (a bad cursor is a
+# client error, mirroring the explore cursor idiom).
+def _encode_activity_cursor(creation: Any, name: str) -> str:
+    raw = f"{creation}|{name}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def _decode_activity_cursor(cursor: Optional[str]) -> Optional[tuple[str, str]]:
+    if cursor is None or cursor == "":
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        creation, name = raw.split("|", 1)
+        return creation, name
+    except Exception as exc:  # noqa: BLE001 — normalise to a typed ValueError
+        raise ValueError(f"malformed cursor: {cursor!r}") from exc
+
+
 @frappe.whitelist()
-def list_activity(sheet, limit=50):
+def list_activity(sheet, limit=50, before=None, type=None, actor=None):
     """The sheet's activity / change-history feed (newest first) — a READ SHIM
     (like ``list_change_requests`` / ``list_notifications``), NOT a registry
     capability, so it stays off the parity/registry surface.
 
-    Returns one row per Tree Event on ``sheet`` (role/site-wide events have
-    ``sheet=NULL`` and never appear here). Each row carries its event id, type
-    (one of the 11 ``EventType`` values), actor + actor_type, ISO timestamp, the
-    linked Change Request (or null), the resolved node LABEL / column LABEL when
-    the viewer may see them, and a human one-liner ``summary``.
+    Returns ``{"events": [...], "next_cursor": str|None}``. Each event row carries
+    its event id, type (one of the 11 ``EventType`` values), actor + actor_type,
+    ISO timestamp, the linked Change Request (or null), the resolved node LABEL /
+    column LABEL when the viewer may see them, and a human one-liner ``summary``.
+    Role/site-wide events have ``sheet=NULL`` and never appear here.
+
+    Pagination — KEYSET on (creation DESC, name DESC tiebreak). ``before`` is an
+    OPAQUE cursor taken from a prior response's ``next_cursor``; passing it returns
+    the page of events STRICTLY OLDER than that boundary
+    (``creation < c OR (creation = c AND name < n)``). ``next_cursor`` is null when
+    no older events remain (so the UI hides "Load older"). We fetch ``limit + 1``
+    rows: if the extra row exists, ``next_cursor`` is built from the ``limit``-th
+    row's (creation, name) and only the first ``limit`` are returned.
+
+    Filters — optional ``type`` (one of the 11 ``EventType`` values) and ``actor``
+    (a User id), AND-combined with the sheet scope.
 
     Read-ACL: the feed is "what happened", never the data — it carries NO raw
     cell VALUES. A column the viewer cannot read (``arbor.core.acl.can_read_column``)
     is redacted: its name is dropped from both ``column`` and ``summary`` and the
     phrasing falls back to a generic "a cell" / "a column"."""
-    actor = _actor()
+    viewer = _actor()
     repo = _repo()
     label_col = next((c.name for c in repo.list_columns(sheet) if c.is_label), None)
 
-    rows = frappe.get_all(
-        "Tree Event",
-        filters={"sheet": sheet},
-        order_by="creation desc",
-        limit_page_length=frappe.utils.cint(limit) if limit is not None else 50,
-        fields=["name", "type", "actor", "actor_type", "change_request", "payload", "creation"],
+    limit = frappe.utils.cint(limit) if limit is not None else 50
+    boundary = _decode_activity_cursor(before)
+
+    # Keyset WHERE: sheet scope + optional type/actor + the strictly-older boundary.
+    # frappe.get_all cannot express the (creation < c OR (creation = c AND name < n))
+    # OR cleanly, so build a parameterized frappe.db.sql. Newest-first ordering is
+    # (creation DESC, name DESC); we fetch limit+1 to decide next_cursor.
+    conditions = ["sheet = %(sheet)s"]
+    values: dict[str, Any] = {"sheet": sheet, "lim": limit + 1}
+    if type:
+        conditions.append("type = %(type)s")
+        values["type"] = type
+    if actor:
+        conditions.append("actor = %(actor)s")
+        values["actor"] = actor
+    if boundary is not None:
+        c_creation, c_name = boundary
+        conditions.append(
+            "(creation < %(c_creation)s OR (creation = %(c_creation)s AND name < %(c_name)s))"
+        )
+        values["c_creation"] = c_creation
+        values["c_name"] = c_name
+
+    rows = frappe.db.sql(
+        """
+        SELECT name, type, actor, actor_type, change_request, payload, creation
+        FROM `tabTree Event`
+        WHERE {where}
+        ORDER BY creation DESC, name DESC
+        LIMIT %(lim)s
+        """.format(where=" AND ".join(conditions)),
+        values,
+        as_dict=True,
     )
+
+    # limit+1 sentinel -> there is an older page; the boundary for it is the
+    # limit-th row (the last one we actually return).
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = (
+        _encode_activity_cursor(page[-1].creation, page[-1].name)
+        if has_more and page
+        else None
+    )
+
     out = []
-    for r in rows:
+    for r in page:
         payload = r.payload
         if isinstance(payload, str):
             payload = frappe.parse_json(payload) if payload else {}
@@ -893,7 +966,7 @@ def list_activity(sheet, limit=50):
         node_id = payload.get("node")
         node_label = _node_label(repo, sheet, label_col, node_id) if node_id else None
         col_label, col_readable = _readable_column_label(
-            repo, sheet, actor, payload.get("column")
+            repo, sheet, viewer, payload.get("column")
         )
         out.append(
             {
@@ -906,11 +979,11 @@ def list_activity(sheet, limit=50):
                 "node": node_label,
                 "column": col_label if col_readable else None,
                 "summary": _activity_summary(
-                    r.type, r.actor, payload, repo, sheet, actor, label_col
+                    r.type, r.actor, payload, repo, sheet, viewer, label_col
                 ),
             }
         )
-    return out
+    return {"events": out, "next_cursor": next_cursor}
 
 
 @frappe.whitelist()
