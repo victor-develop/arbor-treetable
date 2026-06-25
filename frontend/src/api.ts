@@ -253,6 +253,15 @@ export type ActivityEvent = {
   summary: string;
 };
 
+// The paged result of arbor.list_activity (NEW object shape; was a bare list).
+// `events` is the newest-first page; `next_cursor` is an OPAQUE keyset token to
+// pass back as `before` for the page of strictly-OLDER events, or null when no
+// older events remain (so the UI hides "Load older").
+export type ActivityPage = {
+  events: ActivityEvent[];
+  next_cursor: string | null;
+};
+
 // A sheet summary row from arbor.list_sheets — the home-page Sheet List. Sorted
 // (client-side) by node_count desc so real sheets float above the many orphan
 // empty test sheets; the count is shown per row.
@@ -273,9 +282,14 @@ export type ArborClient = {
   listChangeRequests?: (sheet: string) => Promise<ChangeRequestView[]>;
   // The viewer's in-app notifications for the sheet. Optional (mocked clients).
   listNotifications?: (sheet: string) => Promise<NotificationView[]>;
-  // The sheet's Activity / change-history feed (newest-first). Optional so
-  // mocked clients can omit it.
-  listActivity?: (sheet: string, limit?: number) => Promise<ActivityEvent[]>;
+  // The sheet's Activity / change-history feed (newest-first), paged via keyset.
+  // Returns { events, next_cursor }; pass next_cursor back as `before` for the
+  // older page. Optional `type`/`actor` filters AND-combine with the sheet scope.
+  // Optional so mocked clients can omit it.
+  listActivity?: (
+    sheet: string,
+    opts?: { limit?: number; before?: string; type?: string; actor?: string },
+  ) => Promise<ActivityPage>;
   // Role management reads (Feature: roles). Optional so mocked clients can omit.
   listRoles?: () => Promise<RoleView[]>;
   listRoleGrants?: (role?: string, grantee?: string) => Promise<RoleGrantView[]>;
@@ -309,12 +323,16 @@ export const api: ArborClient = {
     return unwrap<NotificationView[]>(await res.json());
   },
 
-  listActivity: async (sheet, limit = 50) => {
+  listActivity: async (sheet, opts) => {
     const headers = await authHeaderProvider();
-    const qs = new URLSearchParams({ sheet, limit: String(limit) }).toString();
-    const res = await fetchImpl(`/api/method/arbor.list_activity?${qs}`, { headers });
+    const qs = new URLSearchParams({ sheet, limit: String(opts?.limit ?? 50) });
+    // Opaque keyset cursor for the older page; filters AND-combine with the scope.
+    if (opts?.before) qs.set("before", opts.before);
+    if (opts?.type) qs.set("type", opts.type);
+    if (opts?.actor) qs.set("actor", opts.actor);
+    const res = await fetchImpl(`/api/method/arbor.list_activity?${qs.toString()}`, { headers });
     if (!res.ok) throw new Error(`list_activity failed: ${res.status}`);
-    return unwrap<ActivityEvent[]>(await res.json());
+    return unwrap<ActivityPage>(await res.json());
   },
 
   listRoles: async () => {

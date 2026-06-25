@@ -13,7 +13,13 @@ parity/registry surface and those suites stay green.
 
 Asserted invariants (the CONTRACT):
 
-* Newest-first ordering (creation desc).
+* Return shape: ``{"events": [...], "next_cursor": str|None}`` (was a bare list).
+* Newest-first ordering (creation desc, name desc tiebreak).
+* Keyset pagination: paging with a small ``limit`` via the opaque ``before``
+  cursor walks the whole stream with NO duplicates and NO gaps; ``next_cursor``
+  goes null at the end.
+* Filters: ``type`` returns only that event type; ``actor`` returns only that
+  actor's events (both AND-combined with the sheet scope).
 * Each row's ``summary`` resolves the node LABEL and (readable) column LABEL —
   e.g. "<user> updated the budget of Task X".
 * Read-ACL redaction: an event referencing a column the viewer CANNOT read
@@ -72,7 +78,10 @@ def test_activity_is_newest_first_with_resolved_labels(fx):
     api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=1111)
     api.update_cell(sheet=fx["sheet"], node=_N(fx, "Y"), column=_C(fx, "budget"), value=2222)
 
-    feed = api.list_activity(sheet=fx["sheet"])
+    resp = api.list_activity(sheet=fx["sheet"])
+    # New shape: an object {events, next_cursor}, not a bare list.
+    assert set(resp) == {"events", "next_cursor"}
+    feed = resp["events"]
     assert len(feed) >= 2
 
     # Newest-first: the Y update precedes the X update in the feed.
@@ -100,7 +109,7 @@ def test_node_created_summary_names_the_node_label(fx):
     h.login_as("A")
     api.add_node(sheet=fx["sheet"], parent=_N(fx, "P1"), values={"name": "Task Q"})
 
-    feed = api.list_activity(sheet=fx["sheet"])
+    feed = api.list_activity(sheet=fx["sheet"])["events"]
     created = [r for r in feed if r["type"] == "NODE_CREATED"]
     assert created, "expected a NODE_CREATED event"
     newest = created[0]
@@ -122,7 +131,7 @@ def test_unreadable_column_is_redacted_in_feed(fx):
 
     # Viewer E cannot read budget (not owner, not editor, owner-only).
     h.login_as("E")
-    feed = api.list_activity(sheet=fx["sheet"])
+    feed = api.list_activity(sheet=fx["sheet"])["events"]
     upd = next(r for r in feed if r["type"] == "NODE_VALUE_UPDATED")
     assert upd["column"] is None
     assert "budget" not in upd["summary"]
@@ -133,16 +142,105 @@ def test_unreadable_column_is_redacted_in_feed(fx):
 
     # Owner C still sees the real column label.
     h.login_as("C")
-    feed_c = api.list_activity(sheet=fx["sheet"])
+    feed_c = api.list_activity(sheet=fx["sheet"])["events"]
     upd_c = next(r for r in feed_c if r["type"] == "NODE_VALUE_UPDATED")
     assert upd_c["column"] == "budget"
     assert upd_c["summary"] == f"{h.user('C')} updated the budget of Task X"
 
 
 def test_activity_respects_limit(fx):
-    """The feed honours ``limit`` (newest ``limit`` rows)."""
+    """The feed honours ``limit`` (newest ``limit`` rows) and signals more remain."""
     h.login_as("C")
     for v in range(3):
         api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=v)
-    feed = api.list_activity(sheet=fx["sheet"], limit=1)
-    assert len(feed) == 1
+    resp = api.list_activity(sheet=fx["sheet"], limit=1)
+    assert len(resp["events"]) == 1
+    # More events remain (>1 total), so the UI gets a cursor to load older.
+    assert resp["next_cursor"] is not None
+
+
+# ===========================================================================
+# Keyset pagination — no dupes, no gaps, next_cursor goes null at the end
+# ===========================================================================
+def test_keyset_pagination_walks_whole_stream_no_dupes_no_gaps(fx):
+    """Paging with a small ``limit`` via the opaque ``before`` cursor reproduces
+    the full single-shot feed EXACTLY, in order, with no duplicate or skipped
+    events, and ``next_cursor`` is null on the final page."""
+    h.login_as("C")
+    # Generate a stream of events on the sheet (cell updates -> NODE_VALUE_UPDATED).
+    for v in range(7):
+        api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=v)
+
+    # Ground truth: one big page (limit comfortably larger than the stream).
+    full = api.list_activity(sheet=fx["sheet"], limit=1000)
+    assert full["next_cursor"] is None
+    all_ids = [r["event_id"] for r in full["events"]]
+    assert len(all_ids) >= 8  # 7 updates + the seed's own events
+
+    # Page through with limit=2, following next_cursor until it goes null.
+    collected = []
+    cursor = None
+    pages = 0
+    while True:
+        resp = api.list_activity(sheet=fx["sheet"], limit=2, before=cursor)
+        page = resp["events"]
+        assert len(page) <= 2
+        collected.extend(r["event_id"] for r in page)
+        pages += 1
+        cursor = resp["next_cursor"]
+        if cursor is None:
+            break
+        assert page, "a non-final page must be non-empty"
+        assert pages < 100, "pagination did not terminate"
+
+    # No duplicates across pages.
+    assert len(collected) == len(set(collected))
+    # No gaps + identical order: the paged walk == the single-shot feed.
+    assert collected == all_ids
+
+
+def test_type_filter_returns_only_that_type(fx):
+    """``type`` narrows the feed to that EventType only (AND the sheet scope)."""
+    h.login_as("A")
+    # A node creation (NODE_CREATED) + a cell update (NODE_VALUE_UPDATED).
+    api.add_node(sheet=fx["sheet"], parent=_N(fx, "P1"), values={"name": "Task Q"})
+    h.login_as("C")
+    api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=42)
+
+    resp = api.list_activity(sheet=fx["sheet"], type="NODE_VALUE_UPDATED")
+    assert resp["events"], "expected at least one NODE_VALUE_UPDATED"
+    assert all(r["type"] == "NODE_VALUE_UPDATED" for r in resp["events"])
+    # The NODE_CREATED event is excluded by the type filter.
+    assert all(r["type"] != "NODE_CREATED" for r in resp["events"])
+
+
+def test_actor_filter_returns_only_that_actor(fx):
+    """``actor`` narrows the feed to that User's events only (AND the sheet scope)."""
+    # Two distinct actors produce events on the sheet.
+    h.login_as("A")
+    api.add_node(sheet=fx["sheet"], parent=_N(fx, "P1"), values={"name": "Task Q"})
+    h.login_as("C")
+    api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=42)
+
+    resp = api.list_activity(sheet=fx["sheet"], actor=h.user("C"))
+    assert resp["events"], "expected at least one event by C"
+    assert all(r["actor"] == h.user("C") for r in resp["events"])
+    # A's events are excluded.
+    assert all(r["actor"] != h.user("A") for r in resp["events"])
+
+
+def test_type_and_actor_filters_are_and_combined(fx):
+    """``type`` + ``actor`` together restrict to events matching BOTH."""
+    h.login_as("A")
+    api.add_node(sheet=fx["sheet"], parent=_N(fx, "P1"), values={"name": "Task Q"})
+    h.login_as("C")
+    api.update_cell(sheet=fx["sheet"], node=_N(fx, "X"), column=_C(fx, "budget"), value=42)
+
+    resp = api.list_activity(
+        sheet=fx["sheet"], type="NODE_VALUE_UPDATED", actor=h.user("C")
+    )
+    assert resp["events"]
+    assert all(
+        r["type"] == "NODE_VALUE_UPDATED" and r["actor"] == h.user("C")
+        for r in resp["events"]
+    )

@@ -26,6 +26,7 @@ export function GovernancePanel({
   delegationCount,
   roleCount,
   activityCount,
+  activityHasMore = false,
   changeRequests,
   notifications,
   delegations,
@@ -42,6 +43,9 @@ export function GovernancePanel({
   // metadata only — Activity is history, not a queue, so it never drives the
   // default-tab rule nor keeps a "pending" state alive (see allZero below).
   activityCount: number;
+  // True when older history events remain unloaded — the Activity badge then reads
+  // "N+" so the count is honestly a lower bound, not a total.
+  activityHasMore?: boolean;
   // already-built content nodes; only the active one is mounted
   changeRequests: ReactNode;
   notifications: ReactNode;
@@ -62,7 +66,14 @@ export function GovernancePanel({
         { key: "notifications" as const, label: "Notifications", count: notificationCount, slot: notifications },
         { key: "delegations" as const, label: "Delegations", count: delegationCount, slot: delegations },
         { key: "roles" as const, label: "Roles", count: roleCount, slot: roles },
-        { key: "activity" as const, label: "Activity", count: activityCount, slot: activity },
+        {
+          key: "activity" as const,
+          label: "Activity",
+          count: activityCount,
+          // Honest lower-bound badge: "N+" while older history remains unloaded.
+          badge: activityHasMore ? `${activityCount}+` : String(activityCount),
+          slot: activity,
+        },
       ].filter((t) => t.slot != null),
     [
       changeRequestCount,
@@ -70,6 +81,7 @@ export function GovernancePanel({
       delegationCount,
       roleCount,
       activityCount,
+      activityHasMore,
       changeRequests,
       notifications,
       delegations,
@@ -139,7 +151,9 @@ export function GovernancePanel({
             {t.label}{" "}
             {/* Zero-count badges de-emphasize (muted) so attention routes to tabs
                 with work; non-zero badges stay at the standard weight. */}
-            <span className={`arbor-count${t.count === 0 ? " is-zero" : ""}`}>{t.count}</span>
+            <span className={`arbor-count${t.count === 0 ? " is-zero" : ""}`}>
+              {"badge" in t ? t.badge : t.count}
+            </span>
           </button>
         ))}
       </div>

@@ -2398,3 +2398,57 @@ body {
   font-size: 13px;
   color: var(--ink-subtle);
 }
+
+/* Dense filter row above the feed: a Type + Actor <select> pair. Sits flush atop
+   the timeline, hairline-separated, so it reads as a quiet toolbar — not a form. */
+.arbor-activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 0 0 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-activity-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+.arbor-activity-filter-label {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+.arbor-activity-filter select {
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-sm);
+  background: var(--surface-1, #fff);
+  color: var(--ink-2);
+  max-width: 160px;
+}
+/* "Load older" — a full-width, quiet ghost button docked under the feed. */
+.arbor-activity-load-older {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.arbor-activity-load-older:hover:not(:disabled) {
+  background: var(--accent-tint);
+}
+.arbor-activity-load-older:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
