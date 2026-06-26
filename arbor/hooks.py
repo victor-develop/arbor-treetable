@@ -87,6 +87,7 @@ override_whitelisted_methods = {
     "arbor.delete_column": "arbor.arbor.api.delete_column",
     "arbor.suggest_change": "arbor.arbor.api.suggest_change",
     "arbor.suggest_changes": "arbor.arbor.api.suggest_changes",
+    "arbor.create_sheet": "arbor.arbor.api.create_sheet",
     "arbor.list_sheets": "arbor.arbor.api.list_sheets",
     "arbor.list_change_requests": "arbor.arbor.api.list_change_requests",
     "arbor.list_notifications": "arbor.arbor.api.list_notifications",

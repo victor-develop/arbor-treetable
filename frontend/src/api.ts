@@ -277,6 +277,12 @@ export type ArborClient = {
   // The catalog of sheets (name + owner + node_count) for the home page.
   // Optional so test/mocked clients need not implement it.
   listSheets?: () => Promise<SheetSummary[]>;
+  // Create a new sheet (a standalone whitelisted mutation, NOT a registry
+  // capability — a sheet has no per-sheet ACL yet). Any authenticated non-Guest
+  // user may create one; the creator becomes its structural_owner. Resolves to
+  // the created sheet's name; rejects on a duplicate (409). Optional so mocked
+  // clients can omit it.
+  createSheet?: (name: string, title?: string) => Promise<{ sheet: string }>;
   // The sheet's Change Requests (default proposed) for the review inbox.
   // Optional so test/mocked clients need not implement it.
   listChangeRequests?: (sheet: string) => Promise<ChangeRequestView[]>;
@@ -368,6 +374,13 @@ export const api: ArborClient = {
     if (!res.ok) throw new Error(`list_sheets failed: ${res.status}`);
     return unwrap<SheetSummary[]>(await res.json());
   },
+
+  // Standalone whitelisted mutation (NOT execute_action): the server creates the
+  // Tree Sheet + a default LABEL column and makes the caller its structural_owner.
+  // A duplicate name yields a 409/ValidationError → post() throws, which the
+  // SheetList form catches to show a graceful message.
+  createSheet: (name, title) =>
+    post<{ sheet: string }>("arbor.create_sheet", { name, title }),
 
   getSheetSnapshot: async (sheet) => {
     const headers = await authHeaderProvider();

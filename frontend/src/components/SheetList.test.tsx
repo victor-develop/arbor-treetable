@@ -15,12 +15,16 @@ function sheet(over: Partial<SheetSummary>): SheetSummary {
 }
 
 // A minimal client exposing only listSheets (the surface SheetList consumes).
-function clientWith(sheets: SheetSummary[]): ArborClient {
+function clientWith(
+  sheets: SheetSummary[],
+  createSheet?: ArborClient["createSheet"],
+): ArborClient {
   return {
     executeAction: vi.fn(),
     getSheetSnapshot: vi.fn(),
     agentChat: vi.fn(),
     listSheets: vi.fn(async () => sheets),
+    createSheet,
   } as unknown as ArborClient;
 }
 
@@ -66,5 +70,35 @@ describe("SheetList", () => {
     const client = clientWith([]);
     render(<SheetList client={client} />);
     await waitFor(() => expect(screen.getByTestId("sheet-list-empty")).toBeInTheDocument());
+  });
+
+  it("New-sheet form calls createSheet(name) and navigates to ?sheet=<name> (PART D)", async () => {
+    const createSheet = vi.fn(async (name: string) => ({ sheet: name }));
+    const client = clientWith([], createSheet);
+    const onNavigate = vi.fn();
+    render(<SheetList client={client} onNavigate={onNavigate} />);
+    await waitFor(() => expect(screen.getByTestId("sheet-list-empty")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId("new-sheet-name"), { target: { value: "Roadmap" } });
+    fireEvent.click(screen.getByTestId("new-sheet-create"));
+
+    await waitFor(() => expect(createSheet).toHaveBeenCalledWith("Roadmap"));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("Roadmap"));
+  });
+
+  it("surfaces a duplicate-name error gracefully without navigating (PART D)", async () => {
+    const createSheet = vi.fn(async () => {
+      throw new Error("create_sheet failed: 409");
+    });
+    const client = clientWith([], createSheet);
+    const onNavigate = vi.fn();
+    render(<SheetList client={client} onNavigate={onNavigate} />);
+    await waitFor(() => expect(screen.getByTestId("sheet-list-empty")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId("new-sheet-name"), { target: { value: "Dup" } });
+    fireEvent.click(screen.getByTestId("new-sheet-create"));
+
+    await waitFor(() => expect(screen.getByTestId("new-sheet-error")).toBeInTheDocument());
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 });

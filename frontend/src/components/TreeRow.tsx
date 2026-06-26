@@ -7,7 +7,7 @@ import { useState } from "react";
 import type { Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
-import { TrashIcon } from "./icons";
+import { PlusIcon, TrashIcon } from "./icons";
 
 export function TreeRow({
   row,
@@ -22,6 +22,7 @@ export function TreeRow({
   onCommitCell,
   onDragStart,
   onDrop,
+  onAddChild,
   onDelete,
 }: {
   row: Row;
@@ -36,6 +37,10 @@ export function TreeRow({
   onCommitCell: (node: SnapshotNode, column: SnapshotColumn, value: unknown) => void;
   onDragStart: (node: SnapshotNode) => void;
   onDrop: (target: SnapshotNode, position: DropPosition) => void;
+  // Add a child under this node. Optional; rendered for EVERYONE when supplied
+  // (a non-owner click files a CR, same as "Suggest column") — NOT gated on
+  // can_change_structure, unlike delete.
+  onAddChild?: (node: SnapshotNode) => void;
   // Delete this node (two-step confirm). Optional; rendered only when supplied
   // AND the viewer holds structural authority over the node.
   onDelete?: (node: SnapshotNode) => void;
@@ -138,9 +143,22 @@ export function TreeRow({
             </td>
           );
         })}
-      {onDelete && (
+      {(onAddChild || onDelete) && (
         <td className="arbor-actions-cell">
-          {node.can_change_structure &&
+          {onAddChild && (
+            <button
+              type="button"
+              className="arbor-row-add"
+              data-testid={`add-child-${node.name}`}
+              title="Add child"
+              aria-label={`Add child under ${labelText}`}
+              onClick={() => onAddChild(node)}
+            >
+              <PlusIcon size={14} />
+            </button>
+          )}
+          {onDelete &&
+            node.can_change_structure &&
             (!confirmDelete ? (
               <button
                 type="button"
