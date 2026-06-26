@@ -20,7 +20,7 @@ import {
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
-import { RolesAdminPanel } from "./components/RolesAdminPanel";
+import { RolesModal } from "./components/RolesModal";
 import { RequestRoleControl } from "./components/RequestRoleControl";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { useSheet, cellKey } from "./hooks/useSheet";
@@ -275,6 +275,9 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
   // table owns the screen by default (desktop always shows the rail).
   const [agentOpen, setAgentOpen] = useState(false);
+  // Global Roles admin modal (admin-only, header-launched). Open/close lives here
+  // so the header button toggles it and the modal renders only when open.
+  const [rolesOpen, setRolesOpen] = useState(false);
   const columnOp = (action: string, params: Record<string, unknown>) => {
     // updateColumn/deleteColumn/grantColumn funnel through dispatch like every
     // other mutation. An executed op refetches (label/width/ownership/removal
@@ -435,27 +438,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
 
   const delegationCount = snap?.viewer?.branch_grants?.length ?? 0;
 
-  // Roles tab (Feature: roles). Provided (non-null) only for admins or a user who
-  // has applications — so a plain user with nothing pending gets no tab (they use
-  // the header "request a role" control). Count = pending applications (+ grants
-  // for admins) so the badge reflects actionable role work.
-  const rolesSlot =
-    snap && (isAdmin || roleApplications.length > 0) ? (
-      <RolesAdminPanel
-        isAdmin={isAdmin}
-        roles={roles}
-        grants={roleGrants}
-        applications={roleApplications}
-        onAssign={(p) => roleOp("assignRole", p)}
-        onRevoke={(p) => roleOp("revokeRole", p)}
-        onApprove={(p) => roleOp("approveRoleApplication", p)}
-        onReject={(p) => roleOp("rejectRoleApplication", p)}
-        onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
-      />
-    ) : null;
-  const roleCount = isAdmin
-    ? roleApplications.filter((a) => a.status === "proposed").length + roleGrants.length
-    : roleApplications.filter((a) => a.status === "proposed").length;
+  // Global Roles admin (IA fix). Role data is SITE-WIDE — listRoles /
+  // listRoleApplications / listRoleGrants take no sheet — so role administration is
+  // NOT a per-sheet Governance tab anymore: an admin-only header button opens the
+  // RolesModal (assign/revoke + applications inbox). The badge counts pending
+  // applications so the admin sees actionable role work at a glance.
+  const pendingRoleApplications = roleApplications.filter((a) => a.status === "proposed").length;
 
   // Activity tab (change history). Always provided when the sheet has loaded — an
   // always-on slot keeps the governance panel reachable (the ActivityPanel renders
@@ -508,6 +496,24 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 roles), available to every user. Renders nothing when there is
                 nothing to request and no roles held. */}
             <RequestRoleControl roles={roles} onApply={(p) => roleOp("applyForRole", p)} />
+            {/* Global Roles admin (admin-only). Role data is site-wide, so this
+                opens a MODAL rather than living in the per-sheet Governance panel.
+                Badge = pending applications so the admin sees actionable work. */}
+            {isAdmin && (
+              <button
+                type="button"
+                className="arbor-roles-admin-btn"
+                data-testid="roles-admin-button"
+                aria-haspopup="dialog"
+                aria-expanded={rolesOpen}
+                onClick={() => setRolesOpen(true)}
+              >
+                Roles
+                {pendingRoleApplications > 0 && (
+                  <span className="arbor-count">{pendingRoleApplications}</span>
+                )}
+              </button>
+            )}
             {/* ImportExport moves out of the main stack into a collapsible "Data"
                 disclosure here — reclaims the prime post-table slot for governance.
                 The ImportExport API is unchanged; only its mount point moves. */}
@@ -668,13 +674,11 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               changeRequestCount={crs.length}
               notificationCount={notifications.length}
               delegationCount={delegationCount}
-              roleCount={roleCount}
               activityCount={activityCount}
               activityHasMore={activityHasMore}
               changeRequests={crSlot}
               notifications={notificationSlot}
               delegations={delegationSlot}
-              roles={rolesSlot}
               activity={activitySlot}
             />
           </section>
@@ -697,6 +701,23 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
           >
             {agentOpen ? "Close" : "Ask agent"}
           </button>
+          {/* Global Roles admin modal — admin-only, header-launched. Mounted only
+              when open; reuses the .arbor-modal shell (like ColumnSettings). Every
+              write funnels through roleOp (refresh roles + snapshot). */}
+          {isAdmin && rolesOpen && (
+            <RolesModal
+              isAdmin={isAdmin}
+              roles={roles}
+              grants={roleGrants}
+              applications={roleApplications}
+              onClose={() => setRolesOpen(false)}
+              onAssign={(p) => roleOp("assignRole", p)}
+              onRevoke={(p) => roleOp("revokeRole", p)}
+              onApprove={(p) => roleOp("approveRoleApplication", p)}
+              onReject={(p) => roleOp("rejectRoleApplication", p)}
+              onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+            />
+          )}
         </div>
       ) : (
         <p data-testid="empty-shell">Loading…</p>

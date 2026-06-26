@@ -25,19 +25,16 @@ const changeRequestsSlot = <div data-testid="cr-inbox">CR list</div>;
 const notificationsSlot = <div data-testid="notification-inbox">Notifications list</div>;
 const delegationsSlot = <div data-testid="delegation-control">Delegation control</div>;
 
-const rolesSlot = <div data-testid="roles-panel">Roles panel</div>;
-
 const activitySlot = <div data-testid="activity-panel">Activity timeline</div>;
 
-// Render helper mirroring App's call shape: counts + content slots. The Roles tab
-// is opt-in (roles slot null by default) so the original three-tab specs hold.
-// The Activity tab is likewise opt-in (activity slot null by default).
+// Render helper mirroring App's call shape: counts + content slots. Roles are no
+// longer a tab here — role administration is global (a header-launched modal), so
+// this panel hosts only the sheet-scoped surfaces. The Activity tab is opt-in
+// (activity slot null by default).
 function renderPanel(counts: {
   cr: number;
   notifications: number;
   delegations: number;
-  roles?: number;
-  rolesSlot?: React.ReactNode;
   activity?: number;
   activitySlot?: React.ReactNode;
 }) {
@@ -46,12 +43,10 @@ function renderPanel(counts: {
       changeRequestCount={counts.cr}
       notificationCount={counts.notifications}
       delegationCount={counts.delegations}
-      roleCount={counts.roles ?? 0}
       activityCount={counts.activity ?? 0}
       changeRequests={changeRequestsSlot}
       notifications={notificationsSlot}
       delegations={delegationsSlot}
-      roles={counts.rolesSlot ?? null}
       activity={counts.activitySlot ?? null}
     />,
   );
@@ -129,29 +124,20 @@ describe("GovernancePanel — all-zero collapse", () => {
   });
 });
 
-describe("GovernancePanel — Roles tab (Feature: roles)", () => {
-  it("shows a Roles tab only when a roles slot is provided", () => {
-    renderPanel({ cr: 1, notifications: 0, delegations: 0 });
+describe("GovernancePanel — no Roles tab (roles are global, not per-sheet)", () => {
+  it("never renders a Roles tab — only the four sheet-scoped surfaces", () => {
+    // Role data is site-wide (listRoles/listRoleApplications/listRoleGrants take
+    // no sheet), so role administration moved out of this per-sheet panel into a
+    // global header-launched modal. The panel must expose no Roles tab.
+    renderPanel({ cr: 2, notifications: 1, delegations: 1, activity: 3, activitySlot });
     expect(screen.queryByRole("tab", { name: /roles/i })).toBeNull();
 
-    renderPanel({ cr: 1, notifications: 0, delegations: 0, roles: 2, rolesSlot });
-    expect(screen.getByRole("tab", { name: /roles/i })).toBeInTheDocument();
-  });
-
-  it("keeps the panel open (no collapse) for an admin with a roles slot but zero counts", () => {
-    renderPanel({ cr: 0, notifications: 0, delegations: 0, roles: 0, rolesSlot });
-    // Not collapsed: the quiet line is absent and the Roles tab is reachable
-    // (clicking it mounts the roles panel even at count 0).
-    expect(screen.queryByText(/no pending governance/i)).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: /roles/i }));
-    expect(screen.getByTestId("roles-panel")).toBeInTheDocument();
-  });
-
-  it("clicking Roles mounts the roles panel only", () => {
-    renderPanel({ cr: 2, notifications: 1, delegations: 1, roles: 1, rolesSlot });
-    fireEvent.click(screen.getByRole("tab", { name: /roles/i }));
-    expect(screen.getByTestId("roles-panel")).toBeInTheDocument();
-    expect(screen.queryByTestId("cr-inbox")).toBeNull();
+    const tabNames = screen.getAllByRole("tab").map((t) => t.textContent ?? "");
+    expect(tabNames).toHaveLength(4);
+    expect(tabNames.join(" ")).toMatch(/change requests/i);
+    expect(tabNames.join(" ")).toMatch(/notifications/i);
+    expect(tabNames.join(" ")).toMatch(/delegations/i);
+    expect(tabNames.join(" ")).toMatch(/activity/i);
   });
 });
 
@@ -169,8 +155,6 @@ describe("GovernancePanel — Activity tab (change history)", () => {
       cr: 1,
       notifications: 0,
       delegations: 0,
-      roles: 0,
-      rolesSlot,
       activity: 3,
       activitySlot,
     });
@@ -225,11 +209,9 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         changeRequestCount={0}
         notificationCount={0}
         delegationCount={1}
-        roleCount={0}
         changeRequests={changeRequestsSlot}
         notifications={notificationsSlot}
         delegations={delegationsSlot}
-        roles={null}
         activity={null}
         activityCount={0}
       />,
@@ -245,11 +227,9 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         changeRequestCount={6}
         notificationCount={0}
         delegationCount={1}
-        roleCount={0}
         changeRequests={changeRequestsSlot}
         notifications={notificationsSlot}
         delegations={delegationsSlot}
-        roles={null}
         activity={null}
         activityCount={0}
       />,
@@ -269,11 +249,9 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         changeRequestCount={0}
         notificationCount={0}
         delegationCount={1}
-        roleCount={0}
         changeRequests={changeRequestsSlot}
         notifications={notificationsSlot}
         delegations={delegationsSlot}
-        roles={null}
         activity={null}
         activityCount={0}
       />,
@@ -289,11 +267,9 @@ describe("GovernancePanel — active tab follows defaultKey until the user picks
         changeRequestCount={6}
         notificationCount={0}
         delegationCount={1}
-        roleCount={0}
         changeRequests={changeRequestsSlot}
         notifications={notificationsSlot}
         delegations={delegationsSlot}
-        roles={null}
         activity={null}
         activityCount={0}
       />,

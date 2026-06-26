@@ -17,28 +17,22 @@ export type GovernanceTabKey =
   | "changeRequests"
   | "notifications"
   | "delegations"
-  | "roles"
   | "activity";
 
 export function GovernancePanel({
   changeRequestCount,
   notificationCount,
   delegationCount,
-  roleCount,
   activityCount,
   activityHasMore = false,
   changeRequests,
   notifications,
   delegations,
-  roles,
   activity,
 }: {
   changeRequestCount: number;
   notificationCount: number;
   delegationCount: number;
-  // Count badge for the Roles tab: pending applications the viewer can act on
-  // (admins) + the viewer's own open applications. 0 when there is no role work.
-  roleCount: number;
   // Count badge for the Activity tab: the number of loaded history events. Subtle
   // metadata only — Activity is history, not a queue, so it never drives the
   // default-tab rule nor keeps a "pending" state alive (see allZero below).
@@ -50,9 +44,6 @@ export function GovernancePanel({
   changeRequests: ReactNode;
   notifications: ReactNode;
   delegations: ReactNode;
-  // Roles tab body: admin assign/revoke + applications inbox (Feature: roles).
-  // null when there is nothing to show (no admin panel and no applications).
-  roles: ReactNode;
   // Activity tab body: the change-history timeline. Always provided by the host
   // (an always-mounted slot keeps the panel reachable), or null to hide the tab.
   activity: ReactNode;
@@ -65,7 +56,6 @@ export function GovernancePanel({
         { key: "changeRequests" as const, label: "Change Requests", count: changeRequestCount, slot: changeRequests },
         { key: "notifications" as const, label: "Notifications", count: notificationCount, slot: notifications },
         { key: "delegations" as const, label: "Delegations", count: delegationCount, slot: delegations },
-        { key: "roles" as const, label: "Roles", count: roleCount, slot: roles },
         {
           key: "activity" as const,
           label: "Activity",
@@ -79,13 +69,11 @@ export function GovernancePanel({
       changeRequestCount,
       notificationCount,
       delegationCount,
-      roleCount,
       activityCount,
       activityHasMore,
       changeRequests,
       notifications,
       delegations,
-      roles,
       activity,
     ],
   );
@@ -111,16 +99,14 @@ export function GovernancePanel({
   }, [defaultKey]);
 
   // Collapse to the quiet line only when there is genuinely nothing to act on AND
-  // no always-on slot to reach. A provided roles slot (admin panel, or a user with
-  // applications) keeps the panel open even at count 0; likewise a provided
-  // activity slot keeps the panel reachable so the change history is always one
-  // click away. Activity does NOT add to any count — it is history, not a queue —
-  // so it never forces a phantom "pending" state, it only blocks the collapse.
+  // no always-on slot to reach. A provided activity slot keeps the panel reachable
+  // so the change history is always one click away. Activity does NOT add to any
+  // count — it is history, not a queue — so it never forces a phantom "pending"
+  // state, it only blocks the collapse.
   const allZero =
     changeRequestCount === 0 &&
     notificationCount === 0 &&
     delegationCount === 0 &&
-    roles == null &&
     activity == null;
   const activeTab = tabs.find((t) => t.key === active) ?? tabs[0];
 
