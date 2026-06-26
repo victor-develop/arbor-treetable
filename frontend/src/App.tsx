@@ -272,6 +272,16 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // Row density for long-text cells (line-clamp): compact/comfortable/expand —
   // the pro "row height" control. Drives data-density on the tree card.
   const [density, setDensity] = useState<"compact" | "comfortable" | "expand">("comfortable");
+  // Inline label edit (the per-row edit-pencil): which node's label cell to open
+  // and a monotonic signal bumped on each click so even re-clicking the SAME row
+  // re-opens its editor. TreeTable hands the signal to the matching row's label
+  // Cell, which enters edit mode + focuses.
+  const [editingNode, setEditingNode] = useState<string | null>(null);
+  const [editSignal, setEditSignal] = useState(0);
+  const startEditNode = useCallback((node: SnapshotNode) => {
+    setEditingNode(node.name);
+    setEditSignal((s) => s + 1);
+  }, []);
   // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
   // table owns the screen by default (desktop always shows the rail).
   const [agentOpen, setAgentOpen] = useState(false);
@@ -629,6 +639,9 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 onDeleteNode={del}
                 onAddChild={(n) => addNode(n.name)}
                 onAddSibling={(n) => addNode(n.parent ?? null)}
+                onEdit={startEditNode}
+                editingNode={editingNode}
+                editSignal={editSignal}
                 onAddNode={() => addNode(null)}
               />
             </div>

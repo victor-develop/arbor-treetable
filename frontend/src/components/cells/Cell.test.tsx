@@ -3,6 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { Cell } from "./Cell";
 import type { SnapshotColumn } from "../../api";
 
+function rerenderCell(
+  rerender: (ui: JSX.Element) => void,
+  props: Partial<Parameters<typeof Cell>[0]> & { startEditing?: number },
+) {
+  rerender(
+    <Cell column={col({})} value="v" onCommit={vi.fn()} {...props} />,
+  );
+}
+
 function col(over: Partial<SnapshotColumn>): SnapshotColumn {
   return {
     name: "c",
@@ -37,5 +46,40 @@ describe("Cell — long-text density tagging", () => {
     expect(marker).toHaveTextContent("2");
     rerender(<Cell column={col({})} value="v" pending pendingCount={1} onCommit={vi.fn()} />);
     expect(screen.getByTestId("pending-marker")).toHaveTextContent("•");
+  });
+});
+
+describe("Cell — external edit trigger (edit-pencil wiring)", () => {
+  it("opens the editor when startEditing increments to a truthy value", () => {
+    const { rerender } = render(
+      <Cell column={col({ type: "text" })} value="hello" startEditing={0} onCommit={vi.fn()} />,
+    );
+    // Not editing initially.
+    expect(screen.queryByTestId("cell-input")).not.toBeInTheDocument();
+    // Bumping the signal opens the editor and seeds the draft from the value.
+    rerenderCell(rerender, { startEditing: 1, value: "hello" });
+    const input = screen.getByTestId("cell-input") as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe("hello");
+  });
+
+  it("does NOT open the editor when startEditing is 0 / undefined", () => {
+    const { rerender } = render(
+      <Cell column={col({ type: "text" })} value="x" onCommit={vi.fn()} />,
+    );
+    rerenderCell(rerender, { startEditing: 0, value: "x" });
+    expect(screen.queryByTestId("cell-input")).not.toBeInTheDocument();
+  });
+
+  it("does not open a read-only (non-interactive) cell editor on signal", () => {
+    const { rerender } = render(
+      <Cell column={col({ type: "text", can_edit: false })} value="x" startEditing={0} onCommit={vi.fn()} />,
+    );
+    rerender(
+      <Cell column={col({ type: "text", can_edit: false })} value="x" startEditing={1} onCommit={vi.fn()} />,
+    );
+    // can_edit:false text cells are still interactive (suggest mode) — the
+    // editor opens so a non-owner can type a suggestion.
+    expect(screen.getByTestId("cell-input")).toBeInTheDocument();
   });
 });

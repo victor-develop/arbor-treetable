@@ -21,6 +21,7 @@ export function Cell({
   pending,
   pendingTitle,
   pendingCount,
+  startEditing,
   onCommit,
 }: {
   column: SnapshotColumn;
@@ -30,6 +31,11 @@ export function Cell({
   pendingTitle?: string;
   // How many open suggestions target this cell (shown in the marker badge).
   pendingCount?: number;
+  // External edit trigger: a monotonically-incrementing signal. Each time it
+  // increases to a truthy value the (interactive text-like) cell enters edit
+  // mode and focuses — this is how the row's edit-pencil opens the label cell's
+  // inline editor without the row reaching into the cell's internals.
+  startEditing?: number;
   // Called only when the committed value differs from `value` (no-op guard).
   onCommit: (next: unknown) => void;
 }): JSX.Element {
@@ -77,6 +83,7 @@ export function Cell({
       pending={pending}
       pendingTitle={pendingTitle}
       pendingCount={pendingCount}
+      startEditing={startEditing}
       onCommit={commitIfChanged}
     />
   );
@@ -94,6 +101,7 @@ function TextLikeCell({
   pending,
   pendingTitle,
   pendingCount,
+  startEditing,
   onCommit,
 }: {
   column: SnapshotColumn;
@@ -102,6 +110,7 @@ function TextLikeCell({
   pending?: boolean;
   pendingTitle?: string;
   pendingCount?: number;
+  startEditing?: number;
   onCommit: (next: unknown) => void;
 }): JSX.Element {
   const [editing, setEditing] = useState(false);
@@ -118,6 +127,21 @@ function TextLikeCell({
     setInvalid(false);
     setEditing(true);
   };
+
+  // External edit trigger (the row's edit-pencil): every increase of the
+  // `startEditing` signal to a truthy value opens the editor seeded from the
+  // current value. The previous-signal ref makes only a *change* fire it, so a
+  // re-render with the same signal never re-opens a cell the user just closed.
+  const lastSignal = useRef(0);
+  useEffect(() => {
+    if (startEditing && startEditing > lastSignal.current) {
+      lastSignal.current = startEditing;
+      start();
+    }
+    // `start` reads `value` at call time; we intentionally key only on the
+    // signal so editing is driven by the trigger, not by value churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startEditing]);
 
   const commit = () => {
     if (!isValidForType(column.type, draft)) {

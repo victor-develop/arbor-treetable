@@ -171,6 +171,22 @@ describe("TreeTable CREATE affordances (PART C)", () => {
     expect(onAddSibling).toHaveBeenCalledWith(p2);
   });
 
+  it("threads onEdit to each row; clicking a row's edit calls it with the node", () => {
+    const onEdit = vi.fn();
+    const { snap } = renderTable({ onEdit });
+    fireEvent.click(screen.getByTestId("edit-node-P2"));
+    const p2 = snap.nodes.find((n) => n.name === "P2");
+    expect(onEdit).toHaveBeenCalledWith(p2);
+  });
+
+  it("renders NO trailing actions column (the cluster lives in the frozen-left label cell)", () => {
+    const { container } = renderTable({ onAddChild: vi.fn(), onDeleteNode: vi.fn() });
+    // No trailing actions <col>, header <th>, or body <td>.
+    expect(container.querySelector("col.arbor-col-actions")).toBeNull();
+    expect(container.querySelector("th.arbor-actions-head")).toBeNull();
+    expect(container.querySelector("td.arbor-actions-cell")).toBeNull();
+  });
+
   it("omits the root add button when onAddNode is not supplied", () => {
     renderTable();
     expect(screen.queryByTestId("add-root-node")).not.toBeInTheDocument();

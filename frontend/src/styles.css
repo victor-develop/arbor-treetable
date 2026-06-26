@@ -502,7 +502,6 @@ body {
   font-size: 13px;
 }
 .arbor-col-label { width: 220px; }
-.arbor-col-actions { width: 44px; }
 .arbor-tree thead th {
   background: var(--surface-1);
   border-bottom: 1px solid var(--outline);
@@ -582,6 +581,10 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* anchors the absolutely-positioned action cluster (below) to the cell's
+     right edge; the cell is frozen-left (always visible), so the cluster is
+     always reachable with zero horizontal scroll. */
+  position: relative;
 }
 .arbor-label {
   font-weight: 500;
@@ -633,31 +636,67 @@ body {
   background: none !important;
 }
 
-/* Trailing per-row actions cell (right-aligned, narrow) — keeps the delete
-   affordance out of the Name column so it never displaces the label. */
-.arbor-actions-head {
-  width: 44px;
-}
-.arbor-actions-cell {
-  width: 1%; /* shrink to content; grows only for the confirm cluster */
-  text-align: right;
+/* Per-row action cluster, RELOCATED into the frozen-left label cell so it is
+   always reachable with zero horizontal scroll (the old trailing actions column
+   sat ~2184px off the right edge of a ~2265px-wide table). Absolutely pinned to
+   the label cell's right edge, over a soft surface-matching gradient so it reads
+   cleanly over the label text instead of permanently covering it. Hidden until
+   the row is hovered or focus moves in (keyboard reachability) — discoverable
+   because the label cell itself is always on screen. */
+.arbor-row-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 16px;
+  padding-right: 8px;
   white-space: nowrap;
-  /* Hover-revealed action cluster: hidden by default so the per-row +sibling /
-     +child / delete buttons don't add permanent visual noise. Revealed on row
-     hover AND on :focus-within (keyboard reachability). opacity/visibility (NOT
-     display:none) so focus-within can still move into the buttons and reveal
-     them. */
+  /* Opaque-fading backdrop: transparent → the frozen cell's surface so the
+     cluster sits on a clean base and the label fades under it rather than being
+     clipped. Matches the frozen label-cell background (--surface). */
+  background: linear-gradient(to right, rgba(255, 255, 255, 0), var(--surface) 16px);
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.12s ease, visibility 0.12s ease;
 }
-.arbor-row:hover .arbor-actions-cell,
-.arbor-actions-cell:focus-within {
+/* On hover the row background shifts to --surface-1; match the gradient so the
+   cluster's backdrop blends with the hovered row instead of showing a white seam. */
+.arbor-row:hover .arbor-row-actions {
+  background: linear-gradient(to right, rgba(248, 248, 248, 0), var(--surface-1) 16px);
+}
+.arbor-row:hover .arbor-row-actions,
+.arbor-row-actions:focus-within {
   opacity: 1;
   visibility: visible;
 }
-.arbor-actions-cell .arbor-row-confirm {
+.arbor-row-actions .arbor-row-confirm {
   justify-content: flex-end;
+}
+/* Edit pencil — same quiet hover-reveal icon-button treatment as +sibling/+child. */
+.arbor-row-edit {
+  border: none !important;
+  background: none !important;
+  cursor: pointer;
+  opacity: 0.75;
+  color: var(--ink-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0 !important;
+  border-radius: var(--r-sm);
+}
+.arbor-row-edit:hover {
+  opacity: 1;
+  background: var(--surface-3) !important;
+  color: var(--ink-2);
+}
+.arbor-row-edit:focus-visible {
+  opacity: 1;
 }
 .arbor-row-delete {
   border: none !important;
