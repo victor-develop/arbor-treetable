@@ -321,16 +321,38 @@ body {
   gap: 8px;
 }
 
+/* Collapsed default: a compact "+ Add column" toggle holding the toolbar's prime
+   slot. Clicking expands the full grid in place (NOT a modal). Reads as the same
+   secondary button family as the rest of the toolbar; suggest mode mirrors the
+   amber treatment so a routed-for-approval action is signalled even collapsed. */
+.arbor-add-column-toggle {
+  font-weight: 500;
+}
+.arbor-add-column-toggle[data-mode="suggest"] {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber-border);
+}
+
 /* Add-column form: a labeled field grid with stable tracks so the controls align
-   into columns (field | label | type | owner | submit) and wrap predictably,
-   replacing the old ragged flex-wrap. The fixed `auto` submit track + grid layout
-   means revealing the split-options row (its own full-width row, below) never
-   shifts the submit relative to the field row — the click target stays put. */
+   into columns (label | field-key | type | owner | submit) and wrap predictably,
+   replacing the old ragged flex-wrap. Label comes FIRST — humans think label-first
+   and the field key is auto-slugged from it. The fixed `auto` submit track + grid
+   layout means revealing the split-options row (its own full-width row, below)
+   never shifts the submit relative to the field row — the click target stays put. */
 .arbor-add-column {
   display: grid;
-  grid-template-columns: 1fr 1fr 152px 1fr auto;
+  grid-template-columns: 1fr 1fr 152px 1fr auto auto;
   gap: 8px 8px;
   align-items: end; /* labels sit above; control baselines align along the row */
+}
+/* Field key reads as a permanent machine id: monospace input + a quiet hint. */
+.arbor-ac-key-input {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.arbor-ac-key-hint {
+  font-size: 11px;
+  color: var(--ink-muted);
 }
 /* Eyebrow sits on its own full-width row above the fields (only in suggest mode). */
 .arbor-ac-eyebrow {
@@ -362,6 +384,15 @@ body {
 .arbor-add-column [data-testid="ac-submit"] {
   order: 1;
   align-self: end;
+}
+/* Cancel collapses the form; pinned in the field row right after submit
+   (order:1 > options' order:2 keeps both trailing buttons above the options
+   row). Ghost styling so it recedes behind the primary submit. */
+.arbor-ac-cancel {
+  order: 1;
+  align-self: end;
+  background: transparent;
+  border-color: transparent;
 }
 /* Split-type options editor: its OWN full-width row, ordered AFTER the submit
    (order:2 > submit's order:1) so it appears on a new row beneath the field row —
