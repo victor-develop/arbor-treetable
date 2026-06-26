@@ -60,6 +60,60 @@ describe("AddColumnForm", () => {
     expect(screen.getByTestId("add-column-form")).toHaveAttribute("data-mode", "suggest");
     expect(screen.getByTestId("ac-submit")).toHaveTextContent("Suggest column");
   });
+
+  it("labels every control (a11y / cross-surface consistency)", () => {
+    render(<AddColumnForm sheet="S" existingFields={[]} canAdd onSubmit={() => {}} />);
+    // Visible <label> text wired to each control.
+    expect(screen.getByText("Field key")).toBeInTheDocument();
+    expect(screen.getByText("Label")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
+    expect(screen.getByText("Column owner")).toBeInTheDocument();
+    // Each control resolves by its accessible name.
+    expect(screen.getByLabelText("Field key")).toBe(screen.getByTestId("ac-field"));
+    expect(screen.getByLabelText("Label")).toBe(screen.getByTestId("ac-label"));
+    expect(screen.getByLabelText("Type")).toBe(screen.getByTestId("ac-type"));
+    expect(screen.getByLabelText("Column owner")).toBe(screen.getByTestId("ac-owner"));
+  });
+
+  it("renders the suggest eyebrow only when !canAdd", () => {
+    const { rerender } = render(
+      <AddColumnForm sheet="S" existingFields={[]} canAdd onSubmit={() => {}} />,
+    );
+    expect(screen.queryByTestId("ac-suggest-eyebrow")).toBeNull();
+    rerender(<AddColumnForm sheet="S" existingFields={[]} canAdd={false} onSubmit={() => {}} />);
+    expect(screen.getByTestId("ac-suggest-eyebrow")).toBeInTheDocument();
+    expect(screen.getByTestId("ac-suggest-eyebrow")).toHaveTextContent(
+      "Routes to the sheet owner for approval",
+    );
+  });
+
+  it("split options render as a dedicated full-width row (reflow stability)", () => {
+    render(<AddColumnForm sheet="S" existingFields={[]} canAdd onSubmit={() => {}} />);
+    fireEvent.change(screen.getByTestId("ac-type"), { target: { value: "single-select-split" } });
+    const options = screen.getByTestId("ac-options");
+    expect(options.className).toContain("arbor-ac-options-row");
+    // Submit stays a trailing item pinned after the options row in DOM order.
+    const form = screen.getByTestId("add-column-form");
+    const kids = Array.from(form.children);
+    expect(kids.indexOf(options)).toBeLessThan(kids.indexOf(screen.getByTestId("ac-submit")));
+  });
+
+  it("clears local field state after a successful submit (no duplicate suggestions)", () => {
+    const onSubmit = vi.fn();
+    render(<AddColumnForm sheet="S" existingFields={[]} canAdd onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByTestId("ac-field"), { target: { value: "priority" } });
+    fireEvent.change(screen.getByTestId("ac-label"), { target: { value: "Priority" } });
+    fireEvent.change(screen.getByTestId("ac-type"), { target: { value: "number" } });
+    fireEvent.change(screen.getByTestId("ac-owner"), { target: { value: "C" } });
+    fireEvent.click(screen.getByTestId("ac-submit"));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // State reset to defaults.
+    expect(screen.getByTestId("ac-field")).toHaveValue("");
+    expect(screen.getByTestId("ac-label")).toHaveValue("");
+    expect(screen.getByTestId("ac-owner")).toHaveValue("");
+    expect(screen.getByTestId("ac-type")).toHaveValue("text");
+    expect(screen.getByTestId("ac-submit")).toBeDisabled();
+  });
 });
 
 const budget: SnapshotColumn = {
@@ -130,5 +184,31 @@ describe("ColumnSettings", () => {
       column_owner: "C",
       editors: ["F"],
     });
+  });
+
+  it("non-owner sees the owned-by caption + every action flipped to suggest", () => {
+    render(
+      <ColumnSettings sheet="S" column={budget} canConfigure={false} canGrant onUpdate={() => {}} onDelete={() => {}} onGrant={() => {}} />,
+    );
+    // (a) header caption naming the owner.
+    const caption = screen.getByTestId("cs-owned-by");
+    expect(caption).toHaveTextContent("Owned by C");
+    expect(caption).toHaveTextContent("changes are suggested for approval");
+    // (b) grant + delete trigger carry the same suggest flip as Save.
+    expect(screen.getByTestId("cs-save")).toHaveAttribute("data-mode", "suggest");
+    expect(screen.getByTestId("cs-grant-save")).toHaveAttribute("data-mode", "suggest");
+    expect(screen.getByTestId("cs-grant-save")).toHaveTextContent("Suggest editor change");
+    expect(screen.getByTestId("cs-delete")).toHaveAttribute("data-mode", "suggest");
+  });
+
+  it("owner keeps direct-mode actions + no owned-by caption", () => {
+    render(
+      <ColumnSettings sheet="S" column={budget} canConfigure canGrant onUpdate={() => {}} onDelete={() => {}} onGrant={() => {}} />,
+    );
+    expect(screen.queryByTestId("cs-owned-by")).toBeNull();
+    expect(screen.getByTestId("cs-save")).toHaveAttribute("data-mode", "direct");
+    expect(screen.getByTestId("cs-grant-save")).toHaveAttribute("data-mode", "direct");
+    expect(screen.getByTestId("cs-grant-save")).toHaveTextContent("Update editors");
+    expect(screen.getByTestId("cs-delete")).toHaveAttribute("data-mode", "direct");
   });
 });

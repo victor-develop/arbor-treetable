@@ -41,6 +41,61 @@ describe("dense row + expandable detail (UX density)", () => {
   });
 });
 
+describe("column-add CR lead prefers the human label (P2)", () => {
+  it("renders the payload label, not the machine field key", () => {
+    const colCr: ChangeRequestView = {
+      name: "CR-COL",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "add",
+      target_kind: "column",
+      payload: { field: "Ux_review_probe", label: "UX Review Probe" },
+    };
+    render(
+      <ChangeRequestPanel cr={colCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-COL");
+    expect(lead).toHaveTextContent("UX Review Probe");
+    expect(lead).not.toHaveTextContent("Ux_review_probe");
+    expect(lead).not.toHaveTextContent("Ux review probe");
+  });
+
+  it("prefers patch.label for a column-update CR", () => {
+    const updCr: ChangeRequestView = {
+      name: "CR-UPD",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "update",
+      target_kind: "column",
+      payload: { field: "Ux_review_probe", patch: { label: "UX Review Probe" } },
+    };
+    render(
+      <ChangeRequestPanel cr={updCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-UPD");
+    expect(lead).toHaveTextContent("UX Review Probe");
+    expect(lead).not.toHaveTextContent("Ux_review_probe");
+  });
+
+  it("falls back to the humanized field key when no label is present", () => {
+    const colCr: ChangeRequestView = {
+      name: "CR-NOLABEL",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "add",
+      target_kind: "column",
+      payload: { field: "budget" },
+    };
+    render(
+      <ChangeRequestPanel cr={colCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    expect(screen.getByTestId("cr-rowsummary-CR-NOLABEL")).toHaveTextContent("Budget");
+  });
+});
+
 describe("approve idempotency (WEB_UI-089)", () => {
   it("double-clicking Approve dispatches approveChange once", () => {
     const onApprove = vi.fn();

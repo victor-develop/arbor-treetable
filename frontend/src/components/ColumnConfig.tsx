@@ -31,6 +31,15 @@ export function AddColumnForm({
   const canSubmit =
     field.trim() !== "" && label.trim() !== "" && !duplicate && optionsValid;
 
+  const reset = () => {
+    setField("");
+    setLabel("");
+    setType("text");
+    setColumnOwner("");
+    setOptions([]);
+    setOptDraft("");
+  };
+
   const submit = () => {
     if (!canSubmit) return;
     const params: Record<string, unknown> = {
@@ -42,6 +51,9 @@ export function AddColumnForm({
     };
     if (isSplit) params.options = { groups: [{ label, options }] };
     onSubmit(params);
+    // Clear local state so the next add starts fresh — avoids accidentally
+    // re-submitting the same suggestion (which would route a duplicate).
+    reset();
   };
 
   return (
@@ -54,60 +66,77 @@ export function AddColumnForm({
         submit();
       }}
     >
-      <input
-        data-testid="ac-field"
-        placeholder="field key"
-        value={field}
-        onChange={(e) => setField(e.target.value)}
-      />
-      {duplicate && (
-        <span role="alert" data-testid="ac-duplicate">
-          Field key already exists
+      {!canAdd && (
+        <span className="arbor-ac-eyebrow" data-testid="ac-suggest-eyebrow">
+          Routes to the sheet owner for approval
         </span>
       )}
-      <input
-        data-testid="ac-label"
-        placeholder="Label"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-      />
-      <select
-        data-testid="ac-type"
-        value={type}
-        onChange={(e) => setType(e.target.value as ColumnType)}
-      >
-        {COLUMN_TYPES.map((t) => (
-          <option key={t} value={t}>
-            {t}
-          </option>
-        ))}
-      </select>
-      <input
-        data-testid="ac-owner"
-        placeholder="column owner"
-        value={columnOwner}
-        onChange={(e) => setColumnOwner(e.target.value)}
-      />
+      <label className="arbor-field">
+        <span className="arbor-field-label">Field key</span>
+        <input
+          data-testid="ac-field"
+          value={field}
+          onChange={(e) => setField(e.target.value)}
+        />
+        {duplicate && (
+          <span role="alert" data-testid="ac-duplicate">
+            Field key already exists
+          </span>
+        )}
+      </label>
+      <label className="arbor-field">
+        <span className="arbor-field-label">Label</span>
+        <input
+          data-testid="ac-label"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+      </label>
+      <label className="arbor-field arbor-ac-type">
+        <span className="arbor-field-label">Type</span>
+        <select
+          data-testid="ac-type"
+          value={type}
+          onChange={(e) => setType(e.target.value as ColumnType)}
+        >
+          {COLUMN_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="arbor-field">
+        <span className="arbor-field-label">Column owner</span>
+        <input
+          data-testid="ac-owner"
+          value={columnOwner}
+          onChange={(e) => setColumnOwner(e.target.value)}
+        />
+      </label>
       {isSplit && (
-        <div data-testid="ac-options">
-          <input
-            data-testid="ac-option-draft"
-            placeholder="add option"
-            value={optDraft}
-            onChange={(e) => setOptDraft(e.target.value)}
-          />
-          <button
-            type="button"
-            data-testid="ac-option-add"
-            onClick={() => {
-              if (optDraft.trim()) {
-                setOptions((o) => [...o, optDraft.trim()]);
-                setOptDraft("");
-              }
-            }}
-          >
-            + option
-          </button>
+        <div className="arbor-ac-options-row" data-testid="ac-options">
+          <span className="arbor-field-label">Options</span>
+          <div className="arbor-ac-options-edit">
+            <input
+              data-testid="ac-option-draft"
+              placeholder="add option"
+              value={optDraft}
+              onChange={(e) => setOptDraft(e.target.value)}
+            />
+            <button
+              type="button"
+              data-testid="ac-option-add"
+              onClick={() => {
+                if (optDraft.trim()) {
+                  setOptions((o) => [...o, optDraft.trim()]);
+                  setOptDraft("");
+                }
+              }}
+            >
+              + option
+            </button>
+          </div>
           <ul>
             {options.map((o) => (
               <li key={o}>{o}</li>
@@ -147,6 +176,11 @@ export function ColumnSettings({
 
   return (
     <div className="arbor-column-settings" data-testid={`col-settings-${column.name}`}>
+      {!canConfigure && (
+        <p className="arbor-cs-owned-by" data-testid="cs-owned-by" role="note">
+          Owned by {column.column_owner} — changes are suggested for approval
+        </p>
+      )}
       <section className="arbor-cs-fields">
         <label className="arbor-field">
           <span className="arbor-field-label">Label</span>
@@ -191,6 +225,7 @@ export function ColumnSettings({
           <button
             type="button"
             data-testid="cs-grant-save"
+            data-mode={canConfigure ? "direct" : "suggest"}
             onClick={() =>
               onGrant({
                 sheet,
@@ -200,7 +235,7 @@ export function ColumnSettings({
               })
             }
           >
-            Update editors
+            {canConfigure ? "Update editors" : "Suggest editor change"}
           </button>
         </section>
       )}
@@ -212,7 +247,12 @@ export function ColumnSettings({
             This is the label column. Reassign the label before deleting.
           </p>
         ) : !confirmDelete ? (
-          <button type="button" data-testid="cs-delete" onClick={() => setConfirmDelete(true)}>
+          <button
+            type="button"
+            data-testid="cs-delete"
+            data-mode={canConfigure ? "direct" : "suggest"}
+            onClick={() => setConfirmDelete(true)}
+          >
             Delete column
           </button>
         ) : (

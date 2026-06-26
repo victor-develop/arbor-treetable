@@ -567,7 +567,17 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 sheet={sheetName}
                 existingFields={snap.columns.map((c) => c.field)}
                 canAdd={snap.viewer?.can_add_column ?? false}
-                onSubmit={(params) => void sheet.dispatch("addColumn", params)}
+                onSubmit={(params) =>
+                  // Mirror columnOp: a suggested add-column files a CR (refresh
+                  // the inbox so it shows immediately), a direct add changes the
+                  // schema (refetch so the new column re-renders). Either way an
+                  // executed op + a filed CR both surface a row in Activity.
+                  void sheet.dispatch("addColumn", params).then((o) => {
+                    if (o.kind === "executed") void sheet.refetch();
+                    refreshCRs();
+                    setActivityRefreshKey((k) => k + 1);
+                  })
+                }
               />
               {/* Feature 2 — presentation-only view controls (hide/reorder/
                   resize). Lists ONLY the read-ACL-filtered snapshot columns and
