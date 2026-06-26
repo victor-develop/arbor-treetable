@@ -2452,3 +2452,109 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+
+/* ----------------------------------------------- CREATE controls (PART C/D) -- */
+/* Per-row "add child" affordance — mirrors .arbor-row-delete's quiet, hover-
+   reveal treatment so the two row actions read as one cluster. NOT gated on
+   ownership: a non-owner click files a CR (like Suggest column). */
+.arbor-row-add {
+  border: none !important;
+  background: none !important;
+  cursor: pointer;
+  opacity: 0;
+  color: var(--ink-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0 !important;
+  border-radius: var(--r-sm);
+  margin-right: 2px;
+}
+.arbor-row:hover .arbor-row-add {
+  opacity: 0.75;
+}
+.arbor-row-add:hover {
+  opacity: 1;
+  background: var(--accent-ring);
+  color: var(--accent);
+}
+.arbor-row-add:focus-visible {
+  opacity: 1;
+}
+
+/* Root-level "+ Add node" toolbar above the tree. Calm secondary button so it
+   sits quietly beside the table header without competing with the data. */
+.arbor-tree-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+.arbor-add-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.arbor-add-node:hover {
+  background: var(--accent-ring);
+  border-color: var(--accent);
+}
+.arbor-add-node:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* New-sheet form on the Sheet List home page — sits in the toolbar beside the
+   filter; name input + Create button, with an inline error for a taken name. */
+.arbor-new-sheet {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.arbor-new-sheet-name {
+  width: 100%;
+  max-width: 240px;
+  padding: 8px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-sm);
+  font-size: 0.9rem;
+  background: var(--surface-0, #fff);
+}
+.arbor-new-sheet-name:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.arbor-new-sheet-create {
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.arbor-new-sheet-create:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+.arbor-new-sheet-create:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.arbor-new-sheet-error {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--arbor-error);
+}

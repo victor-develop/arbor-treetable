@@ -305,6 +305,19 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
     });
   };
 
+  // addNode funnels through dispatch like every mutation. The executor decides
+  // direct-vs-CR by ACL — we DON'T gate the button on ownership (a non-owner's
+  // click just files a CR, same as Suggest column). On an executed add, refetch
+  // so the new (label-less) node appears for inline naming; on a suggested add a
+  // CR is filed. Either way refresh activity + the CR inbox so the result shows.
+  const addNode = (parent: string | null) => {
+    void sheet.dispatch("addNode", { sheet: sheetName, parent }).then((o) => {
+      if (o.kind === "executed") void sheet.refetch();
+      setActivityRefreshKey((k) => k + 1);
+      refreshCRs();
+    });
+  };
+
   const move = (params: { node: string; new_parent: string | null; after: string | null }) => {
     // A structural move has no optimistic cell value to keep, so on an executed
     // move refetch to re-render the new tree shape (depth/sibling order). A
@@ -598,6 +611,8 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 onMove={move}
                 onColumnSettings={setEditingColumn}
                 onDeleteNode={del}
+                onAddChild={(n) => addNode(n.name)}
+                onAddNode={() => addNode(null)}
               />
             </div>
             {editingColumn && (

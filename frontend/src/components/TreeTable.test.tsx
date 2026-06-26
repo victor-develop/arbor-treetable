@@ -147,6 +147,28 @@ describe("TreeTable scroll-shadow wiring", () => {
   });
 });
 
+describe("TreeTable CREATE affordances (PART C)", () => {
+  it("renders a root '+ Add node' button that calls onAddNode()", () => {
+    const onAddNode = vi.fn();
+    renderTable({ onAddNode });
+    fireEvent.click(screen.getByTestId("add-root-node"));
+    expect(onAddNode).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads onAddChild to each row; clicking a row's add-child calls it with the node", () => {
+    const onAddChild = vi.fn();
+    const { snap } = renderTable({ onAddChild });
+    fireEvent.click(screen.getByTestId("add-child-P2"));
+    const p2 = snap.nodes.find((n) => n.name === "P2");
+    expect(onAddChild).toHaveBeenCalledWith(p2);
+  });
+
+  it("omits the root add button when onAddNode is not supplied", () => {
+    renderTable();
+    expect(screen.queryByTestId("add-root-node")).not.toBeInTheDocument();
+  });
+});
+
 describe("TreeTable drag-and-drop → moveNode", () => {
   function dropFromTop(targetTestId: string, fraction: number) {
     const row = screen.getByTestId(targetTestId);

@@ -335,7 +335,14 @@ def _build_sheet_shell() -> tuple[str, dict, dict]:
 
     sheet_doc = frappe.new_doc("Tree Sheet")
     sheet_doc.title = SHEET_TITLE
-    sheet_doc.structural_owner = PM
+    # The SHEET's structural owner is the demo admin (the logged-in driver), so a
+    # re-seed keeps the admin able to add columns/nodes on ACME directly. The
+    # COLUMN owners (pm/dev/mkt), role:pm editor, and read-ACL tiers are unchanged
+    # — only the sheet-level structural authority moves to the admin. Because the
+    # root structural authority is now the admin, the Growth->Dana branch
+    # delegation and the sheet-owner-routed structural CRs below flow from / route
+    # to the admin (it is the sheet's structural approver), not PM.
+    sheet_doc.structural_owner = ADMIN
     sheet_doc.status = "active"
     sheet_doc.settings = {}
     sheet_doc.insert(ignore_permissions=True)
@@ -435,13 +442,15 @@ def _seed_values(columns: dict, nodes: dict) -> int:
 
 
 def _seed_delegation(nodes: dict) -> str:
-    """Axis 1 — PM delegates the Growth subtree to Dana via the executor. PM is the
-    structural owner of Growth (no nearer grant), so this is the authorized path."""
+    """Axis 1 — the demo ADMIN (the sheet's structural owner) delegates the Growth
+    subtree to Dana via the executor. The structural approver of Growth is the
+    sheet's root ``structural_owner`` (no nearer grant), which is now the ADMIN, so
+    this is the authorized (executed, not suggested) path."""
     repo, sink = FrappeRepository(), FrappeEventSink()
     out = execute_action(
         "delegateBranch",
         {"sheet": SHEET, "branch_root": nodes[DELEGATE_BRANCH], "grantee": DELEGATE_TO},
-        actor(PM), repo, sink,
+        actor(ADMIN, admin=True), repo, sink,
     )
     frappe.db.commit()
     return out.data.get("branch_grant")
@@ -467,11 +476,11 @@ def _seed_change_requests(columns: dict, nodes: dict) -> dict:
 
     Routing recap (so the demo is predictable):
       * cell edit on a PM-owned column by a non-pm  -> CR routed to PM
-      * structural add under Core Platform by alice -> CR routed to PM (sheet owner)
+      * structural add under Core Platform by alice -> CR routed to ADMIN (sheet owner)
       * structural add under Growth by bob          -> CR routed to Dana (delegate)
       * column-schema update by a non-owner          -> CR routed to column owner
       * a batch (multi-change) CR spanning owners    -> one CR, per-item approvers
-      * a moveNode by a non-owner                     -> dual-end CR (PM + Dana)
+      * a moveNode by a non-owner                     -> dual-end CR (ADMIN + Dana)
     """
     repo, sink = FrappeRepository(), FrappeEventSink()
     created, approved = [], []
@@ -493,8 +502,9 @@ def _seed_change_requests(columns: dict, nodes: dict) -> dict:
             {"node": nodes["Copilot"], "column": columns["effort_weeks"], "value": 14},
             CAROL)
 
-    # 3) structural add under Core Platform by Alice -> routes to PM. APPROVE it
-    #    (shows the applied path: the node really gets created on approval).
+    # 3) structural add under Core Platform by Alice -> routes to ADMIN (the sheet
+    #    structural owner). APPROVE it (shows the applied path: the node really gets
+    #    created on approval).
     cr_struct = suggest("addNode",
                         {"parent": nodes["Identity & Access"],
                          "values": {"initiative": "Device Trust"}},
@@ -532,16 +542,18 @@ def _seed_change_requests(columns: dict, nodes: dict) -> dict:
     batch_cr = o.change_request
 
     # 7) moveNode by Bob: move "Win-back Campaign" (under Growth → Dana's branch) to
-    #    sit under "Core Platform" (→ PM). src approver = Dana, dest approver = PM,
-    #    Bob is neither -> dual-end CR. LEFT OPEN (Journey shows two-sided approval).
+    #    sit under "Core Platform" (→ ADMIN, the sheet owner). src approver = Dana,
+    #    dest approver = ADMIN, Bob is neither -> dual-end CR. LEFT OPEN (Journey
+    #    shows two-sided approval).
     suggest("moveNode",
             {"node": nodes["Win-back Campaign"], "new_parent": nodes["Core Platform"]},
             BOB)
 
     # ---- APPROVE a couple as the resolved approver (the applied path) ----------
-    # Approve the structural add (#3) AS PM -> the node "Device Trust" is created.
+    # Approve the structural add (#3) AS the ADMIN (sheet structural owner) -> the
+    # node "Device Trust" is created.
     out = execute_action("approveChange", {"change_request": cr_struct},
-                         actor(PM, admin=False), repo, sink)
+                         actor(ADMIN, admin=True), repo, sink)
     assert out.kind == "executed", f"approve of {cr_struct} -> {out.kind}"
     approved.append(cr_struct)
     frappe.db.commit()
@@ -631,7 +643,7 @@ def main() -> None:
     print("=" * 64)
     print("ACME showcase seed COMPLETE")
     print("=" * 64)
-    print(f"Sheet:        {SHEET}  ({SHEET_TITLE})  owner={PM}")
+    print(f"Sheet:        {SHEET}  ({SHEET_TITLE})  structural_owner={ADMIN}")
     print(f"URL:          http://localhost:5173/?sheet={SHEET}")
     print(f"Columns:      {count('Tree Column', sheet=SHEET)}  "
           f"(types: text, multiline-text, number, single/multi-select-split)")

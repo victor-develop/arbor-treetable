@@ -8,7 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { SnapshotColumn, SnapshotNode } from "../api";
 import { buildVisibleRows, computeMove, type DropPosition } from "../lib/tree";
 import { TreeRow } from "./TreeRow";
-import { GearIcon } from "./icons";
+import { GearIcon, PlusIcon } from "./icons";
 
 // Whether a horizontally-scrolling viewport is clipping content to the left
 // and/or right of the current scroll position. Pure + exported so the
@@ -48,6 +48,11 @@ export type TreeTableProps = {
   onColumnSettings?: (column: SnapshotColumn) => void;
   // Delete a node (two-step confirm in the row). Optional.
   onDeleteNode?: (node: SnapshotNode) => void;
+  // Add a child under a given node (per-row "+" affordance). Optional; shown
+  // for everyone (a non-owner click files a CR) — NOT gated on ownership.
+  onAddChild?: (node: SnapshotNode) => void;
+  // Add a ROOT-level node (parent=null) — the toolbar "+ Add node" button.
+  onAddNode?: () => void;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -65,7 +70,11 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     onMove,
     onColumnSettings,
     onDeleteNode,
+    onAddChild,
+    onAddNode,
   } = props;
+  // Whether the row actions column exists at all (add-child and/or delete).
+  const hasRowActions = !!onAddChild || !!onDeleteNode;
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
@@ -122,15 +131,36 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     onMove(move);
   };
 
+  // Root-level "+ Add node" affordance (parent=null). Shown for everyone, like
+  // Suggest column — a non-owner click files a CR. Reachable even with zero rows.
+  const rootAdd = onAddNode ? (
+    <div className="arbor-tree-toolbar">
+      <button
+        type="button"
+        className="arbor-add-node"
+        data-testid="add-root-node"
+        onClick={() => onAddNode()}
+      >
+        <PlusIcon size={14} />
+        <span>Add node</span>
+      </button>
+    </div>
+  ) : null;
+
   if (rows.length === 0) {
     return (
-      <div className="arbor-empty" data-testid="empty-state">
-        No nodes yet.
-      </div>
+      <>
+        {rootAdd}
+        <div className="arbor-empty" data-testid="empty-state">
+          No nodes yet.
+        </div>
+      </>
     );
   }
 
   return (
+   <>
+   {rootAdd}
    <div
      className="arbor-table-viewport"
      data-testid="table-viewport"
@@ -143,7 +173,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         {dataColumns.map((c) => (
           <col key={c.name} style={{ width: colWidth(c) }} />
         ))}
-        {onDeleteNode && <col className="arbor-col-actions" />}
+        {hasRowActions && <col className="arbor-col-actions" />}
       </colgroup>
       <thead>
         <tr>
@@ -174,7 +204,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               </span>
             </th>
           ))}
-          {onDeleteNode && <th className="arbor-actions-head" aria-label="Actions" />}
+          {hasRowActions && <th className="arbor-actions-head" aria-label="Actions" />}
         </tr>
       </thead>
       <tbody>
@@ -195,11 +225,13 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               dragged.current = n;
             }}
             onDrop={handleDrop}
+            onAddChild={onAddChild}
             onDelete={onDeleteNode}
           />
         ))}
       </tbody>
     </table>
    </div>
+   </>
   );
 }

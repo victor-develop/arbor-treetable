@@ -9,10 +9,45 @@
 import { useEffect, useMemo, useState } from "react";
 import { api as defaultClient, type ArborClient, type SheetSummary } from "../api";
 
-export function SheetList({ client }: { client?: ArborClient } = {}): JSX.Element {
+export function SheetList({
+  client,
+  onNavigate,
+}: {
+  client?: ArborClient;
+  // Navigate to a sheet after creating it. Optional; defaults to setting
+  // window.location to ?sheet=<name> (so the home page is a thin shell with no
+  // router). Tests pass a spy instead of touching jsdom navigation.
+  onNavigate?: (sheet: string) => void;
+} = {}): JSX.Element {
   const c = client ?? defaultClient;
   const [sheets, setSheets] = useState<SheetSummary[] | null>(null);
   const [filter, setFilter] = useState("");
+  // New-sheet form state: the draft name, an in-flight guard, and the last
+  // error (e.g. a duplicate name → 409) shown inline.
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const navigate =
+    onNavigate ??
+    ((sheet: string) => {
+      window.location.search = `?sheet=${encodeURIComponent(sheet)}`;
+    });
+
+  const createSheet = () => {
+    const name = newName.trim();
+    if (!name || creating || !c.createSheet) return;
+    setCreating(true);
+    setCreateError(null);
+    c.createSheet(name)
+      .then((res) => navigate(res.sheet))
+      .catch(() => {
+        // A duplicate name (or any server error) surfaces inline instead of
+        // navigating — the user can rename and retry.
+        setCreateError(`Could not create "${name}" — that name may already be taken.`);
+      })
+      .finally(() => setCreating(false));
+  };
 
   useEffect(() => {
     let live = true;
@@ -63,7 +98,44 @@ export function SheetList({ client }: { client?: ArborClient } = {}): JSX.Elemen
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
+          {/* New-sheet form: any authenticated user may create one (the server
+              makes them its structural_owner). On success we navigate to the new
+              sheet; a duplicate name surfaces inline. */}
+          <form
+            className="arbor-new-sheet"
+            data-testid="new-sheet-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createSheet();
+            }}
+          >
+            <input
+              type="text"
+              className="arbor-new-sheet-name"
+              data-testid="new-sheet-name"
+              placeholder="New sheet name…"
+              aria-label="New sheet name"
+              value={newName}
+              onChange={(e) => {
+                setNewName(e.target.value);
+                if (createError) setCreateError(null);
+              }}
+            />
+            <button
+              type="submit"
+              className="arbor-new-sheet-create"
+              data-testid="new-sheet-create"
+              disabled={creating || newName.trim() === ""}
+            >
+              {creating ? "Creating…" : "Create"}
+            </button>
+          </form>
         </div>
+        {createError && (
+          <p role="alert" className="arbor-new-sheet-error" data-testid="new-sheet-error">
+            {createError}
+          </p>
+        )}
 
         {sheets === null ? (
           <p data-testid="sheet-list-loading">Loading…</p>
