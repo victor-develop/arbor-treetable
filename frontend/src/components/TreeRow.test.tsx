@@ -41,9 +41,11 @@ function makeRow(over?: Partial<Row["node"]>): Row {
 function renderRow(over?: {
   node?: Partial<Row["node"]>;
   onAddChild?: (n: unknown) => void;
+  onAddSibling?: (n: unknown) => void;
   onDelete?: (n: unknown) => void;
 }) {
   const onAddChild = over?.onAddChild ?? vi.fn();
+  const onAddSibling = over?.onAddSibling ?? vi.fn();
   const row = makeRow(over?.node);
   render(
     <table>
@@ -60,12 +62,13 @@ function renderRow(over?: {
           onDragStart={() => {}}
           onDrop={() => {}}
           onAddChild={onAddChild}
+          onAddSibling={onAddSibling}
           onDelete={over?.onDelete}
         />
       </tbody>
     </table>,
   );
-  return { onAddChild, row };
+  return { onAddChild, onAddSibling, row };
 }
 
 describe("TreeRow add-child control (PART C)", () => {
@@ -88,6 +91,22 @@ describe("TreeRow add-child control (PART C)", () => {
     renderRow({ node: { can_change_structure: true }, onDelete: vi.fn() });
     expect(screen.getByTestId("add-child-X")).toBeInTheDocument();
     expect(screen.getByTestId("delete-node-X")).toBeInTheDocument();
+  });
+
+  it("renders an add-sibling button and calls onAddSibling(node) on click", () => {
+    const { onAddSibling, row } = renderRow();
+    const btn = screen.getByTestId("add-sibling-X");
+    fireEvent.click(btn);
+    expect(onAddSibling).toHaveBeenCalledWith(row.node);
+  });
+
+  it("orders the actions cluster +sibling, +child, delete", () => {
+    renderRow({ node: { can_change_structure: true }, onDelete: vi.fn() });
+    const cluster = screen.getByTestId("add-sibling-X").closest("td")!;
+    const actionTestIds = Array.from(
+      cluster.querySelectorAll("[data-testid]"),
+    ).map((el) => el.getAttribute("data-testid"));
+    expect(actionTestIds).toEqual(["add-sibling-X", "add-child-X", "delete-node-X"]);
   });
 
   it("renders no add-child button when onAddChild is not supplied", () => {

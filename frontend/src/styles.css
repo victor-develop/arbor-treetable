@@ -611,6 +611,19 @@ body {
   width: 1%; /* shrink to content; grows only for the confirm cluster */
   text-align: right;
   white-space: nowrap;
+  /* Hover-revealed action cluster: hidden by default so the per-row +sibling /
+     +child / delete buttons don't add permanent visual noise. Revealed on row
+     hover AND on :focus-within (keyboard reachability). opacity/visibility (NOT
+     display:none) so focus-within can still move into the buttons and reveal
+     them. */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease, visibility 0.12s ease;
+}
+.arbor-row:hover .arbor-actions-cell,
+.arbor-actions-cell:focus-within {
+  opacity: 1;
+  visibility: visible;
 }
 .arbor-actions-cell .arbor-row-confirm {
   justify-content: flex-end;
@@ -619,7 +632,7 @@ body {
   border: none !important;
   background: none !important;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.75;
   color: var(--ink-subtle);
   display: inline-flex;
   align-items: center;
@@ -628,9 +641,6 @@ body {
   height: 26px;
   padding: 0 !important;
   border-radius: var(--r-sm);
-}
-.arbor-row:hover .arbor-row-delete {
-  opacity: 0.75;
 }
 .arbor-row-delete:hover {
   opacity: 1;
@@ -2557,7 +2567,7 @@ body {
   border: none !important;
   background: none !important;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.75;
   color: var(--ink-subtle);
   display: inline-flex;
   align-items: center;
@@ -2567,9 +2577,6 @@ body {
   padding: 0 !important;
   border-radius: var(--r-sm);
   margin-right: 2px;
-}
-.arbor-row:hover .arbor-row-add {
-  opacity: 0.75;
 }
 .arbor-row-add:hover {
   opacity: 1;
