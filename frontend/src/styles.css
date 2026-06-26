@@ -158,7 +158,10 @@ body {
 .arbor-toolbar {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* The add-column form is now a labeled, taller cluster; top-align it with the
+     View/density controls so their tops share a baseline (not vertically centered
+     against the much-taller form). */
+  align-items: flex-start;
   gap: 12px;
 }
 .arbor-toolbar .arbor-add-column {
@@ -318,20 +321,94 @@ body {
   gap: 8px;
 }
 
-/* Add-column form: inline field row. */
+/* Add-column form: a labeled field grid with stable tracks so the controls align
+   into columns (field | label | type | owner | submit) and wrap predictably,
+   replacing the old ragged flex-wrap. The fixed `auto` submit track + grid layout
+   means revealing the split-options row (its own full-width row, below) never
+   shifts the submit relative to the field row — the click target stays put. */
 .arbor-add-column {
+  display: grid;
+  grid-template-columns: 1fr 1fr 152px 1fr auto;
+  gap: 8px 8px;
+  align-items: end; /* labels sit above; control baselines align along the row */
+}
+/* Eyebrow sits on its own full-width row above the fields (only in suggest mode). */
+.arbor-ac-eyebrow {
+  grid-column: 1 / -1;
+  order: -1; /* always the top row, regardless of DOM position */
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+/* The field groups inherit the shared `.arbor-field` column stack; reset the
+   grow/shrink flex hints (meant for the settings dialog) so each occupies exactly
+   one grid track. */
+.arbor-add-column .arbor-field {
+  flex: none;
+}
+/* Normalize every control to one height (32px) — inputs previously rendered at
+   34px against the 32px select/button, breaking the row rhythm. */
+.arbor-add-column input,
+.arbor-add-column select,
+.arbor-add-column [data-testid="ac-submit"] {
+  height: 32px;
+  box-sizing: border-box;
+}
+/* Submit stays in the FIELD row's last (auto) track — order:1 places it right
+   after the order:0 fields but BEFORE the order:2 options row, so the optional
+   options row flows BELOW the submit and revealing it never moves the submit. */
+.arbor-add-column [data-testid="ac-submit"] {
+  order: 1;
+  align-self: end;
+}
+/* Split-type options editor: its OWN full-width row, ordered AFTER the submit
+   (order:2 > submit's order:1) so it appears on a new row beneath the field row —
+   injecting it grows the form downward without moving the submit at all. */
+.arbor-ac-options-row {
+  grid-column: 1 / -1;
+  order: 2;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+}
+.arbor-ac-options-edit {
+  display: flex;
   gap: 8px;
   align-items: center;
+}
+.arbor-ac-options-row ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.arbor-ac-options-row li {
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: var(--r);
+  padding: 2px 8px;
 }
 .arbor-add-column [data-testid="ac-duplicate"] {
   color: var(--red);
   font-size: 12px;
 }
+/* Suggest signal: in suggest mode the submit mirrors the amber treatment used on
+   the column-settings Save (`.arbor-cs-save`), so a routed-for-approval action
+   reads consistently across both schema surfaces. */
+.arbor-add-column[data-mode="suggest"] [data-testid="ac-submit"] {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber-border);
+}
 /* The add-column submit is a secondary action (inherits the white+hairline base
-   button), so the toolbar reads as one consistent secondary family; its disabled
-   empty-form state recedes (base :disabled opacity) rather than dominating. */
+   button) in direct mode, so the toolbar reads as one consistent secondary family;
+   its disabled empty-form state recedes (base :disabled opacity) rather than
+   dominating. */
 
 /* ------------------------------------------------------------- tree grid -- */
 /* Horizontal+vertical scroll viewport: the table grows to its content width and
@@ -1224,10 +1301,19 @@ body {
   flex-basis: 100%;
   margin-bottom: -2px;
 }
-.arbor-column-settings [data-testid="cs-save"][data-mode="suggest"] {
+.arbor-column-settings [data-testid="cs-save"][data-mode="suggest"],
+.arbor-column-settings [data-testid="cs-grant-save"][data-mode="suggest"] {
   background: var(--amber-bg) !important;
   color: var(--amber) !important;
-  border: 1px solid var(--amber-border);
+  border: 1px solid var(--amber-border) !important;
+}
+/* Owned-by caption: a quiet one-line note under the modal header telling the
+   non-owner that everything they do here routes for approval (matches the amber
+   suggest framing the action buttons get below). */
+.arbor-cs-owned-by {
+  margin: 0;
+  font-size: 12px;
+  color: var(--amber);
 }
 .arbor-column-settings [data-testid="cs-label-guard"] {
   color: var(--amber);
@@ -1255,6 +1341,15 @@ body {
   border: 1px solid var(--red-border) !important;
   color: var(--red) !important;
   background: var(--red-bg) !important;
+}
+/* In a non-owned column the initial Delete trigger reads as a suggest action too
+   (amber), so every action in the dialog consistently signals 'routed for
+   approval' rather than a direct destructive delete. Wins over the red rule above
+   via the extra [data-mode] attribute selector + matching !important. */
+.arbor-column-settings [data-testid="cs-delete"][data-mode="suggest"] {
+  border: 1px solid var(--amber-border) !important;
+  color: var(--amber) !important;
+  background: var(--amber-bg) !important;
 }
 .arbor-cs-confirm {
   display: inline-flex;
@@ -2076,10 +2171,11 @@ body {
     justify-content: center;
     width: 100%;
   }
-  /* Add-column form stacks (single column) so fields read top-to-bottom instead
-     of a ragged inline wrap; each control spans the form width. */
+  /* Add-column form collapses to a single-column grid so labeled fields read
+     top-to-bottom on a phone; each control spans the form width and the submit
+     drops to the end (its order:99 keeps it last). */
   .arbor-add-column {
-    flex-direction: column;
+    grid-template-columns: 1fr;
     align-items: stretch;
     gap: 8px;
   }

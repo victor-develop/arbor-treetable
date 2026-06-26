@@ -64,10 +64,18 @@ function decisionLead(cr: ChangeRequestView): string | null {
   const items = cr.changes ?? [];
   const p = (items.length > 0 ? items[0].payload : cr.payload) || {};
   const node = p.node;
+  // Prefer a human-supplied label over the machine field key for column CRs:
+  // the add-column payload carries `label` directly, the update-column payload
+  // tucks it under `patch.label`. Fall back to the humanized field/column key
+  // only when no label is present (UX P2 — read "UX Review Probe", not the raw
+  // "Ux_review_probe" key).
+  const patch = (p.patch && typeof p.patch === "object" ? (p.patch as Record<string, unknown>) : undefined);
+  const label = p.label ?? patch?.label;
   const column = p.column ?? p.field;
   const parts: string[] = [];
   if (typeof node === "string" && node) parts.push(humanize(node));
-  if (typeof column === "string" && column) parts.push(humanize(column));
+  if (typeof label === "string" && label) parts.push(label);
+  else if (typeof column === "string" && column) parts.push(humanize(column));
   // Structural move: lead with the destination parent instead of a value.
   if (p.new_parent !== undefined) {
     const dest = p.new_parent === null ? "root" : humanize(p.new_parent);
