@@ -54,6 +54,14 @@ export type TreeTableProps = {
   // Add a SIBLING of a given node (a new node under that node's parent).
   // Optional; shown for everyone (a non-owner click files a CR) — NOT gated.
   onAddSibling?: (node: SnapshotNode) => void;
+  // Put a node's LABEL cell into inline edit (the per-row edit-pencil). Optional;
+  // shown for everyone (a non-owner's commit files a CR) — NOT gated.
+  onEdit?: (node: SnapshotNode) => void;
+  // Which node's label cell should currently open its inline editor, plus a
+  // monotonic signal the shell bumps on each edit-pencil click. The matching
+  // row receives the signal so its label Cell enters edit mode + focuses.
+  editingNode?: string | null;
+  editSignal?: number;
   // Add a ROOT-level node (parent=null) — the toolbar "+ Add node" button.
   onAddNode?: () => void;
 };
@@ -75,10 +83,11 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     onDeleteNode,
     onAddChild,
     onAddSibling,
+    onEdit,
+    editingNode,
+    editSignal,
     onAddNode,
   } = props;
-  // Whether the row actions column exists at all (add-sibling/add-child/delete).
-  const hasRowActions = !!onAddSibling || !!onAddChild || !!onDeleteNode;
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
@@ -177,7 +186,6 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         {dataColumns.map((c) => (
           <col key={c.name} style={{ width: colWidth(c) }} />
         ))}
-        {hasRowActions && <col className="arbor-col-actions" />}
       </colgroup>
       <thead>
         <tr>
@@ -208,7 +216,6 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               </span>
             </th>
           ))}
-          {hasRowActions && <th className="arbor-actions-head" aria-label="Actions" />}
         </tr>
       </thead>
       <tbody>
@@ -231,7 +238,9 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             onDrop={handleDrop}
             onAddChild={onAddChild}
             onAddSibling={onAddSibling}
+            onEdit={onEdit}
             onDelete={onDeleteNode}
+            editSignal={editingNode === row.node.name ? editSignal : undefined}
           />
         ))}
       </tbody>

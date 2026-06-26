@@ -43,9 +43,11 @@ function renderRow(over?: {
   onAddChild?: (n: unknown) => void;
   onAddSibling?: (n: unknown) => void;
   onDelete?: (n: unknown) => void;
+  onEdit?: (n: unknown) => void;
 }) {
   const onAddChild = over?.onAddChild ?? vi.fn();
   const onAddSibling = over?.onAddSibling ?? vi.fn();
+  const onEdit = over?.onEdit ?? vi.fn();
   const row = makeRow(over?.node);
   render(
     <table>
@@ -63,12 +65,13 @@ function renderRow(over?: {
           onDrop={() => {}}
           onAddChild={onAddChild}
           onAddSibling={onAddSibling}
+          onEdit={onEdit}
           onDelete={over?.onDelete}
         />
       </tbody>
     </table>,
   );
-  return { onAddChild, onAddSibling, row };
+  return { onAddChild, onAddSibling, onEdit, row };
 }
 
 describe("TreeRow add-child control (PART C)", () => {
@@ -100,13 +103,39 @@ describe("TreeRow add-child control (PART C)", () => {
     expect(onAddSibling).toHaveBeenCalledWith(row.node);
   });
 
-  it("orders the actions cluster +sibling, +child, delete", () => {
-    renderRow({ node: { can_change_structure: true }, onDelete: vi.fn() });
-    const cluster = screen.getByTestId("add-sibling-X").closest("td")!;
+  it("orders the actions cluster +sibling, +child, edit, delete", () => {
+    renderRow({ node: { can_change_structure: true }, onDelete: vi.fn(), onEdit: vi.fn() });
+    const cluster = screen.getByTestId("add-sibling-X").closest(".arbor-row-actions")!;
     const actionTestIds = Array.from(
       cluster.querySelectorAll("[data-testid]"),
     ).map((el) => el.getAttribute("data-testid"));
-    expect(actionTestIds).toEqual(["add-sibling-X", "add-child-X", "delete-node-X"]);
+    expect(actionTestIds).toEqual([
+      "add-sibling-X",
+      "add-child-X",
+      "edit-node-X",
+      "delete-node-X",
+    ]);
+  });
+
+  it("renders the action cluster INSIDE the frozen-left label cell (always visible, no trailing actions td)", () => {
+    renderRow({ node: { can_change_structure: true }, onDelete: vi.fn(), onEdit: vi.fn() });
+    // The cluster lives inside the .arbor-label-cell <td> (the frozen-left
+    // INITIATIVE column), NOT a trailing actions column.
+    const labelCell = screen.getByTestId("label-X").closest("td.arbor-label-cell");
+    expect(labelCell).not.toBeNull();
+    expect(labelCell!.querySelector('[data-testid="add-sibling-X"]')).not.toBeNull();
+    expect(labelCell!.querySelector('[data-testid="add-child-X"]')).not.toBeNull();
+    expect(labelCell!.querySelector('[data-testid="edit-node-X"]')).not.toBeNull();
+    expect(labelCell!.querySelector('[data-testid="delete-node-X"]')).not.toBeNull();
+    // No trailing actions cell exists anymore.
+    expect(document.querySelector("td.arbor-actions-cell")).toBeNull();
+  });
+
+  it("renders an edit button and calls onEdit(node) on click", () => {
+    const { onEdit, row } = renderRow();
+    const btn = screen.getByTestId("edit-node-X");
+    fireEvent.click(btn);
+    expect(onEdit).toHaveBeenCalledWith(row.node);
   });
 
   it("renders no add-child button when onAddChild is not supplied", () => {

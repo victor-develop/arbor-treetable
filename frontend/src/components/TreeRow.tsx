@@ -7,7 +7,7 @@ import { useState } from "react";
 import type { Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
-import { CornerDownRightIcon, PlusIcon, TrashIcon } from "./icons";
+import { CornerDownRightIcon, PencilIcon, PlusIcon, TrashIcon } from "./icons";
 
 export function TreeRow({
   row,
@@ -24,7 +24,9 @@ export function TreeRow({
   onDrop,
   onAddChild,
   onAddSibling,
+  onEdit,
   onDelete,
+  editSignal,
 }: {
   row: Row;
   columns: SnapshotColumn[];
@@ -34,6 +36,9 @@ export function TreeRow({
   pendingTitle?: (node: string, column: string) => string | undefined;
   pendingCount?: (node: string, column: string) => number;
   pendingMove: boolean;
+  // External edit signal for THIS row's label cell — bumped by the parent when
+  // the edit-pencil is clicked for this node, opening its inline label editor.
+  editSignal?: number;
   onToggle: (node: string) => void;
   onCommitCell: (node: SnapshotNode, column: SnapshotColumn, value: unknown) => void;
   onDragStart: (node: SnapshotNode) => void;
@@ -46,6 +51,10 @@ export function TreeRow({
   // rendered for EVERYONE when supplied (a non-owner click files a CR), exactly
   // like add-child — NOT gated on can_change_structure.
   onAddSibling?: (node: SnapshotNode) => void;
+  // Put this node's LABEL cell into inline edit. Optional; rendered for EVERYONE
+  // when supplied (a non-owner's commit files a CR, like any cell edit) — NOT
+  // gated on can_change_structure.
+  onEdit?: (node: SnapshotNode) => void;
   // Delete this node (two-step confirm). Optional; rendered only when supplied
   // AND the viewer holds structural authority over the node.
   onDelete?: (node: SnapshotNode) => void;
@@ -107,11 +116,94 @@ export function TreeRow({
               pending={pendingCell(node.name, labelCol.name)}
               pendingTitle={pendingTitle?.(node.name, labelCol.name)}
               pendingCount={pendingCount?.(node.name, labelCol.name)}
+              startEditing={editSignal}
               onCommit={(v) => onCommitCell(node, labelCol, v)}
             />
           </span>
         ) : (
           <span data-testid={`label-${node.name}`}>{labelText}</span>
+        )}
+        {/* Per-row action cluster lives INSIDE the frozen-left label cell so it
+            is always reachable with zero horizontal scroll (the trailing actions
+            column sat ~2184px off-screen). Right-aligned (margin-left:auto),
+            hover/focus-revealed, with an opaque backdrop so it reads cleanly over
+            the label. Order: +sibling, +child, edit, delete. */}
+        {(onAddSibling || onAddChild || onEdit || onDelete) && (
+          <span className="arbor-row-actions">
+            {onAddSibling && (
+              <button
+                type="button"
+                className="arbor-row-add"
+                data-testid={`add-sibling-${node.name}`}
+                title="Add sibling"
+                aria-label={`Add sibling of ${labelText}`}
+                onClick={() => onAddSibling(node)}
+              >
+                <PlusIcon size={14} />
+              </button>
+            )}
+            {onAddChild && (
+              <button
+                type="button"
+                className="arbor-row-add"
+                data-testid={`add-child-${node.name}`}
+                title="Add child"
+                aria-label={`Add child under ${labelText}`}
+                onClick={() => onAddChild(node)}
+              >
+                <CornerDownRightIcon size={14} />
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                className="arbor-row-edit"
+                data-testid={`edit-node-${node.name}`}
+                title="Edit name"
+                aria-label={`Edit ${labelText}`}
+                onClick={() => onEdit(node)}
+              >
+                <PencilIcon size={14} />
+              </button>
+            )}
+            {onDelete &&
+              node.can_change_structure &&
+              (!confirmDelete ? (
+                <button
+                  type="button"
+                  className="arbor-row-delete"
+                  data-testid={`delete-node-${node.name}`}
+                  title="Delete node"
+                  aria-label={`Delete ${labelText}`}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <TrashIcon size={14} />
+                </button>
+              ) : (
+                <span className="arbor-row-confirm">
+                  <span className="arbor-row-confirm-label">Delete {labelText}?</span>
+                  <button
+                    type="button"
+                    className="arbor-row-delete-confirm"
+                    data-testid={`delete-node-confirm-${node.name}`}
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      onDelete(node);
+                    }}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="arbor-row-delete-cancel"
+                    aria-label="Cancel delete"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ))}
+          </span>
         )}
       </td>
       {columns
@@ -148,71 +240,6 @@ export function TreeRow({
             </td>
           );
         })}
-      {(onAddSibling || onAddChild || onDelete) && (
-        <td className="arbor-actions-cell">
-          {onAddSibling && (
-            <button
-              type="button"
-              className="arbor-row-add"
-              data-testid={`add-sibling-${node.name}`}
-              title="Add sibling"
-              aria-label={`Add sibling of ${labelText}`}
-              onClick={() => onAddSibling(node)}
-            >
-              <PlusIcon size={14} />
-            </button>
-          )}
-          {onAddChild && (
-            <button
-              type="button"
-              className="arbor-row-add"
-              data-testid={`add-child-${node.name}`}
-              title="Add child"
-              aria-label={`Add child under ${labelText}`}
-              onClick={() => onAddChild(node)}
-            >
-              <CornerDownRightIcon size={14} />
-            </button>
-          )}
-          {onDelete &&
-            node.can_change_structure &&
-            (!confirmDelete ? (
-              <button
-                type="button"
-                className="arbor-row-delete"
-                data-testid={`delete-node-${node.name}`}
-                title="Delete node"
-                aria-label={`Delete ${labelText}`}
-                onClick={() => setConfirmDelete(true)}
-              >
-                <TrashIcon size={14} />
-              </button>
-            ) : (
-              <span className="arbor-row-confirm">
-                <span className="arbor-row-confirm-label">Delete {labelText}?</span>
-                <button
-                  type="button"
-                  className="arbor-row-delete-confirm"
-                  data-testid={`delete-node-confirm-${node.name}`}
-                  onClick={() => {
-                    setConfirmDelete(false);
-                    onDelete(node);
-                  }}
-                >
-                  Delete
-                </button>
-                <button
-                  type="button"
-                  className="arbor-row-delete-cancel"
-                  aria-label="Cancel delete"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  Cancel
-                </button>
-              </span>
-            ))}
-        </td>
-      )}
     </tr>
   );
 }
