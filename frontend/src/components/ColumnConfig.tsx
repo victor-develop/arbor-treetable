@@ -7,6 +7,16 @@ import { useState } from "react";
 import type { ColumnType, SnapshotColumn } from "../api";
 import { COLUMN_TYPES } from "../lib/capabilities";
 
+// Derive a stable field-key slug from a human label: lowercase, non-alphanumeric
+// runs collapse to a single "_", and leading/trailing "_" are trimmed.
+// e.g. "Revenue Forecast ($)" -> "revenue_forecast".
+function slugify(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 export function AddColumnForm({
   sheet,
   existingFields,
@@ -18,8 +28,15 @@ export function AddColumnForm({
   canAdd: boolean;
   onSubmit: (params: Record<string, unknown>) => void;
 }): JSX.Element {
+  // Collapsed by default: the toolbar shows just a compact toggle; expanding
+  // reveals the full aligned grid in place (NOT a modal). Self-contained — no
+  // App.tsx change needed.
+  const [open, setOpen] = useState(false);
   const [field, setField] = useState("");
   const [label, setLabel] = useState("");
+  // keyDirty: the user has taken over the Field key. Once true we stop
+  // auto-slugging from the Label (Notion/Airtable pattern).
+  const [keyDirty, setKeyDirty] = useState(false);
   const [type, setType] = useState<ColumnType>("text");
   const [columnOwner, setColumnOwner] = useState("");
   const [options, setOptions] = useState<string[]>([]);
@@ -34,10 +51,23 @@ export function AddColumnForm({
   const reset = () => {
     setField("");
     setLabel("");
+    setKeyDirty(false);
     setType("text");
     setColumnOwner("");
     setOptions([]);
     setOptDraft("");
+  };
+
+  // Typing the Label auto-fills the Field key (until the user edits the key).
+  const onLabelChange = (next: string) => {
+    setLabel(next);
+    if (!keyDirty) setField(slugify(next));
+  };
+
+  // First manual key edit makes it sticky and stops Label sync.
+  const onFieldChange = (next: string) => {
+    setKeyDirty(true);
+    setField(next);
   };
 
   const submit = () => {
@@ -51,10 +81,26 @@ export function AddColumnForm({
     };
     if (isSplit) params.options = { groups: [{ label, options }] };
     onSubmit(params);
-    // Clear local state so the next add starts fresh — avoids accidentally
-    // re-submitting the same suggestion (which would route a duplicate).
+    // Clear local state + collapse so the next add starts fresh — avoids
+    // accidentally re-submitting the same suggestion (which would route a
+    // duplicate). Resetting also clears keyDirty so the slug syncs again.
     reset();
+    setOpen(false);
   };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="arbor-add-column-toggle"
+        data-testid="add-column-toggle"
+        data-mode={canAdd ? "direct" : "suggest"}
+        onClick={() => setOpen(true)}
+      >
+        + Add column
+      </button>
+    );
+  }
 
   return (
     <form
@@ -72,26 +118,32 @@ export function AddColumnForm({
         </span>
       )}
       <label className="arbor-field">
-        <span className="arbor-field-label">Field key</span>
+        <span className="arbor-field-label">Label</span>
         <input
+          data-testid="ac-label"
+          value={label}
+          onChange={(e) => onLabelChange(e.target.value)}
+        />
+      </label>
+      <div className="arbor-field arbor-ac-key">
+        <label className="arbor-field-label" htmlFor="ac-field-input">
+          Field key
+        </label>
+        <input
+          id="ac-field-input"
+          className="arbor-ac-key-input"
           data-testid="ac-field"
           value={field}
-          onChange={(e) => setField(e.target.value)}
+          placeholder="auto · lowercase"
+          title="Permanent id — auto-generated from the Label, editable, can't change after the column is created."
+          onChange={(e) => onFieldChange(e.target.value)}
         />
         {duplicate && (
           <span role="alert" data-testid="ac-duplicate">
             Field key already exists
           </span>
         )}
-      </label>
-      <label className="arbor-field">
-        <span className="arbor-field-label">Label</span>
-        <input
-          data-testid="ac-label"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-      </label>
+      </div>
       <label className="arbor-field arbor-ac-type">
         <span className="arbor-field-label">Type</span>
         <select
@@ -146,6 +198,17 @@ export function AddColumnForm({
       )}
       <button type="submit" data-testid="ac-submit" disabled={!canSubmit}>
         {canAdd ? "Add column" : "Suggest column"}
+      </button>
+      <button
+        type="button"
+        className="arbor-ac-cancel"
+        data-testid="ac-cancel"
+        onClick={() => {
+          reset();
+          setOpen(false);
+        }}
+      >
+        Cancel
       </button>
     </form>
   );
