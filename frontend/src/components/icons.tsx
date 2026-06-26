@@ -57,6 +57,15 @@ export function PlusIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function CornerDownRightIcon(props: IconProps): JSX.Element {
+  return (
+    <Svg {...props}>
+      <polyline points="15 10 20 15 15 20" />
+      <path d="M4 4v7a4 4 0 0 0 4 4h12" />
+    </Svg>
+  );
+}
+
 export function TrashIcon(props: IconProps): JSX.Element {
   return (
     <Svg {...props}>

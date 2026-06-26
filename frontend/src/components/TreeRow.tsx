@@ -7,7 +7,7 @@ import { useState } from "react";
 import type { Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
-import { PlusIcon, TrashIcon } from "./icons";
+import { CornerDownRightIcon, PlusIcon, TrashIcon } from "./icons";
 
 export function TreeRow({
   row,
@@ -23,6 +23,7 @@ export function TreeRow({
   onDragStart,
   onDrop,
   onAddChild,
+  onAddSibling,
   onDelete,
 }: {
   row: Row;
@@ -41,6 +42,10 @@ export function TreeRow({
   // (a non-owner click files a CR, same as "Suggest column") — NOT gated on
   // can_change_structure, unlike delete.
   onAddChild?: (node: SnapshotNode) => void;
+  // Add a SIBLING of this node (a new node under the same parent). Optional;
+  // rendered for EVERYONE when supplied (a non-owner click files a CR), exactly
+  // like add-child — NOT gated on can_change_structure.
+  onAddSibling?: (node: SnapshotNode) => void;
   // Delete this node (two-step confirm). Optional; rendered only when supplied
   // AND the viewer holds structural authority over the node.
   onDelete?: (node: SnapshotNode) => void;
@@ -143,8 +148,20 @@ export function TreeRow({
             </td>
           );
         })}
-      {(onAddChild || onDelete) && (
+      {(onAddSibling || onAddChild || onDelete) && (
         <td className="arbor-actions-cell">
+          {onAddSibling && (
+            <button
+              type="button"
+              className="arbor-row-add"
+              data-testid={`add-sibling-${node.name}`}
+              title="Add sibling"
+              aria-label={`Add sibling of ${labelText}`}
+              onClick={() => onAddSibling(node)}
+            >
+              <PlusIcon size={14} />
+            </button>
+          )}
           {onAddChild && (
             <button
               type="button"
@@ -154,7 +171,7 @@ export function TreeRow({
               aria-label={`Add child under ${labelText}`}
               onClick={() => onAddChild(node)}
             >
-              <PlusIcon size={14} />
+              <CornerDownRightIcon size={14} />
             </button>
           )}
           {onDelete &&

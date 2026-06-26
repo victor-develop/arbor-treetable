@@ -96,6 +96,100 @@ describe("column-add CR lead prefers the human label (P2)", () => {
   });
 });
 
+describe("structural node CR leads are legible (review-inbox bug)", () => {
+  it("an ADD node CR names the parent and is never the empty 'node-structure()'", () => {
+    const addCr: ChangeRequestView = {
+      name: "CR-ADD",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "add",
+      target_kind: "node-structure",
+      payload: { parent: "node:core-platform", after: null, values: { name: "Win-back Campaign" }, _action_id: "a1" },
+    };
+    render(
+      <ChangeRequestPanel cr={addCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-ADD");
+    expect(lead).not.toHaveTextContent("node-structure()");
+    expect(lead).toHaveTextContent("Win-back Campaign");
+    expect(lead).toHaveTextContent("Core-platform");
+  });
+
+  it("an ADD node CR with a null parent reads 'under root'", () => {
+    const addCr: ChangeRequestView = {
+      name: "CR-ADD-ROOT",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "add",
+      target_kind: "node-structure",
+      payload: { parent: null, after: null, values: {}, _action_id: "a2" },
+    };
+    render(
+      <ChangeRequestPanel cr={addCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-ADD-ROOT");
+    expect(lead).not.toHaveTextContent("node-structure()");
+    expect(lead).toHaveTextContent("under root");
+  });
+
+  it("a DELETE node CR leads with the destructive verb and flags cascade", () => {
+    const delCr: ChangeRequestView = {
+      name: "CR-DEL",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "delete",
+      target_kind: "node-structure",
+      payload: { node: "node:legacy-promo", cascade: true },
+    };
+    render(
+      <ChangeRequestPanel cr={delCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-DEL");
+    expect(lead).not.toHaveTextContent("node-structure()");
+    expect(lead).toHaveTextContent("Delete");
+    expect(lead).toHaveTextContent("Legacy-promo");
+    expect(lead).toHaveTextContent("(+ descendants)");
+  });
+
+  it("a MOVE node CR still reads its '→ under …' destination lead", () => {
+    const moveCr: ChangeRequestView = {
+      name: "CR-MOVE",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "move",
+      target_kind: "node-structure",
+      payload: { node: "node:win-back-campaign", new_parent: "node:core-platform" },
+    };
+    render(
+      <ChangeRequestPanel cr={moveCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    const lead = screen.getByTestId("cr-rowsummary-CR-MOVE");
+    expect(lead).toHaveTextContent("→ under Core-platform");
+    expect(lead).toHaveTextContent("Win-back-campaign");
+  });
+
+  it("includes parent in the raw Details op line for an ADD node CR", () => {
+    const addCr: ChangeRequestView = {
+      name: "CR-ADD-RAW",
+      requester: "E",
+      resolved_approver: "C",
+      status: "proposed",
+      operation: "add",
+      target_kind: "node-structure",
+      payload: { parent: "node:core-platform", values: { name: "Win-back Campaign" } },
+    };
+    render(
+      <ChangeRequestPanel cr={addCr} viewer="C" onApprove={() => {}} onReject={() => {}} onWithdraw={() => {}} />,
+    );
+    fireEvent.click(screen.getByTestId("cr-expand-CR-ADD-RAW"));
+    expect(screen.getByTestId("cr-meta-CR-ADD-RAW")).toHaveTextContent("parent=");
+  });
+});
+
 describe("approve idempotency (WEB_UI-089)", () => {
   it("double-clicking Approve dispatches approveChange once", () => {
     const onApprove = vi.fn();

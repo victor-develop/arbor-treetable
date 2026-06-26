@@ -163,6 +163,14 @@ describe("TreeTable CREATE affordances (PART C)", () => {
     expect(onAddChild).toHaveBeenCalledWith(p2);
   });
 
+  it("threads onAddSibling to each row; clicking a row's add-sibling calls it with the node", () => {
+    const onAddSibling = vi.fn();
+    const { snap } = renderTable({ onAddSibling });
+    fireEvent.click(screen.getByTestId("add-sibling-P2"));
+    const p2 = snap.nodes.find((n) => n.name === "P2");
+    expect(onAddSibling).toHaveBeenCalledWith(p2);
+  });
+
   it("omits the root add button when onAddNode is not supplied", () => {
     renderTable();
     expect(screen.queryByTestId("add-root-node")).not.toBeInTheDocument();

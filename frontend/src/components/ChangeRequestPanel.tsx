@@ -12,7 +12,7 @@ import type { ChangeRequestItem, ChangeRequestView } from "../api";
 export type { ChangeRequestItem, ChangeRequestView };
 
 function payloadBits(p: Record<string, unknown>): string {
-  return ["node", "column", "new_parent", "field", "value", "patch"]
+  return ["node", "column", "parent", "new_parent", "field", "value", "patch"]
     .filter((k) => p[k] !== undefined && p[k] !== null)
     .map((k) => `${k}=${JSON.stringify(p[k])}`)
     .join(", ");
@@ -61,9 +61,35 @@ function fmtValue(v: unknown): string {
 // decision-shaped (e.g. an unusual op) so the row falls back to the raw summary.
 function decisionLead(cr: ChangeRequestView): string | null {
   // Prefer the first change's payload for a batch; else the CR's own payload.
+  // operation/target_kind travel with that same source (per-item for a batch).
   const items = cr.changes ?? [];
-  const p = (items.length > 0 ? items[0].payload : cr.payload) || {};
+  const src = items.length > 0 ? items[0] : cr;
+  const p = src.payload || {};
+  const op = src.operation;
+  const kind = src.target_kind;
   const node = p.node;
+
+  // Structural node ops (add/delete/move) carry parent/node/values — NOT
+  // column/value — so they get their own legible leads instead of the empty
+  // "node-structure()" the generic path would produce (review-inbox bug).
+  if (kind === "node-structure") {
+    if (op === "add") {
+      const values = p.values && typeof p.values === "object" ? (p.values as Record<string, unknown>) : undefined;
+      // Prefer a human node name from the label-column value in `values`.
+      const name = values
+        ? values.name ?? values.label ?? values.title ?? Object.values(values).find((v) => typeof v === "string" && v)
+        : undefined;
+      const dest = p.parent === undefined || p.parent === null ? "root" : humanize(p.parent);
+      return typeof name === "string" && name
+        ? `+ New node "${name}" under ${dest}`
+        : `+ New node under ${dest}`;
+    }
+    if (op === "delete") {
+      const target = typeof node === "string" && node ? humanize(node) : "node";
+      return p.cascade ? `Delete ${target} (+ descendants)` : `Delete ${target}`;
+    }
+    // move falls through to the generic new_parent destination lead below.
+  }
   // Prefer a human-supplied label over the machine field key for column CRs:
   // the add-column payload carries `label` directly, the update-column payload
   // tucks it under `patch.label`. Fall back to the humanized field/column key

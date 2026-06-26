@@ -51,6 +51,9 @@ export type TreeTableProps = {
   // Add a child under a given node (per-row "+" affordance). Optional; shown
   // for everyone (a non-owner click files a CR) — NOT gated on ownership.
   onAddChild?: (node: SnapshotNode) => void;
+  // Add a SIBLING of a given node (a new node under that node's parent).
+  // Optional; shown for everyone (a non-owner click files a CR) — NOT gated.
+  onAddSibling?: (node: SnapshotNode) => void;
   // Add a ROOT-level node (parent=null) — the toolbar "+ Add node" button.
   onAddNode?: () => void;
 };
@@ -71,10 +74,11 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     onColumnSettings,
     onDeleteNode,
     onAddChild,
+    onAddSibling,
     onAddNode,
   } = props;
-  // Whether the row actions column exists at all (add-child and/or delete).
-  const hasRowActions = !!onAddChild || !!onDeleteNode;
+  // Whether the row actions column exists at all (add-sibling/add-child/delete).
+  const hasRowActions = !!onAddSibling || !!onAddChild || !!onDeleteNode;
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
@@ -226,6 +230,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             }}
             onDrop={handleDrop}
             onAddChild={onAddChild}
+            onAddSibling={onAddSibling}
             onDelete={onDeleteNode}
           />
         ))}

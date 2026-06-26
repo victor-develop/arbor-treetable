@@ -622,6 +622,7 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 onColumnSettings={setEditingColumn}
                 onDeleteNode={del}
                 onAddChild={(n) => addNode(n.name)}
+                onAddSibling={(n) => addNode(n.parent ?? null)}
                 onAddNode={() => addNode(null)}
               />
             </div>
