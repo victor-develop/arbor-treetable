@@ -2661,3 +2661,41 @@ body {
   font-size: 0.85rem;
   color: var(--arbor-error);
 }
+
+/* ── Global Roles admin (header button + modal) ───────────────────────────
+   Role data is site-wide, so role administration launches from an admin-only
+   header button (matching the Data / My-roles secondary-button family) into a
+   modal that reuses the shared .arbor-modal shell. */
+.arbor-roles-admin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.arbor-roles-admin-btn:hover {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--ink-subtle);
+}
+/* The roles modal is wider than the column-settings modal (it hosts the
+   applications inbox + grants + assign form) and scrolls when the queue is long. */
+.arbor-roles-modal {
+  min-width: 420px;
+  max-width: 560px;
+}
+.arbor-roles-modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+/* Drop the panel's own outer card chrome — the modal already supplies the frame;
+   keep the inner padding so the content breathes. */
+.arbor-roles-modal-body .arbor-roles {
+  padding: 16px;
+}
