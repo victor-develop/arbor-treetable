@@ -40,6 +40,10 @@ export type TreeTableProps = {
   pendingTitle?: (node: string, column: string) => string | undefined;
   // How many open suggestions target this cell (for the count badge).
   pendingCount?: (node: string, column: string) => number;
+  // Draft flow — does this cell carry an UNSUBMITTED local draft? Drives the
+  // cell's "unsaved draft" treatment (distinct from the pending dot). Optional so
+  // seeded/standalone renders need not supply it.
+  draftCell?: (node: string, column: string) => boolean;
   isPendingMove: (node: string) => boolean;
   onCommitCell: (node: SnapshotNode, column: SnapshotColumn, value: unknown) => void;
   onMove: (params: { node: string; new_parent: string | null; after: string | null }) => void;
@@ -76,6 +80,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     pendingCell,
     pendingTitle,
     pendingCount,
+    draftCell,
     isPendingMove,
     onCommitCell,
     onMove,
@@ -229,6 +234,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             pendingCell={pendingCell}
             pendingTitle={pendingTitle}
             pendingCount={pendingCount}
+            draftCell={draftCell}
             pendingMove={isPendingMove(row.node.name)}
             onToggle={onToggle}
             onCommitCell={onCommitCell}

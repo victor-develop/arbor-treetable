@@ -17,6 +17,7 @@ export function TreeRow({
   pendingCell,
   pendingTitle,
   pendingCount,
+  draftCell,
   pendingMove,
   onToggle,
   onCommitCell,
@@ -35,6 +36,8 @@ export function TreeRow({
   pendingCell: (node: string, column: string) => boolean;
   pendingTitle?: (node: string, column: string) => string | undefined;
   pendingCount?: (node: string, column: string) => number;
+  // Draft flow — does this cell carry an unsubmitted local draft?
+  draftCell?: (node: string, column: string) => boolean;
   pendingMove: boolean;
   // External edit signal for THIS row's label cell — bumped by the parent when
   // the edit-pencil is clicked for this node, opening its inline label editor.
@@ -133,6 +136,7 @@ export function TreeRow({
               pending={pendingCell(node.name, labelCol.name)}
               pendingTitle={pendingTitle?.(node.name, labelCol.name)}
               pendingCount={pendingCount?.(node.name, labelCol.name)}
+              draft={draftCell?.(node.name, labelCol.name)}
               startEditing={editSignal}
               onCommit={(v) => onCommitCell(node, labelCol, v)}
             />
@@ -251,6 +255,7 @@ export function TreeRow({
                   pending={pendingCell(node.name, c.name)}
                   pendingTitle={pendingTitle?.(node.name, c.name)}
                   pendingCount={pendingCount?.(node.name, c.name)}
+                  draft={draftCell?.(node.name, c.name)}
                   onCommit={(val) => onCommitCell(node, c, val)}
                 />
               )}

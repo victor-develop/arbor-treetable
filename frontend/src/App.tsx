@@ -23,6 +23,8 @@ import { GovernancePanel } from "./components/GovernancePanel";
 import { RolesModal } from "./components/RolesModal";
 import { RequestRoleControl } from "./components/RequestRoleControl";
 import { BulkActionBar } from "./components/BulkActionBar";
+import { DraftReviewBar } from "./components/DraftReviewBar";
+import { DraftReviewModal, type DraftRow } from "./components/DraftReviewModal";
 import { useSheet, cellKey } from "./hooks/useSheet";
 import { useCrSelection } from "./hooks/useCrSelection";
 import { TreeTable } from "./components/TreeTable";
@@ -257,13 +259,29 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
     [sheet.pending],
   );
 
+  // Decision 1A — branch the cell commit on the snapshot's per-column ACL hint
+  // (never re-deriving ACL): an OWNER (can_edit === true) commits directly via the
+  // existing updateCell dispatch (real-time, unchanged); a NON-OWNER (can_edit ===
+  // false) writes to the server-persisted draft box instead — the value shows
+  // locally immediately and is staged for ONE multi-change CR via the review bar.
+  // No more instant "Suggestion sent" toast + revert + dot on a single edit.
   const commitCell = (node: SnapshotNode, column: SnapshotColumn, value: unknown) => {
-    void sheet.dispatch(
-      "updateCell",
-      { sheet: sheetName, node: node.name, column: column.name, value },
-      { optimisticKey: cellKey(node.name, column.name), optimisticValue: value },
-    );
+    if (column.can_edit) {
+      void sheet.dispatch(
+        "updateCell",
+        { sheet: sheetName, node: node.name, column: column.name, value },
+        { optimisticKey: cellKey(node.name, column.name), optimisticValue: value },
+      );
+    } else {
+      void sheet.commitDraft(node.name, column.name, value);
+    }
   };
+  // Draft flow — the per-cell "has an unsubmitted draft" predicate handed down to
+  // rows/cells for the "unsaved draft" treatment.
+  const draftCell = useCallback(
+    (node: string, column: string): boolean => sheet.draftKey(node, column),
+    [sheet],
+  );
 
   // Schema editor: which data column (if any) the viewer is configuring. The
   // ColumnSettings surface (configure / delete / reassign ownership) was built +
@@ -288,6 +306,60 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
+  // Draft flow — whether the Draft Review modal is open (the bar opens it).
+  const [draftReviewOpen, setDraftReviewOpen] = useState(false);
+
+  // Draft flow — resolve each staged DraftView into a presentation DraftRow: the
+  // column LABEL, node LABEL, the OLD (authoritative snapshot) value, and the
+  // resolved approver (the target column's column_owner). The modal then groups
+  // by approver and renders the old → new diff.
+  const draftRows: DraftRow[] = useMemo(() => {
+    if (!snap) return [];
+    return sheet.draftList.map((d) => {
+      const col = snap.columns.find((c) => c.name === d.column);
+      const node = snap.nodes.find((n) => n.name === d.node);
+      const lbl = node?.label;
+      const nodeLabel = (Array.isArray(lbl) ? lbl.join(", ") : lbl) || d.node;
+      return {
+        key: d.key,
+        node: d.node,
+        column: d.column,
+        columnLabel: col?.label ?? d.column,
+        nodeLabel,
+        // The authoritative snapshot value (NOT the draft-overlaid one).
+        oldValue: node?.values?.[d.column],
+        newValue: d.value,
+        approver: col?.column_owner ?? "approver",
+      };
+    });
+  }, [snap, sheet.draftList]);
+
+  // Draft flow — submit the whole draft box as ONE multi-change CR, then close the
+  // modal and refresh the CR inbox / activity so the new suggestion shows up.
+  const submitDrafts = useCallback(() => {
+    void sheet.submitDrafts().then((o) => {
+      if (!o.error) {
+        setDraftReviewOpen(false);
+        refreshCRs();
+        setActivityRefreshKey((k) => k + 1);
+      }
+    });
+  }, [sheet, refreshCRs]);
+
+  // Draft flow — nav-away guard: warn before leaving while drafts are unsubmitted
+  // (they're persisted server-side, but the user almost certainly meant to submit
+  // them). Active only while draftCount > 0; the modern API needs preventDefault +
+  // a returnValue assignment for the browser to show its confirm.
+  useEffect(() => {
+    if (sheet.draftCount === 0) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [sheet.draftCount]);
   const columnOp = (action: string, params: Record<string, unknown>) => {
     // updateColumn/deleteColumn/grantColumn funnel through dispatch like every
     // other mutation. An executed op refetches (label/width/ownership/removal
@@ -632,6 +704,7 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 pendingCell={pendingCell}
                 pendingTitle={pendingTitle}
                 pendingCount={pendingCount}
+                draftCell={draftCell}
                 isPendingMove={isPendingMove}
                 onCommitCell={commitCell}
                 onMove={move}
@@ -645,6 +718,12 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 onAddNode={() => addNode(null)}
               />
             </div>
+            {/* Draft flow — the "Review N change(s)" bar. Mounted ONLY while the
+                viewer has >=1 unsubmitted draft (owners commit directly and never
+                see it). Clicking it opens the Draft Review modal. */}
+            {sheet.draftCount > 0 && (
+              <DraftReviewBar count={sheet.draftCount} onReview={() => setDraftReviewOpen(true)} />
+            )}
             {editingColumn && (
               <div
                 className="arbor-modal-backdrop"
@@ -729,6 +808,22 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               onApprove={(p) => roleOp("approveRoleApplication", p)}
               onReject={(p) => roleOp("rejectRoleApplication", p)}
               onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+            />
+          )}
+          {/* Draft flow — the Draft Review modal. Mounted only when open; reuses
+              the shared .arbor-modal shell. Groups the staged drafts by resolved
+              approver, shows each old → new diff, and routes discard/submit
+              through useSheet. */}
+          {draftReviewOpen && (
+            <DraftReviewModal
+              drafts={draftRows}
+              onClose={() => setDraftReviewOpen(false)}
+              onSubmit={submitDrafts}
+              onDiscardOne={(node, column) => void sheet.discardDraft(node, column)}
+              onDiscardAll={() => {
+                void sheet.discardAllDrafts();
+                setDraftReviewOpen(false);
+              }}
             />
           )}
         </div>

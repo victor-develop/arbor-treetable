@@ -49,6 +49,46 @@ describe("Cell — long-text density tagging", () => {
   });
 });
 
+describe("Cell — unsaved draft marker (draft flow)", () => {
+  it("renders a distinct 'draft' marker (NOT the pending dot) when draft is set", () => {
+    render(<Cell column={col({ type: "text" })} value="500" draft onCommit={vi.fn()} />);
+    const cell = screen.getByTestId("cell");
+    expect(cell).toHaveAttribute("data-draft", "true");
+    expect(cell).toHaveClass("is-draft");
+    expect(screen.getByTestId("draft-marker")).toBeInTheDocument();
+    // it is NOT the pending-approval dot.
+    expect(screen.queryByTestId("pending-marker")).not.toBeInTheDocument();
+  });
+
+  it("a select-split cell also carries the draft marker", () => {
+    render(
+      <Cell
+        column={col({
+          type: "single-select-split",
+          options: { groups: [{ label: "S", options: ["a", "b"] }] },
+        })}
+        value={["a"]}
+        draft
+        onCommit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("cell")).toHaveAttribute("data-draft", "true");
+    expect(screen.getByTestId("draft-marker")).toBeInTheDocument();
+  });
+
+  it("a drafted cell still opens its editor on click (re-edit rewrites the draft)", () => {
+    render(<Cell column={col({ type: "text", can_edit: false })} value="500" draft onCommit={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("cell"));
+    expect(screen.getByTestId("cell-input")).toBeInTheDocument();
+  });
+
+  it("no marker when draft is unset", () => {
+    render(<Cell column={col({ type: "text" })} value="v" onCommit={vi.fn()} />);
+    expect(screen.queryByTestId("draft-marker")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cell")).not.toHaveAttribute("data-draft");
+  });
+});
+
 describe("Cell — single-click to edit (text-like)", () => {
   it("enters edit mode on a SINGLE click (was double), focuses + select-all", () => {
     render(<Cell column={col({ type: "text" })} value="hello" onCommit={vi.fn()} />);

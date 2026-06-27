@@ -106,22 +106,29 @@ describe("authoritative Outcome wins over client prediction (WEB_UI-020/-021/-08
     expect(notes).toHaveTextContent("v1"); // not committed
   });
 
-  it("executed arrives where the UI rendered suggest → value commits (WEB_UI-086)", async () => {
-    // Stale viewer flag: col:budget can_edit=false but the server returns executed.
-    const { client } = mockClient({
+  it("a non-owner (can_edit=false) cell edit now stages a DRAFT, never an instant executeAction (WEB_UI-086, draft flow)", async () => {
+    // Decision 1A: a non-owner edit no longer round-trips to executeAction at all
+    // (the old "stale flag → executed wins" path is gone for cells — the gate is
+    // purely can_edit). col:budget is can_edit=false for A, so the edit writes a
+    // server-persisted DRAFT: the value shows locally, the cell is tagged a draft,
+    // and NO Saved/Suggestion banner appears.
+    const { client, calls, draftCalls } = mockClient({
       snapshot: loginAs("A"),
-      outcome: { kind: "executed" },
+      drafts: [],
     });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
     const budget = budgetCellOf("row-X");
-    expect(budget).toHaveAttribute("data-mode", "suggest"); // UI predicted suggest
+    expect(budget).toHaveAttribute("data-mode", "suggest");
     fireEvent.click(budget);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "777" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
-    await waitFor(() => expect(screen.getByTestId("banner")).toHaveAttribute("data-kind", "saved"));
-    // authoritative executed → optimistic value stays committed
+    await waitFor(() => expect(draftCalls.some((c) => c.method === "save")).toBe(true));
+    // never an executeAction; the draft value shows locally, tagged as a draft.
+    expect(calls.find((c) => c.action === "updateCell")).toBeUndefined();
     expect(budget).toHaveTextContent("777");
+    expect(budget).toHaveAttribute("data-draft", "true");
+    expect(screen.queryByTestId("banner")).not.toBeInTheDocument();
   });
 });
 

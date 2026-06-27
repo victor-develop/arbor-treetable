@@ -98,6 +98,20 @@ export type Snapshot = {
   };
 };
 
+// Draft flow — a single server-persisted cell draft from the actor's personal
+// draft box (Phase 1 endpoints). A non-owner edit writes a draft (local value
+// visible immediately, surviving reload / device change) instead of instantly
+// filing a Change Request; the draft box is later submitted as ONE multi-change
+// CR. `value` is the proposed new value; `base_version` is the optimistic-
+// concurrency base captured at save time (parallels updateCell's base_version).
+export type CellDraft = {
+  name: string;
+  node: string;
+  column: string;
+  value: unknown;
+  base_version?: number;
+};
+
 // An active branch delegation as carried in the snapshot (delegation control).
 export type BranchGrantView = {
   name: string;
@@ -300,6 +314,29 @@ export type ArborClient = {
   listRoles?: () => Promise<RoleView[]>;
   listRoleGrants?: (role?: string, grantee?: string) => Promise<RoleGrantView[]>;
   listRoleApplications?: (status?: string, requester?: string) => Promise<RoleApplicationView[]>;
+  // Draft flow (Phase 1 server-persisted draft box). All scoped to the actor's
+  // OWN drafts; the server enforces the actor scope. Optional so test/mocked
+  // clients can implement only the subset they exercise.
+  //  * listCellDrafts   — the actor's open drafts for a sheet (hydrate on mount /
+  //    refetch; drafts SURVIVE a refetch — only a submit clears them).
+  //  * saveCellDraft    — upsert ONE cell's draft (idempotent per (node,column));
+  //    resolves to the draft's name.
+  //  * discardCellDraft — drop a single cell's draft.
+  //  * discardCellDrafts— drop ALL of the sheet's drafts (returns the count).
+  //  * submitCellDrafts — convert the whole draft box into ONE multi-change
+  //    suggestChanges CR (Outcome envelope; empty box → {kind:"read"}); the
+  //    server deletes the submitted drafts.
+  listCellDrafts?: (sheet: string) => Promise<CellDraft[]>;
+  saveCellDraft?: (
+    sheet: string,
+    node: string,
+    column: string,
+    value: unknown,
+    base_version?: number,
+  ) => Promise<{ name: string }>;
+  discardCellDraft?: (sheet: string, node: string, column: string) => Promise<{ ok: boolean }>;
+  discardCellDrafts?: (sheet: string) => Promise<{ discarded: number }>;
+  submitCellDrafts?: (sheet: string) => Promise<Outcome>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   agentChat: (
@@ -389,6 +426,35 @@ export const api: ArborClient = {
     if (!res.ok) throw new Error(`snapshot failed: ${res.status}`);
     return unwrap<Snapshot>(await res.json());
   },
+
+  // Draft flow — listCellDrafts is a GET (mirrors listChangeRequests' headers +
+  // ?qs pattern); the mutations funnel through `post` like every other write.
+  listCellDrafts: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet }).toString();
+    const res = await fetchImpl(`/api/method/arbor.list_cell_drafts?${qs}`, { headers });
+    if (!res.ok) throw new Error(`list_cell_drafts failed: ${res.status}`);
+    return unwrap<CellDraft[]>(await res.json());
+  },
+
+  saveCellDraft: (sheet, node, column, value, base_version) =>
+    post<{ name: string }>("arbor.save_cell_draft", {
+      sheet,
+      node,
+      column,
+      value,
+      // Only thread base_version when the caller captured one (an empty cell or a
+      // server that doesn't track versions yet sends none).
+      ...(base_version === undefined ? {} : { base_version }),
+    }),
+
+  discardCellDraft: (sheet, node, column) =>
+    post<{ ok: boolean }>("arbor.discard_cell_draft", { sheet, node, column }),
+
+  discardCellDrafts: (sheet) =>
+    post<{ discarded: number }>("arbor.discard_cell_drafts", { sheet }),
+
+  submitCellDrafts: (sheet) => post<Outcome>("arbor.submit_cell_drafts", { sheet }),
 
   agentChat: async (sheet, message, onFrame) => {
     const headers = {
