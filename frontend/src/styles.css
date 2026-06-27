@@ -2239,6 +2239,56 @@ body {
   align-self: flex-start;
   height: calc(100vh - 48px);
   display: flex;
+  gap: 8px;
+}
+/* The agent card fills the rail beside the slim toggle (override its 100% width
+   so the toggle bar gets its share of the row). */
+.arbor-rail .arbor-agent {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+/* Desktop collapse: the rail shrinks to just the toggle tab, handing the width
+   back to the table. The sidebar is hidden (not unmounted), so reopening restores
+   the transcript instantly. */
+.arbor-rail.is-collapsed {
+  width: auto;
+}
+.arbor-rail.is-collapsed .arbor-agent {
+  display: none;
+}
+/* Slim collapse/expand handle. Expanded: a thin chevron bar on the rail's inner
+   edge. Collapsed: a full-height vertical "Agent" tab to bring the panel back. */
+.arbor-rail-toggle {
+  flex-shrink: 0;
+  width: 22px;
+  padding: 0;
+  border: 1px solid var(--outline-subtle);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.arbor-rail-toggle:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.arbor-rail.is-collapsed .arbor-rail-toggle {
+  width: 34px;
+  height: 100%;
+}
+.arbor-rail-toggle-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* --------------------------------------------------- governance panel ------ */
@@ -2415,6 +2465,18 @@ body {
   .arbor-rail.is-open {
     transform: translateY(0);
     height: 78vh;
+  }
+  /* The desktop collapse handle has no place in the mobile drawer — the FAB owns
+     open/close. Hide the toggle and neutralize is-collapsed so a collapsed desktop
+     choice never leaves the drawer empty. */
+  .arbor-rail-toggle {
+    display: none;
+  }
+  .arbor-rail.is-collapsed {
+    width: auto;
+  }
+  .arbor-rail.is-collapsed .arbor-agent {
+    display: flex;
   }
   .arbor-agent-fab {
     display: inline-flex;

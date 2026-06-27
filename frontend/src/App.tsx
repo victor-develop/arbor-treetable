@@ -303,6 +303,26 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
   // table owns the screen by default (desktop always shows the rail).
   const [agentOpen, setAgentOpen] = useState(false);
+  // Desktop: the agent rail is collapsible so it stops permanently hogging a wide
+  // column — the table reclaims the space. The choice persists across reloads. The
+  // sidebar stays MOUNTED while collapsed (CSS-hidden), so the transcript survives
+  // a collapse/expand and the mobile drawer is unaffected (the @media block
+  // neutralizes is-collapsed below 820px, where the FAB owns the drawer instead).
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage?.getItem("arbor.rail.collapsed") === "1";
+  });
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((c) => {
+      const next = !c;
+      try {
+        window.localStorage?.setItem("arbor.rail.collapsed", next ? "1" : "0");
+      } catch {
+        /* private mode / storage disabled — in-memory toggle still works */
+      }
+      return next;
+    });
+  }, []);
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -775,8 +795,31 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
             />
           </section>
           {/* Sticky full-height agent rail on desktop; a toggled bottom drawer on
-              mobile (see .arbor-rail + the @media block in styles.css). */}
-          <div className={`arbor-rail${agentOpen ? " is-open" : ""}`}>
+              mobile (see .arbor-rail + the @media block in styles.css). On desktop
+              it collapses to a slim vertical tab (railCollapsed) so it stops hogging
+              a wide column; the sidebar stays mounted (CSS-hidden) so the transcript
+              survives and the mobile drawer is unaffected. */}
+          <div
+            className={`arbor-rail${agentOpen ? " is-open" : ""}${
+              railCollapsed ? " is-collapsed" : ""
+            }`}
+            data-testid="agent-rail"
+          >
+            <button
+              type="button"
+              className="arbor-rail-toggle"
+              data-testid="rail-toggle"
+              aria-expanded={!railCollapsed}
+              aria-label={railCollapsed ? "Expand agent panel" : "Collapse agent panel"}
+              title={railCollapsed ? "Expand agent" : "Collapse agent"}
+              onClick={toggleRail}
+            >
+              {railCollapsed ? (
+                <span className="arbor-rail-toggle-label">Agent</span>
+              ) : (
+                <span aria-hidden="true">›</span>
+              )}
+            </button>
             <AgentSidebar
               client={client}
               sheet={sheetName}
