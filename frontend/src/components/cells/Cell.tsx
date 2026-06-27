@@ -21,6 +21,7 @@ export function Cell({
   pending,
   pendingTitle,
   pendingCount,
+  draft,
   startEditing,
   onCommit,
 }: {
@@ -31,6 +32,12 @@ export function Cell({
   pendingTitle?: string;
   // How many open suggestions target this cell (shown in the marker badge).
   pendingCount?: number;
+  // Draft flow — this cell carries an UNSUBMITTED local draft (the non-owner
+  // draft box). When true the cell renders the (already-overlaid) draft value
+  // with a DISTINCT "unsaved draft" treatment (amber dashed underline + a small
+  // "draft" marker), clearly different from the pending-approval dot. The cell
+  // still edits on click — a re-edit just rewrites the draft.
+  draft?: boolean;
   // External edit trigger: a monotonically-incrementing signal. Each time it
   // increases to a truthy value the (interactive text-like) cell enters edit
   // mode and focuses — this is how the row's edit-pencil opens the label cell's
@@ -59,10 +66,11 @@ export function Cell({
   if (column.type === "single-select-split" || column.type === "multi-select-split") {
     return (
       <div
-        className="arbor-cell"
+        className={`arbor-cell${draft ? " is-draft" : ""}`}
         data-testid="cell"
         data-mode={canEdit ? "edit" : "suggest"}
         data-pending={pending ? "true" : undefined}
+        data-draft={draft ? "true" : undefined}
       >
         <SelectSplitCell
           type={column.type}
@@ -71,6 +79,7 @@ export function Cell({
           canEdit={canEdit}
           onCommit={(arr) => commitIfChanged(arr)}
         />
+        {draft && <DraftMarker />}
       </div>
     );
   }
@@ -83,9 +92,25 @@ export function Cell({
       pending={pending}
       pendingTitle={pendingTitle}
       pendingCount={pendingCount}
+      isDraft={draft}
       startEditing={startEditing}
       onCommit={commitIfChanged}
     />
+  );
+}
+
+// Draft flow — the "unsaved draft" marker: a small amber "draft" chip rendered
+// on a cell carrying an unsubmitted local draft. Deliberately a WORD (not the
+// pending-approval dot) so the two states never read as the same thing.
+function DraftMarker(): JSX.Element {
+  return (
+    <span
+      className="arbor-draft-marker"
+      data-testid="draft-marker"
+      title="Unsaved draft — submit for approval to send it"
+    >
+      draft
+    </span>
   );
 }
 
@@ -101,6 +126,7 @@ function TextLikeCell({
   pending,
   pendingTitle,
   pendingCount,
+  isDraft,
   startEditing,
   onCommit,
 }: {
@@ -110,6 +136,7 @@ function TextLikeCell({
   pending?: boolean;
   pendingTitle?: string;
   pendingCount?: number;
+  isDraft?: boolean;
   startEditing?: number;
   onCommit: (next: unknown) => void;
 }): JSX.Element {
@@ -166,16 +193,24 @@ function TextLikeCell({
       <div
         className={`arbor-cell ${canEdit ? "is-editable" : "is-suggest"}${
           column.type === "multiline-text" ? " is-longtext" : ""
-        }`}
+        }${isDraft ? " is-draft" : ""}`}
         data-testid="cell"
         data-mode={canEdit ? "edit" : "suggest"}
         data-pending={pending ? "true" : undefined}
+        data-draft={isDraft ? "true" : undefined}
         onClick={start}
-        title={canEdit ? "Click to edit" : "Click to suggest a change"}
+        title={
+          isDraft
+            ? "Unsaved draft — click to edit"
+            : canEdit
+              ? "Click to edit"
+              : "Click to suggest a change"
+        }
       >
         <span className="arbor-cell-value">
           {renderStatic(value) || <span className="arbor-cell-empty">—</span>}
         </span>
+        {isDraft && <DraftMarker />}
         {canEdit ? (
           <span className="arbor-edit-hint" aria-hidden title="Click to edit">
             <PencilIcon size={13} />

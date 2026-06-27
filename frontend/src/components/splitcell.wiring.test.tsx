@@ -40,28 +40,29 @@ describe("split-column cells through the App shell", () => {
     });
   });
 
-  it("non-owner interacting with the split opens suggest-mode and renders the suggested Outcome (WEB_UI-030)", async () => {
-    // E owns nothing → suggest mode; server returns a CR to owner C.
-    const { client, calls } = mockClient({
-      snapshot: loginAs("E"),
-      outcome: { kind: "suggested", change_request: "CR3", resolved_approver: "C" },
-    });
+  it("non-owner interacting with the split stages a DRAFT (suggest mode), shows it locally, no instant CR (WEB_UI-030, draft flow)", async () => {
+    // E owns nothing → suggest mode. Decision 1A: a non-owner selection no longer
+    // fires an instant suggestChanges CR + reverts. It stages a server-persisted
+    // draft — the selected segment STAYS active locally, the cell is tagged a
+    // draft, and no suggested banner appears until the user submits the box.
+    const { client, calls, draftCalls } = mockClient({ snapshot: loginAs("E"), drafts: [] });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
 
-    const status = statusCellOf("row-X");
-    expect(status).toHaveAttribute("data-mode", "suggest");
-    fireEvent.click(within(status).getByTestId("segment-doing"));
+    const statusCell = screen
+      .getByTestId("row-X")
+      .querySelector('[data-column="col:status"] [data-testid="cell"]') as HTMLElement;
+    expect(statusCell).toHaveAttribute("data-mode", "suggest");
+    fireEvent.click(within(statusCell).getByTestId("segment-doing"));
 
-    await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].action).toBe("updateCell");
-    expect(calls[0].params).toMatchObject({ column: "col:status", value: ["doing"] });
-
-    const banner = await screen.findByTestId("banner");
-    expect(banner).toHaveAttribute("data-kind", "suggested");
-    expect(banner).toHaveTextContent("Suggestion sent to C");
-    // segments revert to the snapshot value (["todo"]) until approval
-    expect(within(status).getByTestId("segment-todo")).toHaveClass("is-active");
-    expect(within(status).getByTestId("segment-doing")).not.toHaveClass("is-active");
+    await waitFor(() => expect(draftCalls.some((c) => c.method === "save")).toBe(true));
+    // staged with the chosen single-element array value; never an executeAction.
+    const save = draftCalls.find((c) => c.method === "save")!;
+    expect(save.params).toMatchObject({ column: "col:status", value: ["doing"] });
+    expect(calls.find((c) => c.action === "updateCell")).toBeUndefined();
+    // the draft value wins locally (doing active, not reverted to todo) + tagged.
+    expect(within(statusCell).getByTestId("segment-doing")).toHaveClass("is-active");
+    expect(statusCell).toHaveAttribute("data-draft", "true");
+    expect(screen.queryByTestId("banner")).not.toBeInTheDocument();
   });
 });

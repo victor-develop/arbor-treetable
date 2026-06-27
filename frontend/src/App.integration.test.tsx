@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import App from "./App";
 import { loginAs, mockClient } from "./test/fixture";
@@ -34,10 +34,14 @@ describe("App — snapshot-driven shell wiring", () => {
     await waitFor(() => expect(screen.getByTestId("banner")).toHaveAttribute("data-kind", "saved"));
   });
 
-  it("non-owner edit → suggested → revert + 'Suggestion sent to C' banner (WEB_UI-014)", async () => {
-    const { client, calls } = mockClient({
+  it("non-owner edit no longer files an instant CR / reverts / toasts — it stages a draft (WEB_UI-014, superseded by draft flow)", async () => {
+    // Decision 1A SUPERSEDES the old WEB_UI-014 behavior (instant suggestChanges
+    // CR + revert-to-snapshot + "Suggestion sent" toast + dot — the "weird" flow).
+    // A non-owner edit now writes to the draft box: the value STAYS visible, no CR
+    // is filed yet, and no suggested banner appears until the user submits.
+    const { client, calls, draftCalls } = mockClient({
       snapshot: loginAs("A"), // A owns no columns
-      outcome: { kind: "suggested", change_request: "CR1", resolved_approver: "C" },
+      drafts: [],
     });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
@@ -48,14 +52,11 @@ describe("App — snapshot-driven shell wiring", () => {
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "500" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
 
-    await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].action).toBe("updateCell");
-    const banner = await screen.findByTestId("banner");
-    expect(banner).toHaveAttribute("data-kind", "suggested");
-    expect(banner).toHaveTextContent("Suggestion sent to C");
-    expect(screen.getByTestId("banner-cr")).toHaveTextContent("CR1");
-    // value reverted to snapshot (1000), optimistic 500 not committed
-    expect(budgetCell).toHaveTextContent("1000");
+    await waitFor(() => expect(draftCalls.some((c) => c.method === "save")).toBe(true));
+    // no instant suggestChanges via executeAction, no suggested banner, no revert.
+    expect(calls.find((c) => c.action === "updateCell")).toBeUndefined();
+    expect(screen.queryByTestId("banner")).not.toBeInTheDocument();
+    expect(budgetCell).toHaveTextContent("500");
   });
 
   it("server error code surfaces an error banner, not a silent commit (WEB_UI-023/-085)", async () => {
@@ -98,6 +99,111 @@ describe("App — snapshot-driven shell wiring", () => {
     const banner = await screen.findByTestId("banner");
     expect(banner).toHaveTextContent("Suggestion sent to D");
     expect(banner).toHaveTextContent("co-approver: A");
+  });
+
+  it("non-owner edit (draft flow) → saveCellDraft, shows the value locally, shows the bar, NO executeAction/CR", async () => {
+    // A owns no columns → col:budget (owner C) goes through the DRAFT box.
+    const { client, calls, draftCalls } = mockClient({ snapshot: loginAs("A"), drafts: [] });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const budgetCell = screen
+      .getByTestId("row-X")
+      .querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    expect(budgetCell).toHaveAttribute("data-mode", "suggest");
+    fireEvent.click(budgetCell);
+    fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "500" } });
+    fireEvent.blur(screen.getByTestId("cell-input"));
+
+    // a draft was persisted — NOT an instant CR via executeAction.
+    await waitFor(() => expect(draftCalls.some((c) => c.method === "save")).toBe(true));
+    expect(calls.find((c) => c.action === "updateCell")).toBeUndefined();
+    // the value shows locally + the cell is tagged as a draft.
+    expect(budgetCell).toHaveTextContent("500");
+    expect(budgetCell).toHaveAttribute("data-draft", "true");
+    // no "Suggestion sent" banner (the old weird behavior is gone).
+    expect(screen.queryByTestId("banner")).not.toBeInTheDocument();
+    // the Review bar appears with the count.
+    expect(await screen.findByTestId("draft-bar")).toHaveTextContent("Review 1 change");
+  });
+
+  it("owner edit still dispatches updateCell directly and shows NO draft bar", async () => {
+    // B owns col:notes (can_edit true) → real-time direct commit, no draft.
+    const { client, calls, draftCalls } = mockClient({
+      snapshot: loginAs("B"),
+      drafts: [],
+      outcome: { kind: "executed" },
+    });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const notesCell = screen
+      .getByTestId("row-X")
+      .querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
+    expect(notesCell).toHaveAttribute("data-mode", "edit");
+    fireEvent.click(notesCell);
+    fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "ship Q3" } });
+    fireEvent.blur(screen.getByTestId("cell-input"));
+
+    await waitFor(() => expect(calls.some((c) => c.action === "updateCell")).toBe(true));
+    // owners never touch the draft box, never see the bar.
+    expect(draftCalls.some((c) => c.method === "save")).toBe(false);
+    expect(screen.queryByTestId("draft-bar")).not.toBeInTheDocument();
+  });
+
+  it("review modal: submit → ONE multi-change CR, drafts cleared, pending mark on the cell", async () => {
+    const { client, draftCalls } = mockClient({
+      snapshot: loginAs("A"),
+      drafts: [],
+      submitOutcome: { kind: "suggested", change_request: "CR-D1", resolved_approver: "C" },
+    });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    // stage a draft on col:budget.
+    const budgetCell = screen
+      .getByTestId("row-X")
+      .querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    fireEvent.click(budgetCell);
+    fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "500" } });
+    fireEvent.blur(screen.getByTestId("cell-input"));
+
+    // open the review modal from the bar.
+    fireEvent.click(await screen.findByTestId("draft-bar-review"));
+    const modal = await screen.findByTestId("draft-modal");
+    // grouped under approver C with the old → new diff.
+    expect(within(modal).getByTestId("draft-group-C")).toBeInTheDocument();
+    expect(within(modal).getByTestId("draft-old")).toHaveTextContent("1000");
+    expect(within(modal).getByTestId("draft-new")).toHaveTextContent("500");
+
+    fireEvent.click(within(modal).getByTestId("draft-submit"));
+
+    // submit filed ONE CR; the modal closes + the bar clears.
+    await waitFor(() => expect(draftCalls.some((c) => c.method === "submit")).toBe(true));
+    await waitFor(() => expect(screen.queryByTestId("draft-modal")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("draft-bar")).not.toBeInTheDocument());
+    // the suggested banner names the approver + carries the CR.
+    const banner = await screen.findByTestId("banner");
+    expect(banner).toHaveAttribute("data-kind", "suggested");
+    expect(banner).toHaveTextContent("Suggestion sent to C");
+    // the cell now shows the pending-approval marker (carrying the CR).
+    expect(within(screen.getByTestId("row-X")).getByTestId("pending-marker")).toBeInTheDocument();
+  });
+
+  it("hydrates a server-persisted draft on mount: the bar shows + the value overlays without an edit", async () => {
+    const { client } = mockClient({
+      snapshot: loginAs("A"),
+      drafts: [{ name: "D1", node: "X", column: "col:budget", value: 777, base_version: 0 }],
+    });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    expect(await screen.findByTestId("draft-bar")).toHaveTextContent("Review 1 change");
+    const budgetCell = screen
+      .getByTestId("row-X")
+      .querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    expect(budgetCell).toHaveTextContent("777");
+    expect(budgetCell).toHaveAttribute("data-draft", "true");
   });
 
   it("row-density toggle sets data-density on the tree card (UX D2)", async () => {
