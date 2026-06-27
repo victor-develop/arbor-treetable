@@ -112,6 +112,13 @@ override_whitelisted_methods = {
     "arbor.list_roles": "arbor.arbor.api.list_roles",
     "arbor.list_role_grants": "arbor.arbor.api.list_role_grants",
     "arbor.list_role_applications": "arbor.arbor.api.list_role_applications",
+    # Personal cell draft box (Feature: cell drafts) — per-user staging, scoped
+    # to actor.user; submit promotes ALL drafts to ONE multi-change CR.
+    "arbor.save_cell_draft": "arbor.arbor.api.save_cell_draft",
+    "arbor.list_cell_drafts": "arbor.arbor.api.list_cell_drafts",
+    "arbor.discard_cell_draft": "arbor.arbor.api.discard_cell_draft",
+    "arbor.discard_cell_drafts": "arbor.arbor.api.discard_cell_drafts",
+    "arbor.submit_cell_drafts": "arbor.arbor.api.submit_cell_drafts",
     # Server-side Re-Act agent
     "arbor.agent.chat": "arbor.arbor.agent.chat.chat",
     # Accountability aggregate (N notified / M acked)

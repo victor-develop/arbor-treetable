@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "sheet",
+  "node",
+  "column",
+  "value",
+  "base_version"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "fieldname": "node",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Node",
+   "options": "Tree Node",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Column",
+   "options": "Tree Column",
+   "reqd": 1
+  },
+  {
+   "description": "The staged cell value (JSON).",
+   "fieldname": "value",
+   "fieldtype": "JSON",
+   "label": "Value"
+  },
+  {
+   "description": "The cell version the draft was based on (optimistic-concurrency hint carried into the eventual updateCell).",
+   "fieldname": "base_version",
+   "fieldtype": "Int",
+   "label": "Base Version"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Cell Draft",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
