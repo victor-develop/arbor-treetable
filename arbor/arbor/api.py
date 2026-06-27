@@ -1228,3 +1228,150 @@ def list_role_applications(status="proposed", requester=None):
         }
         for a in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Personal CELL DRAFT box (Feature: cell drafts) — server-persisted staging for
+# cell edits BEFORE they become a Change Request. Per USER, private: every method
+# is scoped to ``_actor().user`` so a user only ever sees / edits their OWN
+# drafts. These are UI-staging endpoints, NOT registry capabilities — drafts are
+# not a governed capability; only the eventual ``submit_cell_drafts`` routes
+# through the executor (``suggestChanges`` → ONE multi-change CR).
+# ---------------------------------------------------------------------------
+def _find_cell_draft(user: str, sheet, node, column) -> Optional[str]:
+    """The actor's existing draft name for a cell, or ``None`` — the upsert key is
+    (user, sheet, node, column)."""
+    return frappe.db.get_value(
+        "Arbor Cell Draft",
+        {"user": user, "sheet": sheet, "node": node, "column": column},
+        "name",
+    )
+
+
+@frappe.whitelist()
+def save_cell_draft(sheet, node, column, value, base_version=None):
+    """Upsert the actor's draft for a single cell.
+
+    Finds the actor's existing draft by (user, sheet, node, column); if present it
+    updates ``value`` / ``base_version`` in place, otherwise it creates a new one.
+    So two saves on the same cell collapse to ONE draft holding the latest value.
+    Returns ``{"name": <draft name>}``.
+    """
+    actor = _actor()  # raises on Guest
+    value = _coerce(value)
+    bv = frappe.utils.cint(base_version) if base_version not in (None, "") else None
+
+    existing = _find_cell_draft(actor.user, sheet, node, column)
+    if existing:
+        doc = frappe.get_doc("Arbor Cell Draft", existing)
+        doc.value = frappe.as_json(value)
+        doc.base_version = bv
+        doc.save(ignore_permissions=True)
+    else:
+        doc = frappe.new_doc("Arbor Cell Draft")
+        doc.user = actor.user
+        doc.sheet = sheet
+        doc.node = node
+        doc.column = column
+        doc.value = frappe.as_json(value)
+        doc.base_version = bv
+        doc.insert(ignore_permissions=True)
+    return {"name": doc.name}
+
+
+@frappe.whitelist()
+def list_cell_drafts(sheet):
+    """The actor's drafts for one sheet: ``[{name, node, column, value,
+    base_version}]``. Scoped to ``user=actor.user`` (never another user's)."""
+    actor = _actor()
+    rows = frappe.get_all(
+        "Arbor Cell Draft",
+        filters={"user": actor.user, "sheet": sheet},
+        fields=["name", "node", "column", "value", "base_version"],
+        order_by="creation asc",
+    )
+    return [
+        {
+            "name": r.name,
+            "node": r.node,
+            "column": r.column,
+            "value": _coerce(r.value),
+            "base_version": r.base_version,
+        }
+        for r in rows
+    ]
+
+
+@frappe.whitelist()
+def discard_cell_draft(sheet, node, column):
+    """Delete the actor's draft for one cell. No-op (still ``{"ok": True}``) if the
+    actor has no draft there."""
+    actor = _actor()
+    existing = _find_cell_draft(actor.user, sheet, node, column)
+    if existing:
+        frappe.delete_doc("Arbor Cell Draft", existing, ignore_permissions=True)
+    return {"ok": True}
+
+
+@frappe.whitelist()
+def discard_cell_drafts(sheet):
+    """Delete ALL the actor's drafts for one sheet. Returns ``{"discarded": N}``."""
+    actor = _actor()
+    names = frappe.get_all(
+        "Arbor Cell Draft",
+        filters={"user": actor.user, "sheet": sheet},
+        pluck="name",
+    )
+    for name in names:
+        frappe.delete_doc("Arbor Cell Draft", name, ignore_permissions=True)
+    return {"discarded": len(names)}
+
+
+@frappe.whitelist()
+def submit_cell_drafts(sheet):
+    """Promote ALL the actor's drafts for ``sheet`` into ONE multi-change Change
+    Request, then delete the submitted drafts.
+
+    Builds ``changes=[{action:"updateCell", params:{sheet, node, column, value,
+    base_version}} ...]`` from the drafts and dispatches via the SAME
+    ``executor.execute_action("suggestChanges", ...)`` funnel the REST surface
+    uses — so each item re-resolves to its own approver (a batch can span owners)
+    and nothing is re-derived. On success the submitted drafts are deleted and the
+    standard Outcome envelope is returned. With no drafts it is a no-op returning
+    ``{"kind": "read", "data": {}}`` (no CR created).
+    """
+    actor = _actor()
+    rows = frappe.get_all(
+        "Arbor Cell Draft",
+        filters={"user": actor.user, "sheet": sheet},
+        fields=["name", "node", "column", "value", "base_version"],
+        order_by="creation asc",
+    )
+    if not rows:
+        return {"kind": "read", "data": {}}
+
+    changes = []
+    for r in rows:
+        params: dict[str, Any] = {
+            "sheet": sheet,
+            "node": r.node,
+            "column": r.column,
+            "value": _coerce(r.value),
+        }
+        if r.base_version not in (None, ""):
+            params["base_version"] = frappe.utils.cint(r.base_version)
+        changes.append({"action": "updateCell", "params": params})
+
+    outcome = executor.execute_action(
+        "suggestChanges",
+        {"sheet": sheet, "changes": changes},
+        actor,
+        _repo(),
+        _sink(),
+    )
+
+    # The drafts have been promoted to a CR — clear them so the box is empty again.
+    for r in rows:
+        frappe.delete_doc("Arbor Cell Draft", r.name, ignore_permissions=True)
+
+    return _outcome_dict(outcome)
