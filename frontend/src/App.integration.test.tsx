@@ -233,4 +233,27 @@ describe("App — snapshot-driven shell wiring", () => {
     fireEvent.click(fab);
     expect(rail).not.toHaveClass("is-open");
   });
+
+  it("desktop rail toggle collapses/expands the agent panel and persists the choice", async () => {
+    window.localStorage.removeItem("arbor.rail.collapsed");
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    const { container, unmount } = render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const rail = container.querySelector(".arbor-rail") as HTMLElement;
+    const toggle = screen.getByTestId("rail-toggle");
+    // Default expanded.
+    expect(rail).not.toHaveClass("is-collapsed");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // Collapse → class flips, choice persisted.
+    fireEvent.click(toggle);
+    expect(rail).toHaveClass("is-collapsed");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(window.localStorage.getItem("arbor.rail.collapsed")).toBe("1");
+    // A fresh mount reads the persisted collapsed state.
+    unmount();
+    const { container: c2 } = render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(c2.querySelector(".arbor-rail")).toHaveClass("is-collapsed");
+    window.localStorage.removeItem("arbor.rail.collapsed");
+  });
 });
