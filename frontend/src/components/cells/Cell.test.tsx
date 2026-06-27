@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Cell } from "./Cell";
 import type { SnapshotColumn } from "../../api";
@@ -46,6 +46,57 @@ describe("Cell — long-text density tagging", () => {
     expect(marker).toHaveTextContent("2");
     rerender(<Cell column={col({})} value="v" pending pendingCount={1} onCommit={vi.fn()} />);
     expect(screen.getByTestId("pending-marker")).toHaveTextContent("•");
+  });
+});
+
+describe("Cell — single-click to edit (text-like)", () => {
+  it("enters edit mode on a SINGLE click (was double), focuses + select-all", () => {
+    render(<Cell column={col({ type: "text" })} value="hello" onCommit={vi.fn()} />);
+    // Not editing until clicked.
+    expect(screen.queryByTestId("cell-input")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("cell"));
+    const input = screen.getByTestId("cell-input") as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe("hello");
+    expect(document.activeElement).toBe(input);
+    // select-all: the whole draft is highlighted so a keystroke replaces it.
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("hello".length);
+  });
+
+  it("Escape cancels the inline edit without dispatching a commit", () => {
+    const onCommit = vi.fn();
+    render(<Cell column={col({ type: "text" })} value="hello" onCommit={onCommit} />);
+    fireEvent.click(screen.getByTestId("cell"));
+    const input = screen.getByTestId("cell-input");
+    fireEvent.change(input, { target: { value: "changed" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByTestId("cell-input")).not.toBeInTheDocument();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("a read-only (non-interactive) cell does NOT enter edit on click", () => {
+    render(
+      <Cell
+        column={col({ type: "text", editable: false } as Partial<SnapshotColumn>)}
+        value="42"
+        onCommit={vi.fn()}
+      />,
+    );
+    const cell = screen.getByTestId("cell");
+    expect(cell).toHaveClass("is-readonly");
+    fireEvent.click(cell);
+    expect(screen.queryByTestId("cell-input")).not.toBeInTheDocument();
+  });
+
+  it("the affordance/tooltip says 'Click to edit' for an owner", () => {
+    render(<Cell column={col({ type: "text", can_edit: true })} value="v" onCommit={vi.fn()} />);
+    expect(screen.getByTestId("cell")).toHaveAttribute("title", "Click to edit");
+  });
+
+  it("the affordance/tooltip says 'Click to suggest a change' for a non-owner", () => {
+    render(<Cell column={col({ type: "text", can_edit: false })} value="v" onCommit={vi.fn()} />);
+    expect(screen.getByTestId("cell")).toHaveAttribute("title", "Click to suggest a change");
   });
 });
 

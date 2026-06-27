@@ -20,7 +20,7 @@ describe("App — snapshot-driven shell wiring", () => {
     // notes cell on X is owned by B (can_edit true)
     const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
     expect(notesCell).toHaveAttribute("data-mode", "edit");
-    fireEvent.doubleClick(notesCell);
+    fireEvent.click(notesCell);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "ship by Q3" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
 
@@ -44,7 +44,7 @@ describe("App — snapshot-driven shell wiring", () => {
 
     const budgetCell = screen.getByTestId("row-X").querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
     expect(budgetCell).toHaveAttribute("data-mode", "suggest");
-    fireEvent.doubleClick(budgetCell);
+    fireEvent.click(budgetCell);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "500" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
 
@@ -69,7 +69,7 @@ describe("App — snapshot-driven shell wiring", () => {
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
     const budgetCell = screen.getByTestId("row-X").querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
-    fireEvent.doubleClick(budgetCell);
+    fireEvent.click(budgetCell);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "999" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
     const banner = await screen.findByTestId("banner");
@@ -85,11 +85,11 @@ describe("App — snapshot-driven shell wiring", () => {
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
 
-    const rowX = screen.getByTestId("row-X");
     const rowP2 = screen.getByTestId("row-P2");
     rowP2.getBoundingClientRect = () =>
       ({ top: 0, height: 90, left: 0, right: 0, bottom: 90, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    fireEvent.dragStart(rowX);
+    // Drag starts from the explicit grip handle (cells now single-click to edit).
+    fireEvent.dragStart(screen.getByTestId("drag-handle-X"));
     fireEvent.dragOver(rowP2);
     fireEvent.drop(rowP2, { clientY: 45 });
 

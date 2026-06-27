@@ -75,7 +75,7 @@ describe("authoritative Outcome wins over client prediction (WEB_UI-020/-021/-08
       .getByTestId("row-X")
       .querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
     expect(notes).toHaveAttribute("data-mode", "edit"); // optimistic prediction
-    fireEvent.doubleClick(notes);
+    fireEvent.click(notes);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "rolled-back text" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
 
@@ -97,7 +97,7 @@ describe("authoritative Outcome wins over client prediction (WEB_UI-020/-021/-08
     const notes = screen
       .getByTestId("row-X")
       .querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
-    fireEvent.doubleClick(notes);
+    fireEvent.click(notes);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "owner edit" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
     const banner = await screen.findByTestId("banner");
@@ -116,7 +116,7 @@ describe("authoritative Outcome wins over client prediction (WEB_UI-020/-021/-08
     await screen.findByTestId("tree-table");
     const budget = budgetCellOf("row-X");
     expect(budget).toHaveAttribute("data-mode", "suggest"); // UI predicted suggest
-    fireEvent.doubleClick(budget);
+    fireEvent.click(budget);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "777" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
     await waitFor(() => expect(screen.getByTestId("banner")).toHaveAttribute("data-kind", "saved"));
@@ -139,7 +139,7 @@ describe("network failure & serialization (WEB_UI-025/-087)", () => {
     const notes = screen
       .getByTestId("row-X")
       .querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
-    fireEvent.doubleClick(notes);
+    fireEvent.click(notes);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "will fail" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
     const banner = await screen.findByTestId("banner");
@@ -173,13 +173,13 @@ describe("network failure & serialization (WEB_UI-025/-087)", () => {
       .querySelector('[data-column="col:notes"] [data-testid="cell"]') as HTMLElement;
 
     // commit "a"
-    fireEvent.doubleClick(notes);
+    fireEvent.click(notes);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "a" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
     await waitFor(() => expect(order).toContain("start:a"));
 
     // commit "ab" before "a" resolves
-    fireEvent.doubleClick(notes);
+    fireEvent.click(notes);
     fireEvent.change(screen.getByTestId("cell-input"), { target: { value: "ab" } });
     fireEvent.blur(screen.getByTestId("cell-input"));
 

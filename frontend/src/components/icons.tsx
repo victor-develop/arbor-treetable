@@ -66,6 +66,19 @@ export function CornerDownRightIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function GripVerticalIcon(props: IconProps): JSX.Element {
+  return (
+    <Svg {...props}>
+      <circle cx="9" cy="5" r="1" />
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="9" cy="19" r="1" />
+      <circle cx="15" cy="5" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="15" cy="19" r="1" />
+    </Svg>
+  );
+}
+
 export function TrashIcon(props: IconProps): JSX.Element {
   return (
     <Svg {...props}>

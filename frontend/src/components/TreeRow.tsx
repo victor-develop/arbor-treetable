@@ -7,7 +7,7 @@ import { useState } from "react";
 import type { Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
-import { CornerDownRightIcon, PencilIcon, PlusIcon, TrashIcon } from "./icons";
+import { CornerDownRightIcon, GripVerticalIcon, PencilIcon, PlusIcon, TrashIcon } from "./icons";
 
 export function TreeRow({
   row,
@@ -84,8 +84,6 @@ export function TreeRow({
       data-depth={depth}
       data-pending-move={pendingMove ? "true" : undefined}
       data-pending-delete={confirmDelete ? "true" : undefined}
-      draggable
-      onDragStart={() => onDragStart(node)}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
@@ -93,6 +91,25 @@ export function TreeRow({
       }}
     >
       <td className="arbor-label-cell">
+        {/* Explicit drag handle: ONLY this grip starts a reorder, so a plain
+            single click on a cell edits without fighting row drag. The row stays
+            the drop target (onDragOver/onDrop above) but is no longer draggable
+            itself. Hover-revealed like the action cluster; keyboard-focusable. */}
+        <span
+          className="arbor-drag-handle"
+          data-testid={`drag-handle-${node.name}`}
+          draggable
+          role="button"
+          tabIndex={0}
+          aria-label={`Drag to reorder ${labelText}`}
+          title="Drag to reorder"
+          onDragStart={(e) => {
+            e.stopPropagation();
+            onDragStart(node);
+          }}
+        >
+          <GripVerticalIcon size={14} />
+        </span>
         <span style={{ paddingLeft: depth * 16 }} className="arbor-indent" />
         {hasChildren ? (
           <button

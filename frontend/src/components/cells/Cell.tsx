@@ -119,7 +119,12 @@ function TextLikeCell({
   const ref = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    if (editing) ref.current?.focus();
+    if (editing) {
+      ref.current?.focus();
+      // Select-all on entry so the first keystroke replaces the value — single
+      // click puts you straight into a "type to overwrite" edit (was double).
+      ref.current?.select();
+    }
   }, [editing]);
 
   const start = () => {
@@ -165,18 +170,18 @@ function TextLikeCell({
         data-testid="cell"
         data-mode={canEdit ? "edit" : "suggest"}
         data-pending={pending ? "true" : undefined}
-        onDoubleClick={start}
-        title={canEdit ? "Double-click to edit" : "Double-click to suggest a change"}
+        onClick={start}
+        title={canEdit ? "Click to edit" : "Click to suggest a change"}
       >
         <span className="arbor-cell-value">
           {renderStatic(value) || <span className="arbor-cell-empty">—</span>}
         </span>
         {canEdit ? (
-          <span className="arbor-edit-hint" aria-hidden title="Double-click to edit">
+          <span className="arbor-edit-hint" aria-hidden title="Click to edit">
             <PencilIcon size={13} />
           </span>
         ) : (
-          <span className="arbor-suggest-hint" aria-hidden title="Double-click to suggest a change">
+          <span className="arbor-suggest-hint" aria-hidden title="Click to suggest a change">
             <PencilIcon size={13} />
           </span>
         )}

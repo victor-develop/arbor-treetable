@@ -90,9 +90,12 @@ export function chevron(page: Page, node: string) {
   return page.getByTestId(`chevron-${node}`);
 }
 
-// Simulate an HTML5 drag-drop between two rows. Playwright's dragTo dispatches
-// the dragstart/dragover/drop sequence the TreeRow handlers listen for; the
-// `targetPosition` y-fraction selects before/inside/after (TreeRow geometry).
+// Simulate an HTML5 drag-drop between two rows. Drag now starts ONLY from the
+// per-row grip handle (single-click on a cell edits instead), so we drag the
+// handle — Playwright's dragTo dispatches the dragstart/dragover/drop sequence
+// the handle/row handlers listen for. The `targetPosition` y-fraction selects
+// before/inside/after (TreeRow geometry). The handle is hover-revealed, so we
+// hover the source row first to make it draggable.
 export async function dragRowOnto(
   page: Page,
   srcNode: string,
@@ -103,7 +106,8 @@ export async function dragRowOnto(
   const box = await dest.boundingBox();
   if (!box) throw new Error(`no bounding box for row-${destNode}`);
   const yFrac = position === "before" ? 0.15 : position === "after" ? 0.85 : 0.5;
-  await row(page, srcNode).dragTo(dest, {
+  await row(page, srcNode).hover();
+  await page.getByTestId(`drag-handle-${srcNode}`).dragTo(dest, {
     targetPosition: { x: box.width / 2, y: box.height * yFrac },
   });
 }
