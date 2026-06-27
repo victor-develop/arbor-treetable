@@ -590,6 +590,35 @@ body {
   font-weight: 500;
   color: var(--ink);
 }
+/* Explicit drag handle (the ONLY drag source — single-click on a cell edits).
+   Sits in the label-cell gutter before the indent/chevron. Hover/focus-revealed
+   like the action cluster so the dense row stays calm; grab/grabbing cursors
+   signal it's movable. */
+.arbor-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 18px;
+  flex: none;
+  margin-right: -2px;
+  cursor: grab;
+  color: var(--ink-subtle);
+  border-radius: var(--r-sm);
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease, background-color 0.1s ease;
+}
+.arbor-drag-handle:active {
+  cursor: grabbing;
+}
+.arbor-row:hover .arbor-drag-handle,
+.arbor-drag-handle:focus-visible {
+  opacity: 1;
+}
+.arbor-drag-handle:hover {
+  color: var(--ink-2);
+  background: var(--surface-3);
+}
 .arbor-chevron,
 .arbor-chevron-spacer {
   width: 18px;

@@ -205,14 +205,14 @@ describe("TreeTable drag-and-drop → moveNode", () => {
 
   it("drop inside P2 computes moveNode with new_parent=P2 (WEB_UI-036)", () => {
     const { onMove } = renderTable();
-    fireEvent.dragStart(screen.getByTestId("row-Y")); // drag Y
+    fireEvent.dragStart(screen.getByTestId("drag-handle-Y")); // drag Y via its handle
     dropFromTop("row-P2", 0.5); // middle of a group = inside
     expect(onMove).toHaveBeenCalledWith({ node: "Y", new_parent: "P2", after: null });
   });
 
   it("illegal drop onto own descendant is suppressed (WEB_UI-044)", () => {
     const { onMove } = renderTable();
-    fireEvent.dragStart(screen.getByTestId("row-P2"));
+    fireEvent.dragStart(screen.getByTestId("drag-handle-P2"));
     dropFromTop("row-Z", 0.5);
     expect(onMove).not.toHaveBeenCalled();
   });

@@ -138,6 +138,92 @@ describe("TreeRow add-child control (PART C)", () => {
     expect(onEdit).toHaveBeenCalledWith(row.node);
   });
 
+  it("renders an explicit drag handle that is the drag source (draggable, fires onDragStart)", () => {
+    const onDragStart = vi.fn();
+    const row = makeRow();
+    render(
+      <table>
+        <tbody>
+          <TreeRow
+            row={row}
+            columns={[labelCol]}
+            labelColumn="col:name"
+            collapsed={false}
+            pendingCell={() => false}
+            pendingMove={false}
+            onToggle={() => {}}
+            onCommitCell={() => {}}
+            onDragStart={onDragStart}
+            onDrop={() => {}}
+          />
+        </tbody>
+      </table>,
+    );
+    const handle = screen.getByTestId("drag-handle-X");
+    // The handle is the draggable element, not the row.
+    expect(handle).toHaveAttribute("draggable", "true");
+    expect(screen.getByTestId("row-X")).not.toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(handle);
+    expect(onDragStart).toHaveBeenCalledWith(row.node);
+  });
+
+  it("clicking a cell does NOT start a drag (drag only from the handle)", () => {
+    const onDragStart = vi.fn();
+    const row = makeRow();
+    render(
+      <table>
+        <tbody>
+          <TreeRow
+            row={row}
+            columns={[labelCol]}
+            labelColumn="col:name"
+            collapsed={false}
+            pendingCell={() => false}
+            pendingMove={false}
+            onToggle={() => {}}
+            onCommitCell={() => {}}
+            onDragStart={onDragStart}
+            onDrop={() => {}}
+          />
+        </tbody>
+      </table>,
+    );
+    // The row is not draggable, so a dragStart originating on a cell never fires
+    // the move handler — a plain click just edits the cell.
+    const cell = screen.getByTestId("label-X").querySelector('[data-testid="cell"]')!;
+    fireEvent.dragStart(cell);
+    expect(onDragStart).not.toHaveBeenCalled();
+  });
+
+  it("the row is still a drop target (onDragOver/onDrop fire on the row)", () => {
+    const onDrop = vi.fn();
+    const row = makeRow();
+    render(
+      <table>
+        <tbody>
+          <TreeRow
+            row={row}
+            columns={[labelCol]}
+            labelColumn="col:name"
+            collapsed={false}
+            pendingCell={() => false}
+            pendingMove={false}
+            onToggle={() => {}}
+            onCommitCell={() => {}}
+            onDragStart={() => {}}
+            onDrop={onDrop}
+          />
+        </tbody>
+      </table>,
+    );
+    const tr = screen.getByTestId("row-X");
+    tr.getBoundingClientRect = () =>
+      ({ top: 0, height: 90, left: 0, right: 0, bottom: 90, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    fireEvent.dragOver(tr);
+    fireEvent.drop(tr, { clientY: 45 });
+    expect(onDrop).toHaveBeenCalledWith(row.node, "inside");
+  });
+
   it("renders no add-child button when onAddChild is not supplied", () => {
     const row = makeRow();
     render(

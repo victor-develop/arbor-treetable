@@ -42,7 +42,7 @@ describe("Cell affordance driven by snapshot hint", () => {
     render(<Cell column={budget(true, false)} value={1000} onCommit={onCommit} />);
     const cell = screen.getByTestId("cell");
     expect(cell).toHaveAttribute("data-mode", "readonly");
-    fireEvent.doubleClick(cell);
+    fireEvent.click(cell);
     expect(screen.queryByTestId("cell-input")).toBeNull();
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -52,7 +52,7 @@ describe("Cell editing → onCommit routing", () => {
   it("commits a changed value once (WEB_UI-011)", () => {
     const onCommit = vi.fn();
     render(<Cell column={notes(true)} value="v1" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByTestId("cell"));
+    fireEvent.click(screen.getByTestId("cell"));
     const input = screen.getByTestId("cell-input");
     fireEvent.change(input, { target: { value: "ship by Q3" } });
     fireEvent.blur(input);
@@ -63,7 +63,7 @@ describe("Cell editing → onCommit routing", () => {
   it("Escape cancels without committing (WEB_UI-017)", () => {
     const onCommit = vi.fn();
     render(<Cell column={notes(true)} value="v1" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByTestId("cell"));
+    fireEvent.click(screen.getByTestId("cell"));
     const input = screen.getByTestId("cell-input");
     fireEvent.change(input, { target: { value: "changed" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -73,7 +73,7 @@ describe("Cell editing → onCommit routing", () => {
   it("unchanged value commit is a no-op (WEB_UI-018)", () => {
     const onCommit = vi.fn();
     render(<Cell column={notes(true)} value="v1" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByTestId("cell"));
+    fireEvent.click(screen.getByTestId("cell"));
     const input = screen.getByTestId("cell-input");
     fireEvent.blur(input); // committed unchanged
     expect(onCommit).not.toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe("Cell editing → onCommit routing", () => {
   it("number column blocks non-numeric input client-side (WEB_UI-019)", () => {
     const onCommit = vi.fn();
     render(<Cell column={budget(true)} value={1000} onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByTestId("cell"));
+    fireEvent.click(screen.getByTestId("cell"));
     const input = screen.getByTestId("cell-input");
     fireEvent.change(input, { target: { value: "abc" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -93,7 +93,7 @@ describe("Cell editing → onCommit routing", () => {
   it("explicit empty value is sent as a deliberate clear (WEB_UI-024)", () => {
     const onCommit = vi.fn();
     render(<Cell column={notes(true)} value="v1" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByTestId("cell"));
+    fireEvent.click(screen.getByTestId("cell"));
     const input = screen.getByTestId("cell-input");
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.blur(input);
