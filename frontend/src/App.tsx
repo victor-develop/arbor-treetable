@@ -302,27 +302,11 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   }, []);
   // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
   // table owns the screen by default (desktop always shows the rail).
+  // The agent is a floating chat widget (a bubble bottom-right that opens a popup
+  // panel), so it never hogs a docked column — the table always keeps full width.
+  // agentOpen toggles the popup; the sidebar stays MOUNTED (CSS-hidden) so the
+  // transcript survives close/reopen. Same pattern on desktop and mobile.
   const [agentOpen, setAgentOpen] = useState(false);
-  // Desktop: the agent rail is collapsible so it stops permanently hogging a wide
-  // column — the table reclaims the space. The choice persists across reloads. The
-  // sidebar stays MOUNTED while collapsed (CSS-hidden), so the transcript survives
-  // a collapse/expand and the mobile drawer is unaffected (the @media block
-  // neutralizes is-collapsed below 820px, where the FAB owns the drawer instead).
-  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage?.getItem("arbor.rail.collapsed") === "1";
-  });
-  const toggleRail = useCallback(() => {
-    setRailCollapsed((c) => {
-      const next = !c;
-      try {
-        window.localStorage?.setItem("arbor.rail.collapsed", next ? "1" : "0");
-      } catch {
-        /* private mode / storage disabled — in-memory toggle still works */
-      }
-      return next;
-    });
-  }, []);
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -794,48 +778,52 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
               activity={activitySlot}
             />
           </section>
-          {/* Sticky full-height agent rail on desktop; a toggled bottom drawer on
-              mobile (see .arbor-rail + the @media block in styles.css). On desktop
-              it collapses to a slim vertical tab (railCollapsed) so it stops hogging
-              a wide column; the sidebar stays mounted (CSS-hidden) so the transcript
-              survives and the mobile drawer is unaffected. */}
+          {/* Floating agent widget: a bubble pinned bottom-right that opens a popup
+              panel (same on desktop + mobile). The table always keeps full width —
+              no docked column. The sidebar stays mounted (the popup is CSS-hidden
+              when closed) so the transcript survives close/reopen. */}
           <div
-            className={`arbor-rail${agentOpen ? " is-open" : ""}${
-              railCollapsed ? " is-collapsed" : ""
-            }`}
-            data-testid="agent-rail"
+            className={`arbor-agent-dock${agentOpen ? " is-open" : ""}`}
+            data-testid="agent-dock"
           >
+            <div className="arbor-agent-popup" role="dialog" aria-label="Agent panel">
+              <AgentSidebar
+                client={client}
+                sheet={sheetName}
+                onActionObserved={() => void sheet.refetch()}
+              />
+            </div>
             <button
               type="button"
-              className="arbor-rail-toggle"
-              data-testid="rail-toggle"
-              aria-expanded={!railCollapsed}
-              aria-label={railCollapsed ? "Expand agent panel" : "Collapse agent panel"}
-              title={railCollapsed ? "Expand agent" : "Collapse agent"}
-              onClick={toggleRail}
+              className="arbor-agent-fab"
+              data-testid="agent-fab"
+              aria-expanded={agentOpen}
+              aria-label={agentOpen ? "Close agent" : "Ask the agent"}
+              title={agentOpen ? "Close agent" : "Ask the agent"}
+              onClick={() => setAgentOpen((o) => !o)}
             >
-              {railCollapsed ? (
-                <span className="arbor-rail-toggle-label">Agent</span>
+              {agentOpen ? (
+                <span className="arbor-fab-glyph" aria-hidden="true">
+                  ✕
+                </span>
               ) : (
-                <span aria-hidden="true">›</span>
+                <svg
+                  className="arbor-fab-glyph"
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
               )}
             </button>
-            <AgentSidebar
-              client={client}
-              sheet={sheetName}
-              onActionObserved={() => void sheet.refetch()}
-            />
           </div>
-          {/* Mobile-only FAB to open/close the agent drawer (hidden ≥820px). */}
-          <button
-            type="button"
-            className="arbor-agent-fab"
-            data-testid="agent-fab"
-            aria-expanded={agentOpen}
-            onClick={() => setAgentOpen((o) => !o)}
-          >
-            {agentOpen ? "Close" : "Ask agent"}
-          </button>
           {/* Global Roles admin modal — admin-only, header-launched. Mounted only
               when open; reuses the .arbor-modal shell (like ColumnSettings). Every
               write funnels through roleOp (refresh roles + snapshot). */}

@@ -219,41 +219,21 @@ describe("App — snapshot-driven shell wiring", () => {
     expect(card).toHaveAttribute("data-density", "expand");
   });
 
-  it("mobile agent FAB toggles the rail drawer open/closed (UX M1)", async () => {
+  it("agent bubble toggles the floating popup open/closed (UX M1)", async () => {
     const { client } = mockClient({ snapshot: loginAs("B") });
     const { container } = render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    const rail = container.querySelector(".arbor-rail") as HTMLElement;
+    const dock = container.querySelector(".arbor-agent-dock") as HTMLElement;
     const fab = screen.getByTestId("agent-fab");
-    expect(rail).not.toHaveClass("is-open"); // table owns the screen by default
-    expect(fab).toHaveTextContent("Ask agent");
+    // Default closed: the table keeps full width, only the bubble shows.
+    expect(dock).not.toHaveClass("is-open");
+    expect(fab).toHaveAttribute("aria-expanded", "false");
+    expect(fab).toHaveAttribute("aria-label", "Ask the agent");
     fireEvent.click(fab);
-    expect(rail).toHaveClass("is-open");
-    expect(fab).toHaveTextContent("Close");
+    expect(dock).toHaveClass("is-open");
+    expect(fab).toHaveAttribute("aria-expanded", "true");
+    expect(fab).toHaveAttribute("aria-label", "Close agent");
     fireEvent.click(fab);
-    expect(rail).not.toHaveClass("is-open");
-  });
-
-  it("desktop rail toggle collapses/expands the agent panel and persists the choice", async () => {
-    window.localStorage.removeItem("arbor.rail.collapsed");
-    const { client } = mockClient({ snapshot: loginAs("B") });
-    const { container, unmount } = render(<App client={client} sheetName="S" />);
-    await screen.findByTestId("tree-table");
-    const rail = container.querySelector(".arbor-rail") as HTMLElement;
-    const toggle = screen.getByTestId("rail-toggle");
-    // Default expanded.
-    expect(rail).not.toHaveClass("is-collapsed");
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    // Collapse → class flips, choice persisted.
-    fireEvent.click(toggle);
-    expect(rail).toHaveClass("is-collapsed");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(window.localStorage.getItem("arbor.rail.collapsed")).toBe("1");
-    // A fresh mount reads the persisted collapsed state.
-    unmount();
-    const { container: c2 } = render(<App client={client} sheetName="S" />);
-    await screen.findByTestId("tree-table");
-    expect(c2.querySelector(".arbor-rail")).toHaveClass("is-collapsed");
-    window.localStorage.removeItem("arbor.rail.collapsed");
+    expect(dock).not.toHaveClass("is-open");
   });
 });
