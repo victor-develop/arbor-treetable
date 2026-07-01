@@ -589,6 +589,18 @@ body {
 .arbor-label {
   font-weight: 500;
   color: var(--ink);
+  /* Take the remaining row width and allow shrink, so the label truncates with an
+     ellipsis when the hover action cluster claims space (never covered by it). */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.arbor-label .arbor-cell {
+  min-width: 0;
+}
+.arbor-label .arbor-cell-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Explicit drag handle (the ONLY drag source — single-click on a cell edits).
    Sits in the label-cell gutter before the indent/chevron. Hover/focus-revealed
@@ -673,33 +685,22 @@ body {
    the row is hovered or focus moves in (keyboard reachability) — discoverable
    because the label cell itself is always on screen. */
 .arbor-row-actions {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: inline-flex;
+  /* IN-FLOW at the label cell's right edge (not overlaid): the label is a
+     flex:1 sibling that shrinks + ellipsizes to make room, so the cluster never
+     covers the text. display:none at rest means the full label shows until hover. */
+  margin-left: auto;
+  flex: none;
+  display: none;
   align-items: center;
   gap: 2px;
-  padding-left: 16px;
-  padding-right: 8px;
+  padding-left: 8px;
   white-space: nowrap;
-  /* Opaque-fading backdrop: transparent → the frozen cell's surface so the
-     cluster sits on a clean base and the label fades under it rather than being
-     clipped. Matches the frozen label-cell background (--surface). */
-  background: linear-gradient(to right, rgba(255, 255, 255, 0), var(--surface) 16px);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.12s ease, visibility 0.12s ease;
 }
-/* On hover the row background shifts to --surface-1; match the gradient so the
-   cluster's backdrop blends with the hovered row instead of showing a white seam. */
-.arbor-row:hover .arbor-row-actions {
-  background: linear-gradient(to right, rgba(248, 248, 248, 0), var(--surface-1) 16px);
-}
+/* Reveal on hover or when keyboard focus enters the row (the cluster is display:none
+   at rest, so row-level focus-within is what makes the buttons tabbable). */
 .arbor-row:hover .arbor-row-actions,
-.arbor-row-actions:focus-within {
-  opacity: 1;
-  visibility: visible;
+.arbor-row:focus-within .arbor-row-actions {
+  display: inline-flex;
 }
 .arbor-row-actions .arbor-row-confirm {
   justify-content: flex-end;
