@@ -28,5 +28,8 @@ if (root) {
   // the mount refetch twice; under fast interaction the second refetch can land
   // mid-edit and clobber an optimistic commit. Production createRoot never
   // double-mounts, so this only ever bit the dev server + e2e timing.
-  createRoot(root).render(sheet ? <App sheetName={sheet} /> : <SheetList />);
+  // Land in the Proposed (pending-overlaid) view on entry; toggle to Live to edit.
+  createRoot(root).render(
+    sheet ? <App sheetName={sheet} initialViewMode="proposed" /> : <SheetList />,
+  );
 }

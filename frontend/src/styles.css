@@ -2542,8 +2542,12 @@ body {
   white-space: nowrap;
   vertical-align: middle;
 }
-.arbor-row[data-moved="true"] {
-  box-shadow: inset 3px 0 0 var(--accent);
+/* Accent rail on the FROZEN first cell (not the <tr>): a tr box-shadow renders
+   under the sticky first cell's opaque background and only peeks out below it,
+   so the rail must live on td:first-child to span the full row height. Compose
+   with that cell's existing right divider. */
+.arbor-row[data-moved="true"] > td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent), 1px 0 0 var(--outline);
 }
 
 /* --------------------------------------------------------------- responsive -- */
