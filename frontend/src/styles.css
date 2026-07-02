@@ -105,6 +105,20 @@ body {
   flex: 1;
   min-width: 0;
 }
+/* Breadcrumb-style back link to the sheet-list home, above the sheet title. */
+.arbor-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.arbor-back-link:hover {
+  color: var(--accent);
+}
 .arbor-header h1 {
   font-size: 20px;
   font-weight: 600;
@@ -567,15 +581,49 @@ body {
 .arbor-row:hover {
   background: var(--surface-1);
 }
+/* The frozen first column carries its own OPAQUE background (so it occludes
+   horizontally-scrolled cells). Without these, that white bg overrides the row's
+   hover/state tint and reads as a detached white fragment on the tinted row —
+   sync the sticky cell's bg to each row state so it fills the whole cell. */
+.arbor-row:hover td:first-child {
+  background: var(--surface-1);
+}
 .arbor-row[data-pending-move="true"] {
   outline: 1px dashed var(--amber);
   outline-offset: -1px;
+  background: var(--amber-bg);
+}
+.arbor-row[data-pending-move="true"] td:first-child {
   background: var(--amber-bg);
 }
 /* The row awaiting delete-confirm is visually bound to its confirm cluster. */
 .arbor-row[data-pending-delete="true"] {
   background: var(--red-bg);
   box-shadow: inset 2px 0 0 var(--red);
+}
+.arbor-row[data-pending-delete="true"] td:first-child {
+  background: var(--red-bg);
+}
+/* Live drag drop indicator: a 2px accent line on the destination edge (before =
+   top, after = bottom) drawn as an inset box-shadow across every cell so it spans
+   the full row width; "inside" (re-parent) tints + rings the whole target row.
+   The first cell's shadow also carries the frozen-column right divider, so we
+   compose both there. */
+.arbor-row[data-drop="before"] > td {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+.arbor-row[data-drop="after"] > td {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+.arbor-row[data-drop="before"] > td:first-child {
+  box-shadow: inset 0 2px 0 0 var(--accent), 1px 0 0 var(--outline);
+}
+.arbor-row[data-drop="after"] > td:first-child {
+  box-shadow: inset 0 -2px 0 0 var(--accent), 1px 0 0 var(--outline);
+}
+.arbor-row[data-drop="inside"] > td {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .arbor-label-cell {
   display: flex;

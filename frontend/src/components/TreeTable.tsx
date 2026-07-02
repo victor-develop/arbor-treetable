@@ -96,6 +96,11 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
+  // Live drop indicator: which row the drag is currently over + where it would
+  // land (before / inside / after), so a horizontal line (or "drop-into" tint)
+  // shows the destination clearly instead of leaving the user guessing.
+  const [dropHint, setDropHint] = useState<{ node: string; pos: DropPosition } | null>(null);
+  const clearDropHint = useCallback(() => setDropHint(null), []);
 
   // Right/left scroll-shadow affordance: a soft fading overlay on whichever
   // edge is clipping columns, so a wide matrix doesn't silently lose columns off
@@ -142,11 +147,26 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   const handleDrop = (target: SnapshotNode, position: DropPosition) => {
     const src = dragged.current;
     dragged.current = null;
+    setDropHint(null);
     force((n) => n + 1);
     if (!src) return;
     const move = computeMove(src, target, position, nodes);
     if (!move) return; // illegal (cycle/self) — no executeAction (WEB_UI-044/045)
     onMove(move);
+  };
+
+  // Update the live drop indicator as the cursor moves over a row. Suppress the
+  // hint for an illegal target (dropping a node onto itself/a descendant) so the
+  // line never promises a move computeMove would reject.
+  const handleDragOver = (target: SnapshotNode, position: DropPosition) => {
+    const src = dragged.current;
+    if (src && !computeMove(src, target, position, nodes)) {
+      setDropHint(null);
+      return;
+    }
+    setDropHint((h) =>
+      h && h.node === target.name && h.pos === position ? h : { node: target.name, pos: position },
+    );
   };
 
   // Root-level "+ Add node" affordance (parent=null). Shown for everyone, like
@@ -241,6 +261,9 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             onDragStart={(n) => {
               dragged.current = n;
             }}
+            onDragOverRow={handleDragOver}
+            onDragEnd={clearDropHint}
+            dropPosition={dropHint?.node === row.node.name ? dropHint.pos : null}
             onDrop={handleDrop}
             onAddChild={onAddChild}
             onAddSibling={onAddSibling}

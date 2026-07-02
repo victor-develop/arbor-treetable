@@ -219,6 +219,15 @@ describe("App — snapshot-driven shell wiring", () => {
     expect(card).toHaveAttribute("data-density", "expand");
   });
 
+  it("renders a back-to-sheets link pointing at the list home (no ?sheet=)", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const back = screen.getByTestId("back-to-sheets");
+    // Home = the same path with the query dropped (index.tsx renders SheetList then).
+    expect(back.getAttribute("href")).toBe(window.location.pathname);
+  });
+
   it("agent bubble toggles the floating popup open/closed (UX M1)", async () => {
     const { client } = mockClient({ snapshot: loginAs("B") });
     const { container } = render(<App client={client} sheetName="S" />);

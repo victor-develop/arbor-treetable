@@ -551,6 +551,15 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
     <main className="arbor-app">
       <header className="arbor-header">
         <div className="arbor-header-titles">
+          {/* Back to the sheet-list home. Navigation is URL-driven: the home is the
+              same path with no ?sheet= param (index.tsx renders <SheetList/> then). */}
+          <a
+            className="arbor-back-link"
+            data-testid="back-to-sheets"
+            href={typeof window !== "undefined" ? window.location.pathname : "/"}
+          >
+            ‹ All sheets
+          </a>
           <h1>Arbor</h1>
           <div className="arbor-header-meta">
             <span data-testid="sheet-name">Sheet: {snap?.sheet.name ?? sheetName}</span>

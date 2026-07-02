@@ -22,6 +22,9 @@ export function TreeRow({
   onToggle,
   onCommitCell,
   onDragStart,
+  onDragOverRow,
+  onDragEnd,
+  dropPosition,
   onDrop,
   onAddChild,
   onAddSibling,
@@ -45,6 +48,14 @@ export function TreeRow({
   onToggle: (node: string) => void;
   onCommitCell: (node: SnapshotNode, column: SnapshotColumn, value: unknown) => void;
   onDragStart: (node: SnapshotNode) => void;
+  // Report the live drop position as a drag hovers this row (before/inside/after)
+  // so the parent can render a drop indicator on the destination row.
+  onDragOverRow?: (target: SnapshotNode, position: DropPosition) => void;
+  // Fired when a drag gesture ends (drop or cancel) so the parent clears the hint.
+  onDragEnd?: () => void;
+  // Where a hovering drag would land on THIS row (drives the drop-line / drop-into
+  // highlight); null when no drag is over this row.
+  dropPosition?: DropPosition | null;
   onDrop: (target: SnapshotNode, position: DropPosition) => void;
   // Add a child under this node. Optional; rendered for EVERYONE when supplied
   // (a non-owner click files a CR, same as "Suggest column") — NOT gated on
@@ -87,7 +98,11 @@ export function TreeRow({
       data-depth={depth}
       data-pending-move={pendingMove ? "true" : undefined}
       data-pending-delete={confirmDelete ? "true" : undefined}
-      onDragOver={(e) => e.preventDefault()}
+      data-drop={dropPosition ?? undefined}
+      onDragOver={(e) => {
+        e.preventDefault();
+        onDragOverRow?.(node, positionFromEvent(e));
+      }}
       onDrop={(e) => {
         e.preventDefault();
         onDrop(node, positionFromEvent(e));
@@ -110,6 +125,7 @@ export function TreeRow({
             e.stopPropagation();
             onDragStart(node);
           }}
+          onDragEnd={() => onDragEnd?.()}
         >
           <GripVerticalIcon size={14} />
         </span>
