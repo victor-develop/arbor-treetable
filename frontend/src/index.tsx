@@ -4,6 +4,7 @@ import { SheetList } from "./components/SheetList";
 import { InboxPage } from "./components/InboxPage";
 import { ProcessDashboard } from "./components/ProcessDashboard";
 import { api as defaultClient, setAuthHeaderProvider } from "./api";
+import { pickRoute, type Route } from "./lib/route";
 import "./styles.css";
 
 // Open-source entrypoint. The employee SSO build replaces this with a wrapper
@@ -20,32 +21,10 @@ setAuthHeaderProvider(async () => {
   return headers;
 });
 
-// URL-driven routing (no router dependency — matches the minimalist ?sheet= /
-// SheetList pattern). The entry switch resolves the current query into one of:
-//   * ?inbox (or ?page=inbox)      → the per-user cross-sheet <InboxPage>
-//   * ?sheet=X&dashboard=1         → that sheet's process <ProcessDashboard>
-//   * ?sheet=X                     → the connected <App> (Proposed entry view)
-//   * (none)                       → the <SheetList> home
-// `pickRoot` is exported-in-spirit (pure over a URLSearchParams) so the routing
-// is unit-testable without touching the DOM.
-export type Route =
-  | { kind: "inbox" }
-  | { kind: "dashboard"; sheet: string }
-  | { kind: "sheet"; sheet: string }
-  | { kind: "home" };
-
-export function pickRoute(params: URLSearchParams): Route {
-  if (params.get("inbox") !== null || params.get("page") === "inbox") {
-    return { kind: "inbox" };
-  }
-  const sheet = params.get("sheet") ?? undefined;
-  if (sheet) {
-    // ?dashboard (any value, incl. bare flag) opens that sheet's dashboard.
-    if (params.get("dashboard") !== null) return { kind: "dashboard", sheet };
-    return { kind: "sheet", sheet };
-  }
-  return { kind: "home" };
-}
+// Route resolution (pickRoute) lives in ./lib/route (side-effect-free) so both
+// this entry and the SSO build variant share it without importing a module that
+// mounts React. Re-export the type here for existing importers.
+export type { Route } from "./lib/route";
 
 // Navigate by setting the query (thin shell; no history router). Kept here so the
 // inbox/dashboard back + deep-link affordances share ONE navigation primitive.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickRoute } from "./index";
+import { pickRoute } from "./lib/route";
 
 // The entry switch is a pure function over a URLSearchParams (no DOM), so the
 // four routes can be asserted directly. Guards the routing contract WS-PROC-FE
