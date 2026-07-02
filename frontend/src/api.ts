@@ -643,14 +643,16 @@ export const api: ArborClient = {
     return unwrap<Whoami>(await res.json());
   },
 
+  // Use the DEDICATED shims (not generic execute_action): they authorize as the
+  // REAL session user, so `end` works while impersonating (the generic path builds
+  // the EFFECTIVE — impersonated, non-admin — actor and the executor would reject).
   beginImpersonation: (user, reason) =>
-    post<Outcome>("arbor.execute_action", {
-      action_id: "beginImpersonation",
-      params: { impersonated_user: user, ...(reason === undefined ? {} : { reason }) },
+    post<Outcome>("arbor.begin_impersonation", {
+      impersonated_user: user,
+      ...(reason === undefined ? {} : { reason }),
     }),
 
-  endImpersonation: () =>
-    post<Outcome>("arbor.execute_action", { action_id: "endImpersonation", params: {} }),
+  endImpersonation: () => post<Outcome>("arbor.end_impersonation", {}),
 
   // Comments — list is a GET (sheet/node/column qs, mirroring list_cell_drafts);
   // the writes funnel through post(). reopen is resolve with resolved=false.

@@ -67,32 +67,30 @@ describe("impersonation client", () => {
     expect(calls[0].init?.method).toBeUndefined();
   });
 
-  it("beginImpersonation routes through execute_action with the capability id", async () => {
+  it("beginImpersonation posts to the dedicated shim (authorized as the real user)", async () => {
     const { calls } = mockFetch({ kind: "executed", data: { impersonating: "owner@example.com" } });
     const out = await api.beginImpersonation!("owner@example.com", "cover shift");
     expect(out.kind).toBe("executed");
     expect((out.data as Record<string, unknown>).impersonating).toBe("owner@example.com");
-    expect(calls[0].url).toBe("/api/method/arbor.execute_action");
+    expect(calls[0].url).toBe("/api/method/arbor.begin_impersonation");
     expect(calls[0].init?.method).toBe("POST");
     expect(lastBody(calls[0].init)).toEqual({
-      action_id: "beginImpersonation",
-      params: { impersonated_user: "owner@example.com", reason: "cover shift" },
+      impersonated_user: "owner@example.com",
+      reason: "cover shift",
     });
   });
 
   it("beginImpersonation omits reason when not supplied", async () => {
     const { calls } = mockFetch({ kind: "executed", data: {} });
     await api.beginImpersonation!("owner@example.com");
-    expect(lastBody(calls[0].init)).toEqual({
-      action_id: "beginImpersonation",
-      params: { impersonated_user: "owner@example.com" },
-    });
+    expect(lastBody(calls[0].init)).toEqual({ impersonated_user: "owner@example.com" });
   });
 
-  it("endImpersonation routes through execute_action with empty params", async () => {
+  it("endImpersonation posts to the dedicated shim with empty body", async () => {
     const { calls } = mockFetch({ kind: "executed", data: {} });
     await api.endImpersonation!();
-    expect(lastBody(calls[0].init)).toEqual({ action_id: "endImpersonation", params: {} });
+    expect(calls[0].url).toBe("/api/method/arbor.end_impersonation");
+    expect(lastBody(calls[0].init)).toEqual({});
   });
 });
 
