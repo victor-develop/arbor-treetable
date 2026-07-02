@@ -44,6 +44,31 @@ NotifyFn = Callable[[list[str], dict[str, Any]], None]
 # math is done on ``sla_seconds`` via ``add_seconds`` which the caller supplies
 # for its clock. To stay framework-free we accept a pluggable ``add_seconds``.
 # ---------------------------------------------------------------------------
+def is_filled(value: Any) -> bool:
+    """A stage is FILLED iff its column value is non-empty.
+
+    Mirrors the FRONTEND cell empty-check (``renderStatic`` in
+    ``frontend/src/components/cells/Cell.tsx``): a value renders as "empty" when
+    ``renderStatic(value)`` is the empty string. ``renderStatic`` returns ``""``
+    for ``None``, joins arrays (so ``[]`` -> ``""``), and otherwise ``str(value)``.
+
+    Therefore NOT-filled == ``None`` / ``""`` / ``[]`` (and, symmetric with the
+    array-join, an all-empty list). Everything else counts as filled — notably a
+    value written at row-creation (a default, or the head/label cell) COUNTS. A
+    numeric ``0`` or boolean ``False`` render to a non-empty string ("0"/"False")
+    on the frontend, so they are filled here too (parity with the grid).
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, (list, tuple)):
+        # Array cell: joined by ", " on the frontend -> empty iff no members.
+        return len(value) > 0
+    # Any other scalar (int/float/bool/etc.) renders to a non-empty string.
+    return True
+
+
 def default_due_at(entered_at: Any, sla_seconds: int) -> Optional[Any]:
     """Compute a stage's ``due_at`` from ``entered_at`` + ``sla_seconds``.
 
@@ -67,27 +92,62 @@ def _stage_owners(repo: Repository, sheet: str, column: str) -> list[str]:
 
 
 def _build_run_stages(
-    process: ProcessView, started_at: Any
+    process: ProcessView, started_at: Any, active_pos: int
 ) -> list[dict[str, Any]]:
-    """The per-stage ledger for a fresh run: stage 0 entered_at/due_at set,
-    the rest pending. ``notified_owner`` is the idempotency guard on enter."""
+    """The per-stage ledger for a fresh run.
+
+    ``active_pos`` is the position (0-based) of the CURRENT stage — the first
+    stage whose column is still empty at creation. Every LEADING stage
+    (``pos < active_pos``) was already filled at row-creation, so it is stamped
+    ``entered_at``/``filled_at`` == ``started_at`` (a synchronous auto-advance —
+    it was entered and filled at creation). The current stage (``active_pos``)
+    is entered (``entered_at`` + ``due_at`` set) but not filled; later stages are
+    pending. ``notified_owner`` is the idempotency guard on enter.
+
+    When ``active_pos == len(ordered)`` ALL stages were pre-filled: every stage is
+    entered+filled at ``started_at`` (the caller completes the run).
+    """
     stages: list[dict[str, Any]] = []
-    ordered = sorted(process.stages, key=lambda s: s.idx)
+    ordered = _ordered_stages(process)
     for i, st in enumerate(ordered):
-        entered = started_at if i == 0 else None
+        if i < active_pos:
+            # already-filled leading stage: entered AND filled at creation.
+            entered = started_at
+            filled = started_at
+            due = None  # filled -> never breaches
+        elif i == active_pos:
+            # the first EMPTY stage becomes the active/pending one.
+            entered = started_at
+            filled = None
+            due = default_due_at(started_at, st.sla_seconds)
+        else:
+            entered = None
+            filled = None
+            due = None
         stages.append(
             {
                 "stage_idx": st.idx,
                 "column": st.column,
                 "entered_at": entered,
-                "filled_at": None,
-                "due_at": default_due_at(entered, st.sla_seconds) if i == 0 else None,
+                "filled_at": filled,
+                "due_at": due,
                 "breached": False,
                 "breached_at": None,
                 "notified_owner": "",  # "" = not yet notified (idempotency guard)
             }
         )
     return stages
+
+
+def _first_empty_pos(repo: Repository, node: str, ordered: list[Any]) -> int:
+    """The position of the FIRST stage whose column value is still empty for
+    ``node`` — evaluated against the node's CURRENT values (a row-creation
+    default / the head/label cell COUNTS as filled). Returns ``len(ordered)`` when
+    every stage column is already filled (=> the run completes immediately)."""
+    for pos, st in enumerate(ordered):
+        if not is_filled(repo.get_value(node, st.column)):
+            return pos
+    return len(ordered)
 
 
 def _ordered_stages(process: ProcessView):
@@ -144,20 +204,47 @@ def _start_run(
     ordered = _ordered_stages(process)
     if not ordered:
         return []
-    stages = _build_run_stages(process, now)
+    # Evaluate the node's CURRENT values and auto-advance past every LEADING
+    # stage whose column is ALREADY filled at creation (a default / the head/label
+    # cell counts). Start PENDING at the FIRST stage whose column is still empty.
+    active_pos = _first_empty_pos(repo, node, ordered)
+    stages = _build_run_stages(process, now, active_pos)
+
+    if active_pos >= len(ordered):
+        # ALL stage columns already filled at creation -> COMPLETE immediately,
+        # notifying no one (nobody is waiting on an empty cell).
+        run = repo.create_process_run(
+            {
+                "process": process.name,
+                "sheet": process.sheet,
+                "node": node,
+                "status": "completed",
+                "current_stage_idx": ordered[-1].idx,
+                "started_at": now,
+                "completed_at": now,
+                "stages": stages,
+            }
+        )
+        return [
+            {"run": run, "node": node, "kind": "started", "stage_idx": ordered[-1].idx},
+            {"run": run, "node": node, "kind": "completed"},
+        ]
+
+    cur = ordered[active_pos]
     run = repo.create_process_run(
         {
             "process": process.name,
             "sheet": process.sheet,
             "node": node,
             "status": "active",
-            "current_stage_idx": ordered[0].idx,
+            "current_stage_idx": cur.idx,
             "started_at": now,
             "stages": stages,
         }
     )
-    trans = [{"run": run, "node": node, "kind": "started", "stage_idx": ordered[0].idx}]
-    trans += _notify_stage_enter(repo, process, run, node, 0, now, notify)
+    trans = [{"run": run, "node": node, "kind": "started", "stage_idx": cur.idx}]
+    # notify the FIRST-EMPTY stage's owner (NOT stage 0 unless it is empty).
+    trans += _notify_stage_enter(repo, process, run, node, active_pos, now, notify)
     return trans
 
 

@@ -3465,7 +3465,651 @@ body {
   opacity: 0.9;
 }
 
-/* Standalone dashboard page (index.tsx ?dashboard= route). */
+/* Standalone dashboard page (index.tsx ?dashboard= route). The route wraps the
+   dashboard in .arbor-app.arbor-dashboard-page (padded); the panel itself needs
+   no extra padding there — it flows inside the padded page. */
 .arbor-dashboard-page .arbor-process-dashboard {
+  padding: 0;
+}
+
+/* ============================================================================
+   Process config panel (.arbor-pc-*) — the "Process" modal body. Mirrors the
+   column-settings modal idioms: hairline-separated groups, a status pill, a
+   muted helper line, dense stage rows with a step-index chip + a width-capped
+   SLA field, and a footer with a clear primary (Save) vs secondary (Enable).
+   ========================================================================= */
+.arbor-process-config {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.arbor-pc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Small uppercase eyebrow labelling the stage list (the modal head already says
+   "Process"; this names the group without duplicating the title). */
+.arbor-pc-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+/* Enabled/disabled reads as a status pill (reuses the role-status chip idiom:
+   rounded, tinted fill, 11px), not a bare stacked word. */
+.arbor-pc-state {
+  margin-left: auto;
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--outline);
+  color: var(--ink-muted);
+  background: var(--surface-1);
+}
+.arbor-pc-state.is-enabled {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
+.arbor-pc-state.is-disabled {
+  color: var(--ink-muted);
+  background: var(--surface-2);
+  border-color: var(--outline);
+}
+/* Muted one-line mental-model explainer under the header (matches the
+   governance-empty / owned-by hint treatment). */
+.arbor-pc-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+/* Empty state — the padded, muted treatment used elsewhere, not bare text. */
+.arbor-pc-empty {
+  margin: 0;
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-subtle);
+  background: var(--surface-1);
+  border: 1px dashed var(--outline);
+  border-radius: var(--r);
+}
+/* The ordered stage list — a bordered card of dense rows (no raw <ol> markers). */
+.arbor-pc-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--surface);
+}
+.arbor-pc-stage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-pc-stage:last-child {
+  border-bottom: none;
+}
+/* Numbered step chip — fixed-width muted badge reading as a step indicator. */
+.arbor-pc-stage-idx {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.arbor-pc-stage-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 500;
+}
+/* SLA field cluster: a tiny label, a width-capped right-aligned number input,
+   and a friendly duration echo. The input is constrained (was stretching wide). */
+.arbor-pc-stage-sla {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.arbor-pc-stage-sla .arbor-field-label {
+  white-space: nowrap;
+}
+.arbor-pc-stage-sla input {
+  flex: 0 0 80px;
+  width: 80px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.arbor-pc-stage-sla-hint {
+  min-width: 42px;
+  font-size: 11px;
+  color: var(--ink-subtle);
+  white-space: nowrap;
+}
+/* Move up/down + remove are quiet icon buttons (borderless, hover-tinted). */
+.arbor-pc-stage-move {
+  display: inline-flex;
+  gap: 2px;
+}
+.arbor-pc-stage-move button,
+.arbor-pc-stage-remove {
+  border: none !important;
+  background: none !important;
+  min-height: 0 !important;
+  padding: 2px 6px !important;
+  color: var(--ink-subtle);
+  font-size: 12px;
+  line-height: 1;
+  border-radius: var(--r-sm);
+}
+.arbor-pc-stage-move button:hover:not(:disabled) {
+  background: var(--surface-3) !important;
+  color: var(--ink-2);
+}
+.arbor-pc-stage-remove:hover {
+  background: var(--red-bg) !important;
+  color: var(--red);
+}
+/* Add-a-stage row — its own fenced affordance (top border + spacing) so it reads
+   as a distinct "add" action between the list and the footer. */
+.arbor-pc-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--outline-subtle);
+}
+.arbor-pc-add select {
+  flex: 1;
+  min-width: 0;
+}
+/* Footer: hairline-separated action bar. Save is the solid near-black primary
+   (mirrors .arbor-comment-post); Enable/Disable is a quiet secondary. */
+.arbor-pc-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--outline-subtle);
+}
+.arbor-process-config .arbor-pc-save {
+  background: var(--ink);
+  color: #fff;
+  border-color: transparent;
+}
+.arbor-process-config .arbor-pc-save:hover:not(:disabled) {
+  background: var(--gray-800);
+  border-color: transparent;
+}
+.arbor-process-config .arbor-pc-save:disabled {
+  background: var(--surface-3);
+  color: var(--ink-muted);
+  border-color: transparent;
+  opacity: 1;
+}
+
+/* ============================================================================
+   Process dashboard (.arbor-pd-*) — a kanban of stage columns + a metric-card
+   summary. Mirrors the card/surface + eyebrow idioms; breaches use --red.
+   ========================================================================= */
+.arbor-process-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* Summary: a row of stacked metric cards (value over label), not a text run. */
+.arbor-pd-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.arbor-pd-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 96px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-card);
+}
+.arbor-pd-metric-value {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.arbor-pd-metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+/* Empty state — centered + muted, matching the page's padding rhythm. */
+.arbor-pd-empty {
+  margin: 0;
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+/* The board reads as side-by-side stage columns that scroll horizontally. */
+.arbor-pd-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.arbor-pd-stage {
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+/* A stage carrying breaches gets a subtle red top rail so it flags at a glance. */
+.arbor-pd-stage[data-breached="true"] {
+  box-shadow: inset 0 2px 0 0 var(--red);
+}
+/* Stage head is the drill affordance — a flat full-width button with hover. */
+.arbor-pd-stage-head {
+  width: 100%;
+  text-align: left;
+  border: none !important;
+  background: var(--surface) !important;
+  border-bottom: 1px solid var(--outline-subtle) !important;
+  border-radius: 0 !important;
+  padding: 10px 12px !important;
+  min-height: 0 !important;
+}
+.arbor-pd-stage-head:hover {
+  background: var(--surface-2) !important;
+}
+.arbor-pd-stage-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+/* Per-stage metric row: three labeled counts (pending / breached / avg). */
+.arbor-pd-stage-metrics {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.arbor-pd-count,
+.arbor-pd-avg {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+/* Tiny inline eyebrow under each number so pending/breached/avg are unambiguous. */
+.arbor-pd-count::after,
+.arbor-pd-avg::after {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-subtle);
+}
+.arbor-pd-count[data-testid="pd-pending"]::after {
+  content: "pending";
+}
+.arbor-pd-avg::after {
+  content: "avg";
+  color: var(--ink-subtle);
+}
+.arbor-pd-count.is-breached::after {
+  content: "breached";
+}
+/* Breach count is neutral at zero; turns red (fill + ink) when out of SLA so it
+   is visible at a glance — no longer identical to the pending count. */
+.arbor-pd-count.is-breached[data-breached="true"] {
+  color: var(--red);
+}
+.arbor-pd-count.is-breached[data-breached="true"]::after {
+  color: var(--red);
+}
+.arbor-pd-avg {
+  color: var(--ink-muted);
+}
+/* Drill-down run list — compact rows with a node id + a status chip. */
+.arbor-pd-runs {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--outline-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.arbor-pd-run {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+.arbor-pd-run-node {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+/* Status chip reuses the green/amber/neutral pill palette. */
+.arbor-pd-run-status {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--outline);
+}
+.arbor-pd-run[data-status="active"] .arbor-pd-run-status {
+  color: var(--amber);
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+}
+.arbor-pd-run[data-status="completed"] .arbor-pd-run-status {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
+.arbor-pd-runs-empty,
+.arbor-pd-runs-loading {
+  list-style: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+/* ============================================================================
+   Cross-sheet Inbox (.arbor-inbox*) — a self-contained PAGE (the ?inbox= route
+   mounts it without an .arbor-app wrapper), grouped by source with readable
+   rows, source chips, and a real empty state.
+   ========================================================================= */
+.arbor-inbox {
+  max-width: 760px;
+  margin: 0 auto;
   padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.arbor-inbox-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.arbor-inbox-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+/* Empty state — centered + muted (matches .arbor-empty), not a bare line. */
+.arbor-inbox-empty {
+  margin: 0;
+  padding: 40px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+/* Each source group is a titled card of rows. */
+.arbor-inbox-group {
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.arbor-inbox-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-inbox-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.arbor-inbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-inbox-row:last-child {
+  border-bottom: none;
+}
+/* An un-acked row that still needs action gets a left accent rail + white fill
+   (mirrors the governance notification actionable treatment). */
+.arbor-inbox-row:has(.arbor-inbox-ack) {
+  background: var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Acked rows recede (the message dims; the ✓ stays legible). */
+.arbor-inbox-row[data-acked="true"] .arbor-inbox-msg {
+  color: var(--ink-subtle);
+}
+/* The row body is a full-width, left-aligned, transparent button (deep-link). */
+.arbor-inbox-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+.arbor-inbox-open:hover .arbor-inbox-msg {
+  color: var(--accent-ink);
+}
+.arbor-inbox-msg {
+  font-size: 13px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arbor-inbox-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+/* Source sheet reads as a small monochrome chip so origin scans at a glance. */
+.arbor-inbox-sheet {
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+/* Ack control + acknowledged marker. */
+.arbor-inbox-ack {
+  flex: 0 0 auto;
+}
+.arbor-inbox-acked {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   Login screen (.arbor-login*) — a centered card on the neutral page bg. Reuses
+   the shared .arbor-field inputs; adds only the page frame + submit primary.
+   ========================================================================= */
+.arbor-login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--surface-1);
+}
+.arbor-login-form {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px 24px;
+  background: var(--surface);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+.arbor-login-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-align: center;
+}
+.arbor-login-form .arbor-field input {
+  width: 100%;
+}
+.arbor-login-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+}
+.arbor-login-submit {
+  margin-top: 4px;
+  background: var(--ink);
+  color: #fff;
+  border-color: transparent;
+}
+.arbor-login-submit:hover:not(:disabled) {
+  background: var(--gray-800);
+  border-color: transparent;
+}
+.arbor-login-submit:disabled {
+  background: var(--surface-3);
+  color: var(--ink-muted);
+  border-color: transparent;
+  opacity: 1;
+}
+/* Outside .arbor-app the global button base doesn't apply — give the submit the
+   shared button geometry so it matches the app's control scale. */
+.arbor-login button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r);
+  padding: 5px 12px;
+  min-height: 32px;
+  box-sizing: border-box;
+  cursor: pointer;
+  line-height: 1.4;
+  border: 1px solid var(--outline);
+}
+/* The login form isn't inside .arbor-app either — restate the field input chrome
+   so the username/password wells match the app's inputs. */
+.arbor-login input {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  padding: 6px 10px;
+  min-height: 32px;
+  box-sizing: border-box;
+}
+.arbor-login input:focus {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--outline-strong);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+/* Impersonation picker polish — align the inline fields + Act-as button on one
+   baseline and cap the reason/user field widths so the header cluster stays tidy. */
+.arbor-impersonation-picker .arbor-field {
+  flex: 0 0 auto;
+}
+.arbor-impersonation-picker .arbor-field input {
+  width: 180px;
+  max-width: 40vw;
+}
+.arbor-impersonation-begin {
+  align-self: flex-end;
+  background: var(--ink);
+  color: #fff;
+  border-color: transparent;
+}
+.arbor-impersonation-begin:hover:not(:disabled) {
+  background: var(--gray-800);
+  border-color: transparent;
+}
+.arbor-impersonation-begin:disabled {
+  background: var(--surface-3);
+  color: var(--ink-muted);
+  border-color: transparent;
+  opacity: 1;
 }

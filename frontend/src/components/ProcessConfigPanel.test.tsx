@@ -78,6 +78,25 @@ describe("ProcessConfigPanel — stage editing", () => {
     expect(opts).toContain("approval");
   });
 
+  it("excludes the sheet's label/title column from the stage picker", () => {
+    // The label column is always filled by the row creator, so a label stage
+    // would auto-complete instantly — it must never be offered.
+    const cols = [col("initiative", { is_label: true }), col("owner_c"), col("budget")];
+    renderPanel({ columns: cols });
+    const picker = screen.getByTestId("pc-add-column") as HTMLSelectElement;
+    const opts = within(picker).getAllByRole("option").map((o) => (o as HTMLOptionElement).value);
+    expect(opts).not.toContain("initiative");
+    expect(opts).toContain("owner_c");
+    expect(opts).toContain("budget");
+  });
+
+  it("explains the fill order + completion semantics in a helper line", () => {
+    renderPanel();
+    const hint = screen.getByTestId("pc-hint");
+    expect(hint).toHaveTextContent(/left to right/i);
+    expect(hint).toHaveTextContent(/completes when its column gets a value/i);
+  });
+
   it("adds a stage from the picker and drops it from the remaining choices", async () => {
     renderPanel();
     const picker = screen.getByTestId("pc-add-column") as HTMLSelectElement;
