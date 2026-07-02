@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 32 capabilities are declared here as ``Capability`` records. Four consumers
+All 38 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -272,10 +272,57 @@ _S_ROLE_APP_DECISION = {
         "comment": {"type": "string"},
     },
 }
+# --- impersonation (Area 1) -----------------------------------------------
+_S_BEGIN_IMPERSONATION = {
+    "type": "object",
+    "required": ["impersonated_user"],
+    "properties": {
+        "impersonated_user": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+}
+_S_END_IMPERSONATION = {
+    "type": "object",
+    "properties": {},
+}
+# --- process / SLA (Area 3) -----------------------------------------------
+_S_DEFINE_PROCESS = {
+    "type": "object",
+    "required": ["sheet", "stages"],
+    "properties": {
+        "sheet": {"type": "string"},
+        "title": {"type": "string"},
+        "stages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["column"],
+                "properties": {
+                    "column": {"type": "string"},
+                    "sla_seconds": {"type": "integer", "minimum": 0},
+                    "notify_on_enter": {"type": "boolean"},
+                },
+            },
+        },
+        "row_scope": {"enum": ["root-children", "all-nodes", "depth"]},
+        "start_trigger": {"enum": ["node-created", "manual"]},
+        "sla_breach_notify": {"type": "boolean"},
+    },
+}
+_S_PROCESS_TOGGLE = {
+    "type": "object",
+    "required": ["sheet"],
+    "properties": {"sheet": {"type": "string"}},
+}
+_S_START_PROCESS_RUN = {
+    "type": "object",
+    "required": ["sheet", "node"],
+    "properties": {"sheet": {"type": "string"}, "node": {"type": "string"}},
+}
 
 
 # ---------------------------------------------------------------------------
-# The 32 capabilities.
+# The 38 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -667,6 +714,87 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="requester_only",
         emits=("DELEGATION_CHANGED",),
         handler=None,  # role_app.withdraw_application via executor
+    ),
+    # --- impersonation (Area 1). Admin-only, non-LLM CONTROL caps that emit NO
+    # Tree Event — the Arbor Impersonation Session row is the audit record. Gated
+    # in executor._ADMIN_IMPERSONATION_CAPS (admin authority computed from the REAL
+    # user before the overlay applies), so an agent/non-admin can never call them.
+    Capability(
+        id="beginImpersonation",
+        name="Begin acting as another user (admin)",
+        params_schema=_S_BEGIN_IMPERSONATION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,  # agents must NEVER impersonate
+        acl_rule="admin_only",
+        emits=(),  # the Arbor Impersonation Session row is the record
+        handler=None,  # executor._dispatch_impersonation
+    ),
+    Capability(
+        id="endImpersonation",
+        name="Stop acting as another user (admin)",
+        params_schema=_S_END_IMPERSONATION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=False,
+        acl_rule="admin_only",
+        emits=(),
+        handler=None,  # executor._dispatch_impersonation
+    ),
+    # --- process / SLA (Area 3). Axis.META, structural-owner gated (a non-owner's
+    # define/enable/disable becomes a Change Request routed to the owner — govern-
+    # ance parity for free), LLM-exposed. They reuse COLUMN_CONFIG_UPDATED with an
+    # op discriminator so the closed 11-event set is intact. Runtime stage advance
+    # + SLA sweep are dispatch-lane side effects, deliberately NOT capabilities.
+    Capability(
+        id="defineProcess",
+        name="Define a per-sheet process (stage order + SLA)",
+        params_schema=_S_DEFINE_PROCESS,
+        axis=Axis.META,
+        target_kind=TargetKind.COLUMN_SCHEMA,
+        operation=Operation.UPDATE,
+        is_exposed_to_llm=True,
+        acl_rule="sheet.structural_owner (process-define policy)",
+        emits=("COLUMN_CONFIG_UPDATED",),
+        handler=handlers.define_process_handler,
+    ),
+    Capability(
+        id="enableProcess",
+        name="Enable a sheet's process",
+        params_schema=_S_PROCESS_TOGGLE,
+        axis=Axis.META,
+        target_kind=TargetKind.COLUMN_SCHEMA,
+        operation=Operation.UPDATE,
+        is_exposed_to_llm=True,
+        acl_rule="sheet.structural_owner",
+        emits=("COLUMN_CONFIG_UPDATED",),
+        handler=handlers.enable_process_handler,
+    ),
+    Capability(
+        id="disableProcess",
+        name="Disable a sheet's process",
+        params_schema=_S_PROCESS_TOGGLE,
+        axis=Axis.META,
+        target_kind=TargetKind.COLUMN_SCHEMA,
+        operation=Operation.UPDATE,
+        is_exposed_to_llm=True,
+        acl_rule="sheet.structural_owner",
+        emits=("COLUMN_CONFIG_UPDATED",),
+        handler=handlers.disable_process_handler,
+    ),
+    Capability(
+        id="startProcessRun",
+        name="Manually start a process run for a row",
+        params_schema=_S_START_PROCESS_RUN,
+        axis=Axis.META,
+        target_kind=TargetKind.COLUMN_SCHEMA,
+        operation=Operation.UPDATE,
+        is_exposed_to_llm=True,
+        acl_rule="sheet.structural_owner",
+        emits=("COLUMN_CONFIG_UPDATED",),
+        handler=handlers.start_process_run_handler,
     ),
 )
 

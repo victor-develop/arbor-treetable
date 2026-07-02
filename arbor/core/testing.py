@@ -82,6 +82,26 @@ class _RoleGrant:
     granted_via: Optional[str] = None
 
 
+@dataclass
+class _ProcessStage:
+    idx: int
+    column: str
+    sla_seconds: int = 0
+    notify_on_enter: bool = True
+
+
+@dataclass
+class _Process:
+    name: str
+    sheet: str
+    title: str = ""
+    enabled: bool = False
+    row_scope: str = "root-children"
+    start_trigger: str = "node-created"
+    sla_breach_notify: bool = True
+    stages: list[_ProcessStage] = field(default_factory=list)
+
+
 class InMemoryRepository:
     """A pure Python ``Repository`` with emulated NestedSet bookkeeping."""
 
@@ -101,6 +121,11 @@ class InMemoryRepository:
         self.role_grants: dict[str, _RoleGrant] = {}
         self.role_applications: dict[str, dict[str, Any]] = {}
         self.admins: set[str] = set()
+        # impersonation sessions (Area 1)
+        self.impersonation_sessions: dict[str, dict[str, Any]] = {}
+        # process / SLA (Area 3)
+        self.processes: dict[str, _Process] = {}  # keyed by process name
+        self.process_runs: dict[str, dict[str, Any]] = {}  # keyed by run name
         self._ids = itertools.count(1)
 
     def _id(self, prefix: str) -> str:
@@ -446,6 +471,114 @@ class InMemoryRepository:
 
     def list_admins(self) -> list[str]:
         return sorted(self.admins)
+
+    # --- impersonation sessions (Area 1) ---
+    def create_impersonation_session(
+        self, real_user: str, impersonated_user: str, reason: Optional[str] = None
+    ) -> str:
+        # at most one active session per real_user: end any prior one first.
+        self.end_impersonation(real_user)
+        name = self._id("imp")
+        self.impersonation_sessions[name] = {
+            "name": name,
+            "real_user": real_user,
+            "impersonated_user": impersonated_user,
+            "reason": reason,
+            "active": True,
+        }
+        return name
+
+    def get_active_impersonation(self, real_user: str) -> Optional[dict[str, Any]]:
+        for s in self.impersonation_sessions.values():
+            if s["real_user"] == real_user and s["active"]:
+                return dict(s)
+        return None
+
+    def end_impersonation(self, real_user: str) -> None:
+        for s in self.impersonation_sessions.values():
+            if s["real_user"] == real_user and s["active"]:
+                s["active"] = False
+
+    # --- process / SLA (Area 3) ---
+    def upsert_process(self, data: dict[str, Any]) -> str:
+        sheet = data["sheet"]
+        # replace any existing process for the sheet (one process per sheet).
+        existing = self.get_process(sheet)
+        name = existing.name if existing else self._id("proc")
+        enabled = existing.enabled if existing else False
+        self.processes[name] = _Process(
+            name=name,
+            sheet=sheet,
+            title=data.get("title", ""),
+            enabled=enabled,
+            row_scope=data.get("row_scope", "root-children"),
+            start_trigger=data.get("start_trigger", "node-created"),
+            sla_breach_notify=data.get("sla_breach_notify", True),
+            stages=[
+                _ProcessStage(
+                    idx=st.get("idx", i),
+                    column=st["column"],
+                    sla_seconds=int(st.get("sla_seconds") or 0),
+                    notify_on_enter=st.get("notify_on_enter", True),
+                )
+                for i, st in enumerate(data.get("stages") or [])
+            ],
+        )
+        return name
+
+    def get_process(self, sheet: str) -> Optional[_Process]:
+        for p in self.processes.values():
+            if p.sheet == sheet:
+                return p
+        return None
+
+    def set_process_enabled(self, process: str, enabled: bool) -> None:
+        self.processes[process].enabled = enabled
+
+    def list_in_scope_nodes(self, sheet: str, row_scope: str) -> list[str]:
+        nodes = [n for n in self.nodes.values() if n.sheet == sheet]
+        if row_scope == "all-nodes":
+            return [n.name for n in nodes]
+        # 'root-children' (default) + 'depth' (treated as root-children here):
+        # direct children of a root (parent whose own parent is None).
+        roots = {n.name for n in nodes if n.parent is None}
+        return [n.name for n in nodes if n.parent in roots]
+
+    def create_process_run(self, data: dict[str, Any]) -> str:
+        name = self._id("run")
+        self.process_runs[name] = {"name": name, **data}
+        return name
+
+    def get_process_run(self, process: str, node: str) -> Optional[dict[str, Any]]:
+        for r in self.process_runs.values():
+            if r["process"] == process and r["node"] == node:
+                return r
+        return None
+
+    def update_process_run(self, run: str, patch: dict[str, Any]) -> None:
+        self.process_runs[run].update(patch)
+
+    def list_process_runs(
+        self, sheet: str, status: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        out = [r for r in self.process_runs.values() if r["sheet"] == sheet]
+        if status is not None:
+            out = [r for r in out if r.get("status") == status]
+        return out
+
+    def list_active_runs_with_due(self, now: Any) -> list[dict[str, Any]]:
+        out = []
+        for r in self.process_runs.values():
+            if r.get("status") != "active":
+                continue
+            stages = r.get("stages") or []
+            cur_idx = r.get("current_stage_idx")
+            for s in stages:
+                if s.get("stage_idx") == cur_idx and s.get("due_at") is not None \
+                        and s.get("filled_at") is None:
+                    out.append(r)
+                    break
+        return out
 
 
 class RecordingEventSink:

@@ -78,6 +78,11 @@ REST_METHODS = {
     # role), so they are NOT in the exposed set and intentionally absent here.
     "applyForRole": "apply_for_role",
     "withdrawRoleApplication": "withdraw_role_application",
+    # process management (Feature: process) — the LLM-exposed governed caps.
+    "defineProcess": "define_process",
+    "enableProcess": "enable_process",
+    "disableProcess": "disable_process",
+    "startProcessRun": "start_process_run",
 }
 
 

@@ -9,6 +9,8 @@
   "type",
   "actor",
   "actor_type",
+  "real_user",
+  "impersonated_as",
   "change_request",
   "payload"
  ],
@@ -43,6 +45,20 @@
    "fieldtype": "Select",
    "label": "Actor Type",
    "options": "human\nagent\nsystem"
+  },
+  {
+   "description": "The truly-authenticated principal when this action was performed under impersonation; NULL for a normal action.",
+   "fieldname": "real_user",
+   "fieldtype": "Link",
+   "label": "Real User",
+   "options": "User"
+  },
+  {
+   "description": "The effective identity the real_user acted as when this action was performed under impersonation; NULL for a normal action.",
+   "fieldname": "impersonated_as",
+   "fieldtype": "Link",
+   "label": "Impersonated As",
+   "options": "User"
   },
   {
    "description": "Nullable; set for CR-related events.",

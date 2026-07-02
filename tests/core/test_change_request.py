@@ -50,6 +50,41 @@ def test_reject_emits_rejected_no_mutation():
     assert fx.repo.get_change_request(cr)["status"] == "rejected"
 
 
+def test_create_cr_carries_real_requester_when_impersonated():
+    fx = seed_canonical_sheet()
+    from arbor.core.change_request import create_change_request
+
+    imp = Actor(user=E, real_user="admin", impersonated_as=E)
+    cr = create_change_request(
+        fx.repo,
+        sheet=fx.sheet,
+        target_kind="cell-value",
+        operation="update",
+        payload={"node": fx.X, "column": fx.col_status, "value": "done", "_action_id": "updateCell"},
+        requester=imp,
+        resolved_approver=C,
+    )
+    stored = fx.repo.get_change_request(cr)
+    assert stored["requester"] == E
+    assert stored["real_requester"] == "admin"
+
+
+def test_create_cr_real_requester_none_when_not_impersonated():
+    fx = seed_canonical_sheet()
+    from arbor.core.change_request import create_change_request
+
+    cr = create_change_request(
+        fx.repo,
+        sheet=fx.sheet,
+        target_kind="cell-value",
+        operation="update",
+        payload={"node": fx.X, "column": fx.col_status, "value": "done", "_action_id": "updateCell"},
+        requester=Actor(E),
+        resolved_approver=C,
+    )
+    assert fx.repo.get_change_request(cr)["real_requester"] is None
+
+
 def test_withdraw_by_requester_emits_rejected_reason_withdrawn():
     fx = seed_canonical_sheet()
     cr, _ = _suggest_status_edit(fx)

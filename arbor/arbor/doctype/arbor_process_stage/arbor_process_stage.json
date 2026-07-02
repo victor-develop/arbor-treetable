@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "column",
+  "sla_seconds",
+  "notify_on_enter"
+ ],
+ "fields": [
+  {
+   "description": "The Tree Column whose owner fills this stage. Ordering is by the row idx (Frappe child-table sequence): left->right fill order.",
+   "fieldname": "column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Column",
+   "options": "Tree Column",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Per-transition SLA in seconds; 0 means no SLA (this stage never breaches).",
+   "fieldname": "sla_seconds",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "SLA Seconds"
+  },
+  {
+   "default": "1",
+   "description": "Notify the stage's resolved owner when a run enters this stage.",
+   "fieldname": "notify_on_enter",
+   "fieldtype": "Check",
+   "label": "Notify On Enter"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process Stage",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

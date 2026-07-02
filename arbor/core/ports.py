@@ -86,6 +86,34 @@ class RoleGrantView(Protocol):
     source: str  # "admin-grant" | "application"
 
 
+@runtime_checkable
+class ProcessStageView(Protocol):
+    """One ordered stage of an Arbor Process (Area 3). ``idx`` IS the left->right
+    fill order; ``column`` is the column whose owner fills the stage; the stage's
+    responsible owner is resolved LIVE via ``acl.resolve_column_approvers`` (never
+    stored), so re-grants reroute automatically."""
+
+    idx: int
+    column: str
+    sla_seconds: int  # 0 => no SLA
+    notify_on_enter: bool
+
+
+@runtime_checkable
+class ProcessView(Protocol):
+    """A per-sheet Arbor Process definition (Area 3). Exactly one ENABLED process
+    per sheet (enforced in the controller + on enable)."""
+
+    name: str
+    sheet: str
+    title: str
+    enabled: bool
+    row_scope: str  # 'root-children' | 'all-nodes' | 'depth'
+    start_trigger: str  # 'node-created' | 'manual'
+    sla_breach_notify: bool
+    stages: list[ProcessStageView]
+
+
 class Repository(Protocol):
     """The data seam. The adapter implements this over Frappe ORM + NestedSet;
     ``core.testing.InMemoryRepository`` implements it in pure Python.
@@ -208,6 +236,68 @@ class Repository(Protocol):
     def list_admins(self) -> list[str]:
         """User names holding the platform admin role (System Manager) — the
         recipients of a role-application-submitted notification."""
+        ...
+
+    # --- impersonation sessions (Area 1) ------------------------------------
+    def create_impersonation_session(
+        self, real_user: str, impersonated_user: str, reason: Optional[str] = None
+    ) -> str:
+        """Persist (and activate) an "act as" overlay for ``real_user`` acting as
+        ``impersonated_user``. At most one active session per real_user (the
+        handler ends any prior one first). Returns the new session id."""
+        ...
+
+    def get_active_impersonation(self, real_user: str) -> Optional[dict[str, Any]]:
+        """The active overlay row for ``real_user`` (``{name, real_user,
+        impersonated_user, reason, active}``), or None."""
+        ...
+
+    def end_impersonation(self, real_user: str) -> None:
+        """Deactivate any active overlay for ``real_user`` (idempotent)."""
+        ...
+
+    # --- process / SLA (Area 3) ---------------------------------------------
+    def upsert_process(self, data: dict[str, Any]) -> str:
+        """Create or replace the sheet's Arbor Process definition (+ stages);
+        return its id. ``data`` = {sheet, title?, stages:[{column, sla_seconds?,
+        notify_on_enter?}], row_scope?, start_trigger?, sla_breach_notify?}."""
+        ...
+
+    def get_process(self, sheet: str) -> Optional["ProcessView"]:
+        """The sheet's process definition (enabled or not), or None."""
+        ...
+
+    def set_process_enabled(self, process: str, enabled: bool) -> None:
+        """Flip the process ``enabled`` flag (enable/disable capability)."""
+        ...
+
+    def list_in_scope_nodes(self, sheet: str, row_scope: str) -> list[str]:
+        """Node ids that count as process 'rows' under ``row_scope`` (used by
+        enableProcess backfill + on NODE_CREATED scope check)."""
+        ...
+
+    def create_process_run(self, data: dict[str, Any]) -> str:
+        """Create an Arbor Process Run (+ its per-stage ledger). ``data`` =
+        {process, sheet, node, status, current_stage_idx, started_at, stages:[...]}"""
+        ...
+
+    def get_process_run(self, process: str, node: str) -> Optional[dict[str, Any]]:
+        """The run for (process, node), or None (unique per pair)."""
+        ...
+
+    def update_process_run(self, run: str, patch: dict[str, Any]) -> None:
+        """Patch a run row (status/current_stage_idx/completed_at/stages)."""
+        ...
+
+    def list_process_runs(
+        self, sheet: str, status: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Runs for ``sheet`` (optionally filtered by status) — dashboard source."""
+        ...
+
+    def list_active_runs_with_due(self, now: str) -> list[dict[str, Any]]:
+        """Active runs whose current stage has a due_at <= ``now`` and is not yet
+        filled — the bounded SLA-sweep candidate set."""
         ...
 
 

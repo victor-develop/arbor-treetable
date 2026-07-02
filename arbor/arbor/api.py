@@ -578,6 +578,31 @@ def suggest_changes(sheet, changes):
     return _dispatch("suggestChanges", {"sheet": sheet, "changes": _coerce(changes) or []})
 
 
+# Process management (Feature: process). Thin named shims for the LLM-exposed
+# process capabilities so the registry→REST reachability contract holds; the
+# dashboard/inbox read shims + the dispatch consumer land in the process wave.
+@frappe.whitelist()
+def define_process(sheet, stages, title=None):
+    return _dispatch(
+        "defineProcess", {"sheet": sheet, "stages": _coerce(stages) or [], "title": title}
+    )
+
+
+@frappe.whitelist()
+def enable_process(sheet):
+    return _dispatch("enableProcess", {"sheet": sheet})
+
+
+@frappe.whitelist()
+def disable_process(sheet):
+    return _dispatch("disableProcess", {"sheet": sheet})
+
+
+@frappe.whitelist()
+def start_process_run(sheet, node):
+    return _dispatch("startProcessRun", {"sheet": sheet, "node": node})
+
+
 @frappe.whitelist()
 def create_sheet(name, title=None, label="Item"):
     """Create a brand-new sheet — a STANDALONE whitelisted mutation, NOT a

@@ -205,6 +205,12 @@ def _resolve_column_authority(cap, params, actor, repo, sheet) -> Authority:
     )
 
 
+# Process META caps (Area 3): structural-owner gated, identical shape to
+# addColumn's column_creation policy — a non-owner's define/enable/disable/start
+# automatically becomes a Change Request routed to the sheet's structural owner.
+_PROCESS_META_CAPS = {"defineProcess", "enableProcess", "disableProcess", "startProcessRun"}
+
+
 def _resolve_meta_authority(cap, params, actor, repo, sheet) -> Authority:
     if cap.id == "addColumn":
         # column_creation policy placeholder, default "owner-only" (DECISIONS
@@ -215,6 +221,10 @@ def _resolve_meta_authority(cap, params, actor, repo, sheet) -> Authority:
         if policy == "owner-only":
             return Authority(is_authorized=(actor.user == owner), resolved_approver=owner)
         # future policies fall back to owner-only semantics
+        return Authority(is_authorized=(actor.user == owner), resolved_approver=owner)
+
+    if cap.id in _PROCESS_META_CAPS:
+        owner = repo.get_sheet(sheet).structural_owner
         return Authority(is_authorized=(actor.user == owner), resolved_approver=owner)
 
     # updateColumn / deleteColumn → column approvers.

@@ -60,7 +60,18 @@ _CONTROL = {
     "approveRoleApplication",
     "rejectRoleApplication",
     "withdrawRoleApplication",
+    # impersonation (Area 1) — admin-only control caps; emit NO Tree Event
+    # (the Arbor Impersonation Session row is the record).
+    "beginImpersonation",
+    "endImpersonation",
 }
+
+# Impersonation control caps gated on platform admin (System Manager) at dispatch
+# time — the framework-free axis resolver has no notion of platform roles, so
+# (like internalReset / the role admin caps) the gate is explicit HERE. The
+# surface computes ``actor.is_admin`` from the REAL user BEFORE the overlay is
+# applied, so an impersonated non-admin identity can never begin/end an overlay.
+_ADMIN_IMPERSONATION_CAPS = {"beginImpersonation", "endImpersonation"}
 
 # Role capabilities gated on platform admin (System Manager) at dispatch time —
 # the framework-free axis resolver has no notion of platform roles, so (like
@@ -133,6 +144,15 @@ def _resolve_sheet(params: dict, repo: Repository) -> str | None:
     return None
 
 
+def _trace(actor: Actor) -> dict[str, str | None]:
+    """The impersonation-trace kwargs for a TreeEvent. Both None for a normal
+    (non-impersonated) actor, so the emitted event is byte-for-byte as today;
+    populated with (real_user, impersonated_as) when the actor is impersonated."""
+    if actor.is_impersonated:
+        return {"real_user": actor.real_user, "impersonated_as": actor.user}
+    return {"real_user": None, "impersonated_as": None}
+
+
 def _run_and_emit(
     cap: Capability, params: dict, actor: Actor, repo: Repository, sink: EventSink
 ) -> Outcome:
@@ -145,6 +165,7 @@ def _run_and_emit(
             actor=actor.user,
             actor_type=actor.actor_type,
             change_request=None,
+            **_trace(actor),
         )
     )
     return Outcome(kind="executed", event=event, result=result, data=result.data)
@@ -180,6 +201,7 @@ def _suggest(
             actor=actor.user,
             actor_type=actor.actor_type,
             change_request=cr_name,
+            **_trace(actor),
         )
     )
     return Outcome(
@@ -255,7 +277,40 @@ def _dispatch_control(
     if cap.id in _ADMIN_ROLE_CAPS or cap.id in ("applyForRole", "withdrawRoleApplication"):
         return _dispatch_role(cap, params, actor, repo, sink)
 
+    if cap.id in _ADMIN_IMPERSONATION_CAPS:
+        return _dispatch_impersonation(cap, params, actor, repo)
+
     raise AuthorizationError(f"unhandled control capability {cap.id}")  # pragma: no cover
+
+
+def _dispatch_impersonation(
+    cap: Capability, params: dict, actor: Actor, repo: Repository
+) -> Outcome:
+    """Impersonation control dispatch (Area 1). Admin-gated HERE on
+    ``actor.is_admin`` (or the SYSTEM identity) — the surface computes admin
+    authority from the REAL user BEFORE building the effective Actor, so an
+    impersonated non-admin identity can never begin/end an overlay. Emits NO
+    Tree Event: the Arbor Impersonation Session row IS the audit record.
+    """
+    if not (getattr(actor, "is_admin", False) or actor.actor_type == ActorType.SYSTEM):
+        raise AuthorizationError(f"{cap.id} is admin only")
+    # The real principal is whoever authenticated: normally actor.user, or the
+    # recorded real_user if an overlay is (unexpectedly) already present.
+    real_user = actor.real_user or actor.user
+    if cap.id == "beginImpersonation":
+        target = params["impersonated_user"]
+        session = repo.create_impersonation_session(
+            real_user=real_user,
+            impersonated_user=target,
+            reason=params.get("reason"),
+        )
+        return Outcome(
+            kind="executed",
+            data={"impersonating": target, "session": session},
+        )
+    # endImpersonation
+    repo.end_impersonation(real_user)
+    return Outcome(kind="executed", data={"impersonating": None})
 
 
 def _dispatch_role(
@@ -377,6 +432,7 @@ def _explicit_suggest(params: dict, actor: Actor, repo: Repository, sink: EventS
             actor=actor.user,
             actor_type=actor.actor_type,
             change_request=cr_name,
+            **_trace(actor),
         )
     )
     return Outcome(
@@ -418,6 +474,7 @@ def _suggest_batch(params: dict, actor: Actor, repo: Repository, sink: EventSink
             actor=actor.user,
             actor_type=actor.actor_type,
             change_request=cr_name,
+            **_trace(actor),
         )
     )
     return Outcome(kind="suggested", change_request=cr_name, event=event)

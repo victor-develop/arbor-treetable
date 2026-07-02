@@ -96,9 +96,24 @@ class Actor:
     # roles). Gates administrative capabilities like ``internalReset`` that the
     # framework-free core cannot otherwise authorize.
     is_admin: bool = False
+    # --- Impersonation trace (Area 1) ---------------------------------------
+    # ``user`` is ALWAYS the EFFECTIVE identity (ACL/executor run against it).
+    # ``real_user`` is the truly-authenticated principal when this action was
+    # performed under an "act as" overlay; None for a normal (non-impersonated)
+    # action. ``impersonated_as`` mirrors the effective identity the real_user is
+    # acting as (== user when impersonating). Both default None so every existing
+    # keyword-constructed ``Actor(...)`` stays byte-for-byte compatible.
+    real_user: Optional[str] = None
+    impersonated_as: Optional[str] = None
 
     def __str__(self) -> str:  # so ``actor in {user_name, ...}`` style reads cleanly
         return self.user
+
+    @property
+    def is_impersonated(self) -> bool:
+        """True iff this action runs under an "act as" overlay: a real principal
+        is recorded AND it differs from the effective ``user``."""
+        return self.real_user is not None and self.real_user != self.user
 
 
 @dataclass(frozen=True)
@@ -147,6 +162,13 @@ class TreeEvent:
     change_request: Optional[str] = None
     event_id: Optional[str] = None
     timestamp: Optional[str] = None
+    # --- Impersonation trace (Area 1) ---------------------------------------
+    # Populated only when the emitting Actor is impersonated: ``real_user`` is the
+    # truly-authenticated admin, ``impersonated_as`` the effective identity acted
+    # as. Both None for a normal action — the FrappeEventSink writes the matching
+    # nullable Tree Event columns, so a normal event is byte-for-byte as today.
+    real_user: Optional[str] = None
+    impersonated_as: Optional[str] = None
 
 
 @dataclass(frozen=True)

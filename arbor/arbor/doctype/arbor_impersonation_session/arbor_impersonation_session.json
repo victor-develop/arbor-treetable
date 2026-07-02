@@ -1,0 +1,84 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "real_user",
+  "impersonated_user",
+  "active",
+  "started_at",
+  "ended_at",
+  "reason"
+ ],
+ "fields": [
+  {
+   "description": "The truly-authenticated principal (the admin) who is impersonating.",
+   "fieldname": "real_user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Real User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "description": "The effective identity the real_user is acting as.",
+   "fieldname": "impersonated_user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Impersonated User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "description": "Whether this impersonation window is currently active. At most one active row per real_user (enforced in the handler, not the schema).",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At"
+  },
+  {
+   "fieldname": "ended_at",
+   "fieldtype": "Datetime",
+   "label": "Ended At"
+  },
+  {
+   "description": "Optional justification recorded when impersonation began.",
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Impersonation Session",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
