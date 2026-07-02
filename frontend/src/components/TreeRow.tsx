@@ -31,6 +31,9 @@ export function TreeRow({
   onEdit,
   onDelete,
   editSignal,
+  preview,
+  proposedCell,
+  moved,
 }: {
   row: Row;
   columns: SnapshotColumn[];
@@ -41,6 +44,14 @@ export function TreeRow({
   pendingCount?: (node: string, column: string) => number;
   // Draft flow — does this cell carry an unsubmitted local draft?
   draftCell?: (node: string, column: string) => boolean;
+  // Proposed-view READ-ONLY preview: hide the drag handle + the per-row action
+  // cluster, and render Cells static. Chevron expand/collapse still works.
+  preview?: boolean;
+  // In preview, does this (node, column) cell carry a proposed value?
+  proposedCell?: (node: string, column: string) => boolean;
+  // In preview, was this node relocated by an open move CR? Renders a small
+  // "moved · proposed" tag on the row.
+  moved?: boolean;
   pendingMove: boolean;
   // External edit signal for THIS row's label cell — bumped by the parent when
   // the edit-pencil is clicked for this node, opening its inline label editor.
@@ -98,37 +109,50 @@ export function TreeRow({
       data-depth={depth}
       data-pending-move={pendingMove ? "true" : undefined}
       data-pending-delete={confirmDelete ? "true" : undefined}
-      data-drop={dropPosition ?? undefined}
-      onDragOver={(e) => {
-        e.preventDefault();
-        onDragOverRow?.(node, positionFromEvent(e));
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onDrop(node, positionFromEvent(e));
-      }}
+      data-moved={moved ? "true" : undefined}
+      data-drop={preview ? undefined : (dropPosition ?? undefined)}
+      // Preview is read-only: no drag targeting either (no drop, no drag-over).
+      onDragOver={
+        preview
+          ? undefined
+          : (e) => {
+              e.preventDefault();
+              onDragOverRow?.(node, positionFromEvent(e));
+            }
+      }
+      onDrop={
+        preview
+          ? undefined
+          : (e) => {
+              e.preventDefault();
+              onDrop(node, positionFromEvent(e));
+            }
+      }
     >
       <td className="arbor-label-cell">
         {/* Explicit drag handle: ONLY this grip starts a reorder, so a plain
             single click on a cell edits without fighting row drag. The row stays
             the drop target (onDragOver/onDrop above) but is no longer draggable
-            itself. Hover-revealed like the action cluster; keyboard-focusable. */}
-        <span
-          className="arbor-drag-handle"
-          data-testid={`drag-handle-${node.name}`}
-          draggable
-          role="button"
-          tabIndex={0}
-          aria-label={`Drag to reorder ${labelText}`}
-          title="Drag to reorder"
-          onDragStart={(e) => {
-            e.stopPropagation();
-            onDragStart(node);
-          }}
-          onDragEnd={() => onDragEnd?.()}
-        >
-          <GripVerticalIcon size={14} />
-        </span>
+            itself. Hover-revealed like the action cluster; keyboard-focusable.
+            Withheld entirely in the read-only Proposed preview. */}
+        {!preview && (
+          <span
+            className="arbor-drag-handle"
+            data-testid={`drag-handle-${node.name}`}
+            draggable
+            role="button"
+            tabIndex={0}
+            aria-label={`Drag to reorder ${labelText}`}
+            title="Drag to reorder"
+            onDragStart={(e) => {
+              e.stopPropagation();
+              onDragStart(node);
+            }}
+            onDragEnd={() => onDragEnd?.()}
+          >
+            <GripVerticalIcon size={14} />
+          </span>
+        )}
         <span style={{ paddingLeft: depth * 16 }} className="arbor-indent" />
         {hasChildren ? (
           <button
@@ -153,6 +177,8 @@ export function TreeRow({
               pendingTitle={pendingTitle?.(node.name, labelCol.name)}
               pendingCount={pendingCount?.(node.name, labelCol.name)}
               draft={draftCell?.(node.name, labelCol.name)}
+              preview={preview}
+              proposed={preview ? proposedCell?.(node.name, labelCol.name) : undefined}
               startEditing={editSignal}
               onCommit={(v) => onCommitCell(node, labelCol, v)}
             />
@@ -160,12 +186,19 @@ export function TreeRow({
         ) : (
           <span data-testid={`label-${node.name}`}>{labelText}</span>
         )}
+        {/* Proposed preview: a small tag marking rows relocated by an open move
+            CR, so the hypothetical reparent reads clearly against the live tree. */}
+        {moved && (
+          <span className="arbor-moved-tag" data-testid={`moved-${node.name}`} title="Relocated by an open move suggestion">
+            moved · proposed
+          </span>
+        )}
         {/* Per-row action cluster lives INSIDE the frozen-left label cell so it
             is always reachable with zero horizontal scroll (the trailing actions
             column sat ~2184px off-screen). Right-aligned (margin-left:auto),
             hover/focus-revealed, with an opaque backdrop so it reads cleanly over
             the label. Order: +sibling, +child, edit, delete. */}
-        {(onAddSibling || onAddChild || onEdit || onDelete) && (
+        {!preview && (onAddSibling || onAddChild || onEdit || onDelete) && (
           <span className="arbor-row-actions">
             {onAddSibling && (
               <button
@@ -272,6 +305,8 @@ export function TreeRow({
                   pendingTitle={pendingTitle?.(node.name, c.name)}
                   pendingCount={pendingCount?.(node.name, c.name)}
                   draft={draftCell?.(node.name, c.name)}
+                  preview={preview}
+                  proposed={preview ? proposedCell?.(node.name, c.name) : undefined}
                   onCommit={(val) => onCommitCell(node, c, val)}
                 />
               )}

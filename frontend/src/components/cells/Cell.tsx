@@ -22,6 +22,8 @@ export function Cell({
   pendingTitle,
   pendingCount,
   draft,
+  preview,
+  proposed,
   startEditing,
   onCommit,
 }: {
@@ -38,6 +40,14 @@ export function Cell({
   // "draft" marker), clearly different from the pending-approval dot. The cell
   // still edits on click — a re-edit just rewrites the draft.
   draft?: boolean;
+  // Proposed-view preview mode — the whole sheet is a READ-ONLY hypothetical.
+  // The cell renders STATIC (no editor, no click-to-edit, no edit/suggest hint):
+  // the user is previewing a "what if every proposal landed" state, not editing.
+  preview?: boolean;
+  // Within a preview, this cell's value is a PROPOSED value (from a pending
+  // suggestion) rather than the real one — add a distinct "proposed" treatment
+  // (a blue/accent underline + chip) clearly different from the amber draft.
+  proposed?: boolean;
   // External edit trigger: a monotonically-incrementing signal. Each time it
   // increases to a truthy value the (interactive text-like) cell enters edit
   // mode and focuses — this is how the row's edit-pencil opens the label cell's
@@ -54,6 +64,37 @@ export function Cell({
     if (valuesEqual(normalized, value)) return; // WEB_UI-018
     onCommit(normalized);
   };
+
+  // Proposed-view preview: render every cell STATIC. No editor, no click-to-edit,
+  // no edit/suggest hint. A proposed cell gets a distinct treatment (data-proposed
+  // + accent underline chip); the pending marker still shows so the dot survives.
+  if (preview) {
+    return (
+      <div
+        className={`arbor-cell is-readonly is-preview${proposed ? " is-proposed" : ""}`}
+        data-testid="cell"
+        data-mode="preview"
+        data-proposed={proposed ? "true" : undefined}
+        data-pending={pending ? "true" : undefined}
+        title={proposed ? "Proposed value" : undefined}
+      >
+        <span className="arbor-cell-value">
+          {renderStatic(value) || <span className="arbor-cell-empty">—</span>}
+        </span>
+        {proposed && <ProposedMarker />}
+        {pending && (
+          <span
+            className="arbor-pending"
+            data-testid="pending-marker"
+            data-count={pendingCount && pendingCount > 0 ? pendingCount : undefined}
+            title={pendingTitle ?? "Suggestion pending"}
+          >
+            {pendingCount && pendingCount > 1 ? pendingCount : "•"}
+          </span>
+        )}
+      </div>
+    );
+  }
 
   if (!interactive) {
     return (
@@ -110,6 +151,21 @@ function DraftMarker(): JSX.Element {
       title="Unsaved draft — submit for approval to send it"
     >
       draft
+    </span>
+  );
+}
+
+// Proposed-view marker: a small accent "proposed" chip on a cell whose value is
+// a proposed suggestion (in the read-only Proposed preview). Deliberately a WORD
+// with a distinct accent color so it never reads as the amber draft chip.
+function ProposedMarker(): JSX.Element {
+  return (
+    <span
+      className="arbor-proposed-marker"
+      data-testid="proposed-marker"
+      title="Proposed value — from an open suggestion"
+    >
+      proposed
     </span>
   );
 }

@@ -2468,6 +2468,84 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+/* Live | Proposed segmented control — same segmented shape as .arbor-density, in
+   the header controls cluster. The active "Proposed" segment reads in the accent
+   so the read-only preview mode is unmistakable. */
+.arbor-view-mode {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  padding: 2px;
+}
+.arbor-view-mode button {
+  border: none;
+  background: none;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.arbor-view-mode button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.arbor-view-mode button[data-testid="view-mode-proposed"][aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent-tint);
+}
+
+/* Proposed-view preview — a proposed cell shows the suggested value with a
+   distinct accent (blue) underline + a small "proposed" chip, deliberately
+   different from the amber draft treatment and from the pending dot. */
+.arbor-cell.is-preview {
+  cursor: default;
+}
+.arbor-cell.is-proposed .arbor-cell-value {
+  text-decoration: underline solid var(--accent);
+  text-underline-offset: 3px;
+  color: var(--accent-ink);
+}
+.arbor-proposed-marker {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-ring);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
+/* A row relocated by an open move CR in the Proposed preview — a small accent
+   tag next to the label + a faint accent rail so the reparent reads at a glance. */
+.arbor-moved-tag {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-ring);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.arbor-row[data-moved="true"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 /* --------------------------------------------------------------- responsive -- */
 /* Below 820px the desktop two-pane (table + side rail) stacks: the TABLE owns
    the screen (still dense + horizontally scrollable with a frozen first column),

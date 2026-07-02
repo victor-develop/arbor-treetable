@@ -68,6 +68,15 @@ export type TreeTableProps = {
   editSignal?: number;
   // Add a ROOT-level node (parent=null) — the toolbar "+ Add node" button.
   onAddNode?: () => void;
+  // Proposed-view READ-ONLY preview: no drag handle, no per-row action cluster,
+  // no cell editing (Cells render static). Chevron expand/collapse still works.
+  preview?: boolean;
+  // In preview, does this (node, column) cell show a PROPOSED value? Drives the
+  // Cell's distinct "proposed" treatment.
+  proposedCell?: (node: string, column: string) => boolean;
+  // In preview, was this node relocated by an open move CR? Drives the row's
+  // "moved · proposed" tag.
+  movedNode?: (node: string) => boolean;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -92,6 +101,9 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     editingNode,
     editSignal,
     onAddNode,
+    preview,
+    proposedCell,
+    movedNode,
   } = props;
 
   const dragged = useRef<SnapshotNode | null>(null);
@@ -265,11 +277,17 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             onDragEnd={clearDropHint}
             dropPosition={dropHint?.node === row.node.name ? dropHint.pos : null}
             onDrop={handleDrop}
-            onAddChild={onAddChild}
-            onAddSibling={onAddSibling}
-            onEdit={onEdit}
-            onDelete={onDeleteNode}
+            // Preview is READ-ONLY: withhold every mutating affordance (the drag
+            // handle, the +sibling/+child/edit/delete cluster). Chevron toggle +
+            // proposed-value styling + the moved tag are what preview keeps.
+            onAddChild={preview ? undefined : onAddChild}
+            onAddSibling={preview ? undefined : onAddSibling}
+            onEdit={preview ? undefined : onEdit}
+            onDelete={preview ? undefined : onDeleteNode}
             editSignal={editingNode === row.node.name ? editSignal : undefined}
+            preview={preview}
+            proposedCell={proposedCell}
+            moved={preview ? movedNode?.(row.node.name) : undefined}
           />
         ))}
       </tbody>

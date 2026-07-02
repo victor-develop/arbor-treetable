@@ -2,6 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it } from "vitest";
 import App from "./App";
 import { loginAs, mockClient } from "./test/fixture";
+import type { ArborClient, ChangeRequestView, Snapshot } from "./api";
+
+// Wrap the base mock client with a listChangeRequests that returns fixed CRs, so
+// the Proposed overlay's MOVE path is exercised end-to-end through the shell.
+function clientWithCRs(snapshot: Snapshot, crs: ChangeRequestView[]): ArborClient {
+  const { client } = mockClient({ snapshot });
+  return { ...client, listChangeRequests: async () => crs };
+}
 
 describe("App — snapshot-driven shell wiring", () => {
   it("loads the snapshot and renders the tree (WEB_UI-001)", async () => {
@@ -226,6 +234,126 @@ describe("App — snapshot-driven shell wiring", () => {
     const back = screen.getByTestId("back-to-sheets");
     // Home = the same path with the query dropped (index.tsx renders SheetList then).
     expect(back.getAttribute("href")).toBe(window.location.pathname);
+  });
+
+  it("view-mode toggle flips Live ↔ Proposed with aria-pressed", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const toggle = screen.getByTestId("view-mode-toggle");
+    expect(toggle).toBeInTheDocument();
+    // Default = Live.
+    expect(screen.getByTestId("view-mode-live")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("view-mode-proposed")).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(screen.getByTestId("view-mode-proposed"));
+    expect(screen.getByTestId("view-mode-proposed")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("view-mode-live")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("proposed mode shows the PROPOSED cell value (not the real one) with the proposed style", async () => {
+    // Seed a pending suggestion on X's budget (real 1000 → proposed 500).
+    const snap = loginAs("B");
+    snap.nodes = snap.nodes.map((n) =>
+      n.name === "X"
+        ? { ...n, pending: { "col:budget": [{ value: 500, requester: "c", change_request: "CR1" }] } }
+        : n,
+    );
+    const { client } = mockClient({ snapshot: snap });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const budgetSel = () =>
+      screen.getByTestId("row-X").querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    // Live: real value.
+    expect(budgetSel()).toHaveTextContent("1000");
+
+    fireEvent.click(screen.getByTestId("view-mode-proposed"));
+    const proposed = budgetSel();
+    expect(proposed).toHaveTextContent("500");
+    expect(proposed).not.toHaveTextContent("1000");
+    expect(proposed).toHaveAttribute("data-proposed", "true");
+    expect(within(screen.getByTestId("row-X")).getByTestId("proposed-marker")).toBeInTheDocument();
+    // The pending dot still shows in preview.
+    expect(within(screen.getByTestId("row-X")).getByTestId("pending-marker")).toBeInTheDocument();
+  });
+
+  it("preview disables editing (click a cell → no input) and hides the drag handle", async () => {
+    const { client, calls } = mockClient({ snapshot: loginAs("B"), outcome: { kind: "executed" } });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    fireEvent.click(screen.getByTestId("view-mode-proposed"));
+
+    const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
+    expect(notesCell).toHaveAttribute("data-mode", "preview");
+    fireEvent.click(notesCell);
+    expect(screen.queryByTestId("cell-input")).toBeNull();
+    expect(calls.find((c) => c.action === "updateCell")).toBeUndefined();
+    // No drag handles in preview.
+    expect(screen.queryByTestId("drag-handle-X")).toBeNull();
+  });
+
+  it("toggling back to Live restores the real value + editability", async () => {
+    const snap = loginAs("B");
+    snap.nodes = snap.nodes.map((n) =>
+      n.name === "X" ? { ...n, pending: { "col:notes": [{ value: "PROPOSED" }] } } : n,
+    );
+    const { client } = mockClient({ snapshot: snap, outcome: { kind: "executed" } });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const notesSel = () =>
+      screen.getByTestId("row-X").querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
+    fireEvent.click(screen.getByTestId("view-mode-proposed"));
+    expect(notesSel()).toHaveTextContent("PROPOSED");
+    expect(notesSel()).toHaveAttribute("data-mode", "preview");
+
+    // Back to Live: real value + editable again.
+    fireEvent.click(screen.getByTestId("view-mode-live"));
+    const live = notesSel();
+    expect(live).toHaveTextContent("v1"); // fixture real value
+    expect(live).not.toHaveTextContent("PROPOSED");
+    expect(live).toHaveAttribute("data-mode", "edit"); // B owns col:notes
+    // Editing works again.
+    fireEvent.click(live);
+    expect(screen.getByTestId("cell-input")).toBeInTheDocument();
+    // Drag handle is back.
+    expect(screen.getByTestId("drag-handle-X")).toBeInTheDocument();
+  });
+
+  it("proposed mode relocates a moved node from an open move CR and tags the row", async () => {
+    // Move X (under P1) into P2 as the first child.
+    const crs: ChangeRequestView[] = [
+      {
+        name: "CR-MOVE",
+        requester: "a",
+        resolved_approver: "d",
+        status: "proposed",
+        operation: "move",
+        target_kind: "node-structure",
+        payload: { sheet: "S", node: "X", new_parent: "P2", after: null, _action_id: "moveNode" },
+      },
+    ];
+    const client = clientWithCRs(loginAs("A"), crs);
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    // Live order.
+    const liveOrder = screen.getAllByTestId(/^row-/).map((r) => r.getAttribute("data-testid"));
+    expect(liveOrder).toEqual(["row-R", "row-P1", "row-X", "row-P2", "row-Y", "row-Z"]);
+
+    fireEvent.click(screen.getByTestId("view-mode-proposed"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^row-/).map((r) => r.getAttribute("data-testid"))).toEqual([
+        "row-R",
+        "row-P1",
+        "row-P2",
+        "row-X",
+        "row-Y",
+        "row-Z",
+      ]),
+    );
+    // The relocated row carries the moved tag.
+    expect(screen.getByTestId("moved-X")).toBeInTheDocument();
   });
 
   it("agent bubble toggles the floating popup open/closed (UX M1)", async () => {

@@ -105,3 +105,59 @@ describe("Cell editing → onCommit routing", () => {
     expect(screen.getByTestId("pending-marker")).toBeInTheDocument();
   });
 });
+
+describe("Cell — Proposed preview (read-only overlay)", () => {
+  it("preview renders the value STATIC: no editor opens on click, no commit", () => {
+    const onCommit = vi.fn();
+    render(<Cell column={notes(true)} value="v1" preview onCommit={onCommit} />);
+    const cell = screen.getByTestId("cell");
+    expect(cell).toHaveAttribute("data-mode", "preview");
+    fireEvent.click(cell);
+    expect(screen.queryByTestId("cell-input")).toBeNull();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("preview shows no edit/suggest hint (read-only)", () => {
+    const { container } = render(<Cell column={notes(false)} value="v1" preview onCommit={() => {}} />);
+    expect(container.querySelector(".arbor-edit-hint")).toBeNull();
+    expect(container.querySelector(".arbor-suggest-hint")).toBeNull();
+  });
+
+  it("a proposed cell gets a distinct proposed treatment (data-proposed + chip)", () => {
+    render(<Cell column={notes(true)} value="proposed value" preview proposed onCommit={() => {}} />);
+    const cell = screen.getByTestId("cell");
+    expect(cell).toHaveAttribute("data-proposed", "true");
+    expect(screen.getByTestId("proposed-marker")).toBeInTheDocument();
+    expect(cell).toHaveTextContent("proposed value");
+  });
+
+  it("preview still renders the pending marker (the dot survives)", () => {
+    render(<Cell column={notes(false)} value="v1" preview proposed pending pendingCount={2} onCommit={() => {}} />);
+    expect(screen.getByTestId("pending-marker")).toHaveTextContent("2");
+  });
+
+  it("a preview cell that is NOT proposed carries neither data-proposed nor the chip", () => {
+    render(<Cell column={notes(true)} value="v1" preview onCommit={() => {}} />);
+    expect(screen.getByTestId("cell")).not.toHaveAttribute("data-proposed");
+    expect(screen.queryByTestId("proposed-marker")).toBeNull();
+  });
+
+  it("preview applies even to a split (non-text) column — static, no editor", () => {
+    const status: SnapshotColumn = {
+      name: "col:status",
+      field: "status",
+      label: "Status",
+      type: "single-select-split",
+      is_label: false,
+      column_owner: "C",
+      editors: [],
+      can_edit: true,
+      options: { groups: [{ label: "Stage", options: ["todo", "done"] }] },
+    };
+    render(<Cell column={status} value={["done"]} preview proposed onCommit={() => {}} />);
+    const cell = screen.getByTestId("cell");
+    expect(cell).toHaveAttribute("data-mode", "preview");
+    expect(cell).toHaveTextContent("done");
+    expect(screen.getByTestId("proposed-marker")).toBeInTheDocument();
+  });
+});
