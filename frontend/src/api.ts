@@ -64,8 +64,22 @@ export type SnapshotNode = {
   // sourced, so the marker survives refresh AND is visible to every viewer who
   // can read the column (not just the session that filed the suggestion).
   pending?: Record<string, PendingMark[]>;
+  // Feature (comments) — per-cell comment summary keyed by column name (sparse:
+  // only cells with >=1 comment appear). Read-ACL filtered server-side, so a
+  // column the viewer can't read never surfaces here. Powers the cell glyph's
+  // count / unread dot with zero extra round-trips (parallel to `pending`).
+  comments?: Record<string, CellCommentSummary>;
   // ACL hint: may the viewer change this node's structure (add/move/delete)?
   can_change_structure: boolean;
+};
+
+// The per-cell comment rollup carried in the snapshot (never the bodies). `open`
+// / `resolved` are thread counts on the cell; `unread` is comments newer than
+// the viewer's last-seen marker (session-local in v1).
+export type CellCommentSummary = {
+  open: number;
+  resolved: number;
+  unread: number;
 };
 
 // One open suggestion (proposed Change Request) targeting a cell.
@@ -95,6 +109,14 @@ export type Snapshot = {
     subscription?: string | null;
     // active branch delegations on this sheet (for the delegation control)
     branch_grants?: BranchGrantView[];
+    // Impersonation hints (Feature: act-as). `impersonating` is true when the
+    // real (admin) session is currently acting AS another user; `effective_user`
+    // is the identity ACL runs against (== snapshot.actor), `real_user` the truly
+    // -authenticated admin. The ImpersonationBar renders the "acting as … — Stop"
+    // banner off these; the server never re-derives ACL from them.
+    impersonating?: boolean;
+    real_user?: string | null;
+    effective_user?: string | null;
   };
 };
 
@@ -265,6 +287,10 @@ export type ActivityEvent = {
   column: string | null;
   // human one-liner, e.g. "alice updated the Stage of SSO Federation".
   summary: string;
+  // The truly-authenticated principal when this event was produced under
+  // impersonation (else null/absent). When present and != actor, the Activity
+  // feed renders a subtle "via <real_user>" affix so the audit trail is legible.
+  real_user?: string | null;
 };
 
 // The paged result of arbor.list_activity (NEW object shape; was a bare list).
@@ -283,6 +309,116 @@ export type SheetSummary = {
   name: string;
   structural_owner: string;
   node_count: number;
+};
+
+// ---- impersonation (Feature: act-as) --------------------------------------
+// The auth-gate + banner signal from arbor.auth.whoami. `user` is the EFFECTIVE
+// identity (the impersonated user while acting-as, else the real session user);
+// `real_user` is the truly-authenticated principal (present + != user only under
+// impersonation); `authenticated` is false for a Guest (drives the login gate).
+export type Whoami = {
+  user: string;
+  real_user?: string | null;
+  impersonating?: boolean;
+  authenticated: boolean;
+  redirect_to?: string | null;
+};
+
+// ---- per-cell comments (Feature: comments) --------------------------------
+// One comment in a cell's thread, as returned by arbor.list_cell_comments
+// (ordered creation-asc; grouped by thread_root client-side). `thread_root` is
+// null on a root comment, else the root's name; `parent_comment` is the direct
+// reply target. `can_resolve`/`can_delete` are DISPLAY-only server hints (the
+// shim re-enforces authority) — never re-derive ACL from them.
+export type CellComment = {
+  name: string;
+  thread_root: string | null;
+  parent_comment: string | null;
+  author: string;
+  body: string;
+  mentions: string[];
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  timestamp: string;
+  can_resolve: boolean;
+  can_delete: boolean;
+};
+
+// ---- process / SLA / inbox (Feature: process) -----------------------------
+// One stage in a process definition (from arbor.get_process). `idx` is the fill
+// order; `column` the column whose owner fills it; `current_owner` is resolved
+// LIVE server-side (re-grants reroute automatically); `label` is the readable
+// column label (null when the viewer can't read that column).
+export type ProcessStage = {
+  idx: number;
+  column: string;
+  label: string | null;
+  sla_seconds: number;
+  current_owner?: string | null;
+};
+
+// A process definition + enabled state for a sheet (arbor.get_process).
+export type ProcessDef = {
+  sheet: string;
+  title: string | null;
+  enabled: boolean;
+  row_scope: string;
+  start_trigger: string;
+  stages: ProcessStage[];
+};
+
+// One stage column in the process definition write payload (defineProcess). Only
+// `column` is required; `sla_seconds` is optional (0/absent = no SLA).
+export type ProcessStageInput = {
+  column: string;
+  sla_seconds?: number;
+};
+
+// A per-stage aggregate row for the Kanban/flow dashboard (process_dashboard).
+export type ProcessDashboardStage = {
+  idx: number;
+  column: string;
+  label: string | null;
+  pending_count: number;
+  breached_count: number;
+  avg_enter_to_fill_seconds: number | null;
+};
+
+// The dashboard aggregate over Process Run + Run Stage rows (process_dashboard).
+export type ProcessDashboard = {
+  stages: ProcessDashboardStage[];
+  total_active: number;
+  total_completed: number;
+  throughput: number;
+};
+
+// One per-row process run (arbor.list_process_runs) — a node's position in the
+// process. `current_stage_idx` is the active stage; run rows never carry cell
+// VALUES (structural position only).
+export type ProcessRun = {
+  name: string;
+  process: string;
+  sheet: string;
+  node: string;
+  status: "active" | "completed" | "abandoned";
+  current_stage_idx: number;
+  started_at: string;
+  completed_at: string | null;
+};
+
+// One row in the viewer's cross-sheet Inbox (arbor.inbox) — a superset of a
+// per-sheet NotificationView carrying the source sheet + an optional node deep
+// link. `event_type` may be a display string (e.g. "COMMENT_ADDED") that is NOT
+// one of the 11 server EventTypes; the UI renders it via NotificationItem.
+export type InboxItem = {
+  name: string;
+  sheet: string;
+  event_type: string;
+  message: string;
+  requires_ack: boolean;
+  acked: boolean;
+  node?: string | null;
 };
 
 export type ArborClient = {
@@ -337,6 +473,47 @@ export type ArborClient = {
   discardCellDraft?: (sheet: string, node: string, column: string) => Promise<{ ok: boolean }>;
   discardCellDrafts?: (sheet: string) => Promise<{ discarded: number }>;
   submitCellDrafts?: (sheet: string) => Promise<Outcome>;
+  // Impersonation (Feature: act-as). `whoami` powers BOTH the login gate and the
+  // banner; begin/end are governed capabilities routed through execute_action
+  // (admin-gated server-side). Optional so mocked clients can omit them.
+  whoami?: () => Promise<Whoami>;
+  beginImpersonation?: (user: string, reason?: string) => Promise<Outcome>;
+  endImpersonation?: () => Promise<Outcome>;
+  // Per-cell comments (Feature: comments). Read (list) is a GET; the writes
+  // funnel through post(). `reopen` is resolve with resolved=false. All optional
+  // so a mocked client implements only the subset it exercises.
+  listCellComments?: (sheet: string, node: string, column: string) => Promise<CellComment[]>;
+  addCellComment?: (
+    sheet: string,
+    node: string,
+    column: string,
+    body: string,
+    opts?: { parent_comment?: string; mentions?: string[] },
+  ) => Promise<{ name: string; thread_root: string | null; mentions: string[] }>;
+  resolveCellComment?: (comment: string) => Promise<{ ok: boolean }>;
+  reopenCellComment?: (comment: string) => Promise<{ ok: boolean }>;
+  deleteCellComment?: (comment: string) => Promise<{ ok: boolean }>;
+  // Process / SLA / inbox (Feature: process). define/enable/disable/start are
+  // governed capabilities via execute_action (structural-owner gated; a non-owner
+  // define auto-routes to a Change Request); the rest are read GET shims. All
+  // optional so mocked clients implement only what they use.
+  defineProcess?: (
+    sheet: string,
+    stages: ProcessStageInput[],
+    opts?: { title?: string; row_scope?: string; start_trigger?: string },
+  ) => Promise<Outcome>;
+  enableProcess?: (sheet: string) => Promise<Outcome>;
+  disableProcess?: (sheet: string) => Promise<Outcome>;
+  startProcessRun?: (sheet: string, node: string) => Promise<Outcome>;
+  getProcess?: (sheet: string) => Promise<ProcessDef>;
+  processDashboard?: (sheet: string) => Promise<ProcessDashboard>;
+  listProcessRuns?: (
+    sheet: string,
+    opts?: { stage_idx?: number; status?: string },
+  ) => Promise<ProcessRun[]>;
+  // The viewer's cross-sheet in-app notifications (the Inbox page). Self-scoped
+  // server-side to the actor.
+  inbox?: () => Promise<InboxItem[]>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   agentChat: (
@@ -455,6 +632,118 @@ export const api: ArborClient = {
     post<{ discarded: number }>("arbor.discard_cell_drafts", { sheet }),
 
   submitCellDrafts: (sheet) => post<Outcome>("arbor.submit_cell_drafts", { sheet }),
+
+  // Impersonation — whoami is a GET (mirrors the listNotifications header pattern
+  // but with no query); begin/end funnel through execute_action like every
+  // governed mutation (the server admin-gates them off the REAL user).
+  whoami: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.auth.whoami`, { headers });
+    if (!res.ok) throw new Error(`whoami failed: ${res.status}`);
+    return unwrap<Whoami>(await res.json());
+  },
+
+  beginImpersonation: (user, reason) =>
+    post<Outcome>("arbor.execute_action", {
+      action_id: "beginImpersonation",
+      params: { impersonated_user: user, ...(reason === undefined ? {} : { reason }) },
+    }),
+
+  endImpersonation: () =>
+    post<Outcome>("arbor.execute_action", { action_id: "endImpersonation", params: {} }),
+
+  // Comments — list is a GET (sheet/node/column qs, mirroring list_cell_drafts);
+  // the writes funnel through post(). reopen is resolve with resolved=false.
+  listCellComments: async (sheet, node, column) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet, node, column }).toString();
+    const res = await fetchImpl(`/api/method/arbor.list_cell_comments?${qs}`, { headers });
+    if (!res.ok) throw new Error(`list_cell_comments failed: ${res.status}`);
+    return unwrap<CellComment[]>(await res.json());
+  },
+
+  addCellComment: (sheet, node, column, body, opts) =>
+    post<{ name: string; thread_root: string | null; mentions: string[] }>(
+      "arbor.add_cell_comment",
+      {
+        sheet,
+        node,
+        column,
+        body,
+        // Only thread parent/mentions when supplied — a root FYI comment sends
+        // neither (the server derives thread_root + parses @mentions from body).
+        ...(opts?.parent_comment === undefined ? {} : { parent_comment: opts.parent_comment }),
+        ...(opts?.mentions === undefined ? {} : { mentions: opts.mentions }),
+      },
+    ),
+
+  resolveCellComment: (comment) =>
+    post<{ ok: boolean }>("arbor.resolve_cell_comment", { comment, resolved: true }),
+
+  reopenCellComment: (comment) =>
+    post<{ ok: boolean }>("arbor.resolve_cell_comment", { comment, resolved: false }),
+
+  deleteCellComment: (comment) =>
+    post<{ ok: boolean }>("arbor.delete_cell_comment", { comment }),
+
+  // Process — define/enable/disable/start are governed caps via execute_action;
+  // the read shims mirror the listActivity/listNotifications GET+qs pattern.
+  defineProcess: (sheet, stages, opts) =>
+    post<Outcome>("arbor.execute_action", {
+      action_id: "defineProcess",
+      params: {
+        sheet,
+        stages,
+        ...(opts?.title === undefined ? {} : { title: opts.title }),
+        ...(opts?.row_scope === undefined ? {} : { row_scope: opts.row_scope }),
+        ...(opts?.start_trigger === undefined ? {} : { start_trigger: opts.start_trigger }),
+      },
+    }),
+
+  enableProcess: (sheet) =>
+    post<Outcome>("arbor.execute_action", { action_id: "enableProcess", params: { sheet } }),
+
+  disableProcess: (sheet) =>
+    post<Outcome>("arbor.execute_action", { action_id: "disableProcess", params: { sheet } }),
+
+  startProcessRun: (sheet, node) =>
+    post<Outcome>("arbor.execute_action", {
+      action_id: "startProcessRun",
+      params: { sheet, node },
+    }),
+
+  getProcess: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet }).toString();
+    const res = await fetchImpl(`/api/method/arbor.get_process?${qs}`, { headers });
+    if (!res.ok) throw new Error(`get_process failed: ${res.status}`);
+    return unwrap<ProcessDef>(await res.json());
+  },
+
+  processDashboard: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet }).toString();
+    const res = await fetchImpl(`/api/method/arbor.process_dashboard?${qs}`, { headers });
+    if (!res.ok) throw new Error(`process_dashboard failed: ${res.status}`);
+    return unwrap<ProcessDashboard>(await res.json());
+  },
+
+  listProcessRuns: async (sheet, opts) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet });
+    if (opts?.stage_idx !== undefined) qs.set("stage_idx", String(opts.stage_idx));
+    if (opts?.status !== undefined) qs.set("status", opts.status);
+    const res = await fetchImpl(`/api/method/arbor.list_process_runs?${qs.toString()}`, { headers });
+    if (!res.ok) throw new Error(`list_process_runs failed: ${res.status}`);
+    return unwrap<ProcessRun[]>(await res.json());
+  },
+
+  inbox: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.inbox`, { headers });
+    if (!res.ok) throw new Error(`inbox failed: ${res.status}`);
+    return unwrap<InboxItem[]>(await res.json());
+  },
 
   agentChat: async (sheet, message, onFrame) => {
     const headers = {

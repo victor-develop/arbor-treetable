@@ -200,6 +200,20 @@ export function ActivityPanel({
                   <span className="arbor-activity-actor" data-testid="activity-actor">
                     {e.actor}
                   </span>
+                  {/* Impersonation trace: when this event was produced under
+                      impersonation the server carries the real principal in
+                      real_user. Render a subtle "via <real_user>" affix (only when
+                      present AND distinct from the effective actor) so the audit
+                      trail is legible in the UI, not just the DB. */}
+                  {e.real_user && e.real_user !== e.actor && (
+                    <span
+                      className="arbor-activity-via"
+                      data-testid="activity-via"
+                      title={`Performed by ${e.real_user} acting as ${e.actor}`}
+                    >
+                      via {e.real_user}
+                    </span>
+                  )}
                   <time
                     className="arbor-activity-time"
                     data-testid="activity-time"

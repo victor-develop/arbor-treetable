@@ -4,7 +4,7 @@
 // column. Drag/drop reports a (position) to the parent which computes moveNode.
 
 import { useState } from "react";
-import type { Snapshot, SnapshotColumn, SnapshotNode } from "../api";
+import type { CellCommentSummary, Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
 import { CornerDownRightIcon, GripVerticalIcon, PencilIcon, PlusIcon, TrashIcon } from "./icons";
@@ -18,6 +18,8 @@ export function TreeRow({
   pendingTitle,
   pendingCount,
   draftCell,
+  commentSummary,
+  onOpenComments,
   pendingMove,
   onToggle,
   onCommitCell,
@@ -44,6 +46,9 @@ export function TreeRow({
   pendingCount?: (node: string, column: string) => number;
   // Draft flow — does this cell carry an unsubmitted local draft?
   draftCell?: (node: string, column: string) => boolean;
+  // Per-cell comment summary + drawer opener, threaded down to each Cell glyph.
+  commentSummary?: (node: string, column: string) => CellCommentSummary | undefined;
+  onOpenComments?: (node: string, column: string) => void;
   // Proposed-view READ-ONLY preview: hide the drag handle + the per-row action
   // cluster, and render Cells static. Chevron expand/collapse still works.
   preview?: boolean;
@@ -180,6 +185,10 @@ export function TreeRow({
               preview={preview}
               proposed={preview ? proposedCell?.(node.name, labelCol.name) : undefined}
               startEditing={editSignal}
+              comments={commentSummary?.(node.name, labelCol.name)}
+              onOpenComments={
+                onOpenComments ? () => onOpenComments(node.name, labelCol.name) : undefined
+              }
               onCommit={(v) => onCommitCell(node, labelCol, v)}
             />
           </span>
@@ -307,6 +316,10 @@ export function TreeRow({
                   draft={draftCell?.(node.name, c.name)}
                   preview={preview}
                   proposed={preview ? proposedCell?.(node.name, c.name) : undefined}
+                  comments={commentSummary?.(node.name, c.name)}
+                  onOpenComments={
+                    onOpenComments ? () => onOpenComments(node.name, c.name) : undefined
+                  }
                   onCommit={(val) => onCommitCell(node, c, val)}
                 />
               )}

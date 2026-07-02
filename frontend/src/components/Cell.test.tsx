@@ -106,6 +106,86 @@ describe("Cell editing → onCommit routing", () => {
   });
 });
 
+describe("Cell — comment glyph", () => {
+  it("no glyph when the cell has no comment summary", () => {
+    render(<Cell column={notes(true)} value="v1" onCommit={() => {}} onOpenComments={() => {}} />);
+    expect(screen.queryByTestId("comment-glyph")).toBeNull();
+  });
+
+  it("glyph shows the open count and fires onOpenComments", () => {
+    const onOpen = vi.fn();
+    render(
+      <Cell
+        column={notes(true)}
+        value="v1"
+        comments={{ open: 3, resolved: 1, unread: 0 }}
+        onCommit={() => {}}
+        onOpenComments={onOpen}
+      />,
+    );
+    const glyph = screen.getByTestId("comment-glyph");
+    expect(glyph).toHaveTextContent("3");
+    fireEvent.click(glyph);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unread comment adds an unread marker on the glyph", () => {
+    render(
+      <Cell
+        column={notes(true)}
+        value="v1"
+        comments={{ open: 2, resolved: 0, unread: 1 }}
+        onCommit={() => {}}
+        onOpenComments={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("comment-glyph")).toHaveAttribute("data-unread", "true");
+  });
+
+  it("a cell with ONLY resolved comments still shows the glyph (count 0)", () => {
+    render(
+      <Cell
+        column={notes(true)}
+        value="v1"
+        comments={{ open: 0, resolved: 2, unread: 0 }}
+        onCommit={() => {}}
+        onOpenComments={() => {}}
+      />,
+    );
+    // Shows a plain glyph (no numeric badge) so a resolved thread is still reachable.
+    expect(screen.getByTestId("comment-glyph")).toBeInTheDocument();
+  });
+
+  it("clicking the glyph does not open the cell editor (stopPropagation)", () => {
+    const onCommit = vi.fn();
+    render(
+      <Cell
+        column={notes(true)}
+        value="v1"
+        comments={{ open: 1, resolved: 0, unread: 0 }}
+        onCommit={onCommit}
+        onOpenComments={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("comment-glyph"));
+    expect(screen.queryByTestId("cell-input")).toBeNull();
+  });
+
+  it("glyph is inert (hidden) in Proposed preview", () => {
+    render(
+      <Cell
+        column={notes(true)}
+        value="v1"
+        preview
+        comments={{ open: 3, resolved: 0, unread: 1 }}
+        onCommit={() => {}}
+        onOpenComments={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("comment-glyph")).toBeNull();
+  });
+});
+
 describe("Cell — Proposed preview (read-only overlay)", () => {
   it("preview renders the value STATIC: no editor opens on click, no commit", () => {
     const onCommit = vi.fn();
