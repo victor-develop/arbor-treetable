@@ -135,6 +135,11 @@ export function TreeRow({
       }
     >
       <td className="arbor-label-cell">
+        {/* Inner flex wrapper carries the horizontal layout. The <td> itself stays
+            a plain (sticky) table-cell so it STRETCHES to the full row height — a
+            flex <td> collapses to content height, leaving a gap through which a
+            horizontally-scrolled column bleeds under the frozen column. */}
+        <div className="arbor-label-inner">
         {/* Explicit drag handle: ONLY this grip starts a reorder, so a plain
             single click on a cell edits without fighting row drag. The row stays
             the drop target (onDragOver/onDrop above) but is no longer draggable
@@ -284,6 +289,7 @@ export function TreeRow({
               ))}
           </span>
         )}
+        </div>
       </td>
       {columns
         .filter((c) => !c.is_label)
