@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TreeTable, computeOverflowState } from "./TreeTable";
 import { loginAs } from "../test/fixture";
@@ -215,5 +215,51 @@ describe("TreeTable drag-and-drop → moveNode", () => {
     fireEvent.dragStart(screen.getByTestId("drag-handle-P2"));
     dropFromTop("row-Z", 0.5);
     expect(onMove).not.toHaveBeenCalled();
+  });
+
+  function stubRect(testId: string) {
+    const row = screen.getByTestId(testId);
+    row.getBoundingClientRect = () =>
+      ({ top: 0, height: 90, left: 0, right: 0, bottom: 90, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    return row;
+  }
+  // fireEvent(...).dragOver drops the clientY init for drag events, so build the
+  // event and pin clientY on it directly (positionFromEvent reads e.clientY).
+  function dragOverAt(row: HTMLElement, fraction: number) {
+    const ev = createEvent.dragOver(row);
+    Object.defineProperty(ev, "clientY", { value: 90 * fraction });
+    fireEvent(row, ev);
+  }
+
+  it("shows a live drop indicator on the hovered row (before/inside/after) and clears it on drop", () => {
+    renderTable();
+    fireEvent.dragStart(screen.getByTestId("drag-handle-Y"));
+    const p2 = stubRect("row-P2");
+    dragOverAt(p2, 0.05); // top third → before
+    expect(p2).toHaveAttribute("data-drop", "before");
+    dragOverAt(p2, 0.5); // middle → inside
+    expect(p2).toHaveAttribute("data-drop", "inside");
+    dragOverAt(p2, 0.95); // bottom third → after
+    expect(p2).toHaveAttribute("data-drop", "after");
+    fireEvent.drop(p2, { clientY: 90 * 0.5 });
+    expect(p2).not.toHaveAttribute("data-drop"); // cleared after the drop
+  });
+
+  it("suppresses the drop indicator over an illegal target (own descendant)", () => {
+    renderTable();
+    fireEvent.dragStart(screen.getByTestId("drag-handle-P2"));
+    const z = stubRect("row-Z"); // Z is inside P2 → illegal
+    dragOverAt(z, 0.5);
+    expect(z).not.toHaveAttribute("data-drop");
+  });
+
+  it("clears the drop indicator when the drag ends without a drop (cancel)", () => {
+    renderTable();
+    fireEvent.dragStart(screen.getByTestId("drag-handle-Y"));
+    const p2 = stubRect("row-P2");
+    dragOverAt(p2, 0.5);
+    expect(p2).toHaveAttribute("data-drop", "inside");
+    fireEvent.dragEnd(screen.getByTestId("drag-handle-Y"));
+    expect(p2).not.toHaveAttribute("data-drop");
   });
 });
