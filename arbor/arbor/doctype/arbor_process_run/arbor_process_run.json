@@ -5,7 +5,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "process",
+  "arbor_process",
   "sheet",
   "node",
   "status",
@@ -16,7 +16,7 @@
  ],
  "fields": [
   {
-   "fieldname": "process",
+   "fieldname": "arbor_process",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Process",
