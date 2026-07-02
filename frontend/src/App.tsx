@@ -58,9 +58,13 @@ export type AppProps = {
   sheetName?: string;
   client?: ArborClient;
   snapshot?: Snapshot;
+  // Which view mode to land in. The app entry points pass "proposed" so a viewer
+  // sees the proposed (pending-overlaid) state on entry; defaults to "live" so
+  // tests (and the seeded standalone shell) keep the editable view.
+  initialViewMode?: ViewMode;
 };
 
-export default function App({ sheetName, client, snapshot }: AppProps = {}): JSX.Element {
+export default function App({ sheetName, client, snapshot, initialViewMode }: AppProps = {}): JSX.Element {
   // Back-compat seed path: a directly-supplied snapshot renders standalone.
   if (snapshot && !client && !sheetName) {
     return <SeededShell snapshot={snapshot} />;
@@ -77,11 +81,25 @@ export default function App({ sheetName, client, snapshot }: AppProps = {}): JSX
       </main>
     );
   }
-  return <ConnectedShell client={client ?? defaultClient} sheetName={sheetName ?? "(none)"} />;
+  return (
+    <ConnectedShell
+      client={client ?? defaultClient}
+      sheetName={sheetName ?? "(none)"}
+      initialViewMode={initialViewMode}
+    />
+  );
 }
 
 // The connected shell drives the live capability API through useSheet.
-function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName: string }): JSX.Element {
+function ConnectedShell({
+  client,
+  sheetName,
+  initialViewMode,
+}: {
+  client: ArborClient;
+  sheetName: string;
+  initialViewMode?: ViewMode;
+}): JSX.Element {
   // Feature 2 — parse the shared ?v= token ONCE on mount (a malformed/oversize/
   // unknown-version token decodes to null → the default view). useSheet seeds its
   // view + collapsed set from this and thereafter owns the URL via replaceState.
@@ -296,7 +314,7 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // untouched); "proposed" is a READ-ONLY preview overlaying every pending
   // proposed change (cell suggestions + open move CRs) so the user SEES the
   // hypothetical state instead of only red dots. The overlay is a pure lib.
-  const [viewMode, setViewMode] = useState<ViewMode>("live");
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode ?? "live");
   // Compute the proposed overlay only when previewing (pure; cheap either way).
   // In "live" mode nothing is overlaid and the real sheet.nodes render as today.
   const overlay = useMemo(
