@@ -592,7 +592,7 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
   function processClient(opts?: { def?: ProcessDef | null }) {
     // A owns sheet S (structural_owner == "A"), so A may configure the process.
     const { client } = mockClient({ snapshot: loginAs("A") });
-    const defineCalls: { stages: unknown }[] = [];
+    const defineCalls: { rules: unknown }[] = [];
     let enableCalls = 0;
     const c: ArborClient = {
       ...client,
@@ -602,11 +602,10 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
           title: null,
           enabled: false,
           row_scope: "root-children",
-          start_trigger: "node-created",
-          stages: [],
+          rules: [],
         },
-      defineProcess: async (_s, stages) => {
-        defineCalls.push({ stages });
+      defineProcess: async (_s, rules) => {
+        defineCalls.push({ rules });
         return { kind: "executed" };
       },
       enableProcess: async () => {
@@ -627,16 +626,19 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     expect(screen.getByTestId("process-config")).toBeInTheDocument();
   });
 
-  it("adding a stage + Save process fires defineProcess", async () => {
+  it("adding a node + connecting an edge + Save process fires defineProcess", async () => {
     const { client, defineCalls } = processClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
     fireEvent.click(screen.getByTestId("process-config-button"));
     await screen.findByTestId("process-config");
 
-    // Pick a column stage then add it.
-    fireEvent.change(screen.getByTestId("pc-add-column"), { target: { value: "col:status" } });
-    fireEvent.click(screen.getByTestId("pc-add-stage"));
+    // Add col:status as a canvas node, then draw START -> col:status.
+    fireEvent.change(screen.getByTestId("canvas-add-column"), { target: { value: "col:status" } });
+    fireEvent.click(screen.getByTestId("canvas-add-node"));
+    fireEvent.click(screen.getByTestId("canvas-connect-__start__"));
+    fireEvent.click(screen.getByTestId("canvas-node-body-col:status"));
+    // The edge is now drawn; Save emits the packed rule payload.
     fireEvent.click(screen.getByTestId("pc-define"));
     await waitFor(() => expect(defineCalls).toHaveLength(1));
   });
@@ -648,8 +650,21 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
         title: "Flow",
         enabled: false,
         row_scope: "root-children",
-        start_trigger: "node-created",
-        stages: [{ idx: 0, column: "col:status", label: "Status", sla_seconds: 0 }],
+        rules: [
+          {
+            rule_key: "r0",
+            idx: 0,
+            trigger_kind: "row",
+            trigger_column: null,
+            trigger_column_label: null,
+            trigger_op: "created-or-updated",
+            expected_columns: ["col:status"],
+            expected_labels: ["Status"],
+            within_seconds: 0,
+            notify_on_expect: true,
+            label: null,
+          },
+        ],
       },
     });
     render(<App client={client} sheetName="S" />);

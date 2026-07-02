@@ -179,28 +179,33 @@ describe("comments client", () => {
 describe("process client", () => {
   it("defineProcess routes through execute_action, threading only set opts", async () => {
     const { calls } = mockFetch({ kind: "executed", data: {} });
-    await api.defineProcess!("S1", [{ column: "a" }, { column: "b", sla_seconds: 3600 }], {
-      title: "Fill order",
-      row_scope: "root-children",
-    });
+    const rules: import("./api").ProcessRuleInput[] = [
+      { trigger_kind: "row", trigger_op: "created-or-updated", expected_columns: ["a"] },
+      {
+        trigger_kind: "column",
+        trigger_column: "a",
+        trigger_op: "updated",
+        expected_columns: ["b"],
+        within_seconds: 3600,
+      },
+    ];
+    await api.defineProcess!("S1", rules, { title: "Fill order", row_scope: "root-children" });
     expect(calls[0].url).toBe("/api/method/arbor.execute_action");
     expect(lastBody(calls[0].init)).toEqual({
       action_id: "defineProcess",
-      params: {
-        sheet: "S1",
-        stages: [{ column: "a" }, { column: "b", sla_seconds: 3600 }],
-        title: "Fill order",
-        row_scope: "root-children",
-      },
+      params: { sheet: "S1", rules, title: "Fill order", row_scope: "root-children" },
     });
   });
 
-  it("defineProcess sends only sheet+stages when no opts", async () => {
+  it("defineProcess sends only sheet+rules when no opts", async () => {
     const { calls } = mockFetch({ kind: "executed", data: {} });
-    await api.defineProcess!("S1", [{ column: "a" }]);
+    const rules: import("./api").ProcessRuleInput[] = [
+      { trigger_kind: "row", trigger_op: "created", expected_columns: ["a"] },
+    ];
+    await api.defineProcess!("S1", rules);
     expect(lastBody(calls[0].init)).toEqual({
       action_id: "defineProcess",
-      params: { sheet: "S1", stages: [{ column: "a" }] },
+      params: { sheet: "S1", rules },
     });
   });
 
@@ -227,8 +232,22 @@ describe("process client", () => {
       title: "Fill order",
       enabled: true,
       row_scope: "root-children",
-      start_trigger: "node-created",
-      stages: [{ idx: 0, column: "a", label: "A", sla_seconds: 0, current_owner: "alice@example.com" }],
+      rules: [
+        {
+          rule_key: "r0",
+          idx: 0,
+          trigger_kind: "row",
+          trigger_column: null,
+          trigger_column_label: null,
+          trigger_op: "created-or-updated",
+          expected_columns: ["a"],
+          expected_labels: ["A"],
+          within_seconds: 0,
+          notify_on_expect: true,
+          label: null,
+          expected_owners: { a: "alice@example.com" },
+        },
+      ],
     };
     const { calls } = mockFetch(def);
     const out = await api.getProcess!("S1");
@@ -240,8 +259,20 @@ describe("process client", () => {
 
   it("processDashboard GETs the aggregate for a sheet", async () => {
     const dash: ProcessDashboard = {
-      stages: [
-        { idx: 0, column: "a", label: "A", pending_count: 2, breached_count: 1, avg_enter_to_fill_seconds: 120 },
+      edges: [
+        {
+          rule_key: "r0",
+          from_kind: "row",
+          from_column: null,
+          from_label: null,
+          to_column: "a",
+          to_label: "A",
+          within_seconds: 0,
+          pending_count: 2,
+          breached_count: 1,
+          satisfied_count: 3,
+          avg_open_to_satisfy_seconds: 120,
+        },
       ],
       total_active: 2,
       total_completed: 5,
@@ -253,7 +284,7 @@ describe("process client", () => {
     expect(new URL(calls[0].url, "http://x").pathname).toBe("/api/method/arbor.process_dashboard");
   });
 
-  it("listProcessRuns GETs with sheet + optional stage_idx/status filters", async () => {
+  it("listProcessRuns GETs with sheet + optional rule_key/column/status filters", async () => {
     const runs: ProcessRun[] = [
       {
         name: "r1",
@@ -261,17 +292,28 @@ describe("process client", () => {
         sheet: "S1",
         node: "N1",
         status: "active",
-        current_stage_idx: 1,
         started_at: "2026-07-01T00:00:00",
         completed_at: null,
+        expectations: [
+          {
+            rule_key: "r0",
+            expected_column: "a",
+            to_label: "A",
+            opened_at: "2026-07-01T00:00:00",
+            satisfied_at: null,
+            due_at: null,
+            breached: false,
+          },
+        ],
       },
     ];
     const { calls } = mockFetch(runs);
-    await api.listProcessRuns!("S1", { stage_idx: 1, status: "active" });
+    await api.listProcessRuns!("S1", { rule_key: "r0", column: "a", status: "active" });
     const u = new URL(calls[0].url, "http://x");
     expect(u.pathname).toBe("/api/method/arbor.list_process_runs");
     expect(u.searchParams.get("sheet")).toBe("S1");
-    expect(u.searchParams.get("stage_idx")).toBe("1");
+    expect(u.searchParams.get("rule_key")).toBe("r0");
+    expect(u.searchParams.get("column")).toBe("a");
     expect(u.searchParams.get("status")).toBe("active");
   });
 
@@ -280,7 +322,7 @@ describe("process client", () => {
     await api.listProcessRuns!("S1");
     const u = new URL(calls[0].url, "http://x");
     expect(u.searchParams.get("sheet")).toBe("S1");
-    expect(u.searchParams.has("stage_idx")).toBe(false);
+    expect(u.searchParams.has("rule_key")).toBe(false);
     expect(u.searchParams.has("status")).toBe(false);
   });
 

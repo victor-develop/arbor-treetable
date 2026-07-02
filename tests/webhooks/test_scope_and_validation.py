@@ -11,8 +11,20 @@ Maps WEBHOOKS-002, 003, 004, 006, 007, 008, 043, 044, 045, 046, 049.
 
 from __future__ import annotations
 
+from arbor.core.security import verify_signature
 from arbor.core.types import EVENT_TYPES, EventType, Actor
-from arbor.arbor.dispatch.testing import FakeEvent, FakeResponse, FakeTransport
+from arbor.arbor.dispatch.serializer import (
+    TREE_EVENT_SOURCE,
+    serialize_notification_bytes,
+    serialize_notification_dict,
+)
+from arbor.arbor.dispatch.testing import (
+    FakeEndpoint,
+    FakeEvent,
+    FakeResponse,
+    FakeTransport,
+)
+from arbor.arbor.dispatch.webhook import EVENT_ID_HEADER, SOURCE_HEADER
 
 from tests.fixtures.canonical import A, C, D, G
 from tests.webhooks.harness import endpoint, make_world
@@ -247,3 +259,138 @@ def test_invalid_event_type_is_outside_the_closed_set():
     for t in EVENT_TYPES:  # no real event type can satisfy a bogus filter
         w.dispatcher.on_tree_event(FakeEvent(f"e-{t}", w.fx.sheet, t, {"node": w.fx.X}))
     assert w.deliveries_for("EXT_ENDPOINT") == []
+
+
+# --- WS-A3a: reusable deliver() seam + notification-shaped serializer -------
+#
+# The delivery/backoff/signing engine is extracted so the notification fan-out
+# (WS-A3b) and the event-stream webhooks share ONE implementation. These assert
+# the seam directly (bench-free), NOT the fan-out policy (that is WS-A3b).
+
+
+def _notif_endpoint(name="EXT_NOTIF", *, sources, secret="notif-secret"):
+    return FakeEndpoint(
+        name=name,
+        url="http://x",
+        secret=secret,
+        event_types=[],
+        scope="sheet",
+        target="S",
+        notification_sources=list(sources),
+    )
+
+
+def test_notification_serializer_mirrors_tree_event_envelope():
+    """The notification-shaped payload carries the SAME envelope keys as a tree
+    event PLUS a ``source`` discriminator, so a consumer parses one shape."""
+    d = serialize_notification_dict(
+        event_id="notif-1",
+        source="comment",
+        sheet="S",
+        type="COMMENT_ADDED",
+        payload={"comment": "cmt-9", "node": "X", "column": "col:budget"},
+        actor="B",
+        actor_type="human",
+        timestamp="2026-01-01 00:00:00",
+    )
+    assert set(d) == {
+        "type", "sheet", "payload", "actor", "actor_type",
+        "change_request", "timestamp", "event_id", "source",
+    }
+    assert d["source"] == "comment"
+    assert d["event_id"] == "notif-1"
+    assert d["type"] == "COMMENT_ADDED"  # display string, NOT a closed EventType
+    assert d["change_request"] is None  # CR link (if any) rides inside payload
+
+
+def test_notification_bytes_are_stable_and_hmac_verifies():
+    """The notification body is byte-stable JSON signed with the SAME HMAC path as
+    tree events, so the receiver verifies over the wire bytes (WEBHOOKS-015/016)."""
+    kwargs = dict(event_id="n-2", source="process", sheet="S", type="PROCESS_PENDING")
+    b1 = serialize_notification_bytes(**kwargs)
+    b2 = serialize_notification_bytes(**kwargs)
+    assert b1 == b2  # deterministic
+    from arbor.core.security import compute_signature
+
+    sig = compute_signature("k", b1)
+    assert verify_signature("k", b1, sig)
+
+
+def test_deliver_notification_creates_signed_delivery_row():
+    """``deliver_notification`` persists ONE Webhook Delivery with source +
+    notification link + event_id, signs the body, and drives a first attempt —
+    reusing the SAME create/attempt core as ``on_tree_event``."""
+    w = _world()
+    ep = _notif_endpoint(sources=["comment"])
+    w.store.add_endpoint(ep)
+    body = serialize_notification_bytes(
+        event_id="notif-7", source="comment", sheet=w.fx.sheet, type="COMMENT_ADDED"
+    )
+    did = w.dispatcher.deliver_notification(
+        ep, notification_id="notif-7", body=body, source="comment"
+    )
+    assert did is not None
+    d = w.store.deliveries[did]
+    assert d["source"] == "comment"
+    assert d["notification"] == "notif-7"
+    assert d["event_id"] == "notif-7"
+    assert d.get("tree_event") is None  # no Tree Event for a notification delivery
+    assert d["status"] == "delivered"  # FakeTransport default 200
+    assert verify_signature(ep.secret, body, d["signature"])
+    # the outbound request carried the source + event_id headers
+    req = w.transport.requests[-1]
+    assert req["headers"][SOURCE_HEADER] == "comment"
+    assert req["headers"][EVENT_ID_HEADER] == "notif-7"
+
+
+def test_deliver_notification_idempotent_per_endpoint_event_id():
+    """A replay of the SAME (endpoint, notification_id) is a no-op — the ONE
+    per-(endpoint, event_id) key spans both sources (WS-F1)."""
+    w = _world()
+    ep = _notif_endpoint(sources=["sla"])
+    w.store.add_endpoint(ep)
+    body = serialize_notification_bytes(
+        event_id="n-dup", source="sla", sheet=w.fx.sheet, type="SLA_BREACHED"
+    )
+    first = w.dispatcher.deliver_notification(ep, notification_id="n-dup", body=body, source="sla")
+    second = w.dispatcher.deliver_notification(ep, notification_id="n-dup", body=body, source="sla")
+    assert first is not None and second is None
+    assert len([d for d in w.deliveries() if d["endpoint"] == ep.name]) == 1
+
+
+def test_tree_event_delivery_carries_event_id_and_tree_event_source():
+    """The tree-event lane, now routed through the shared ``deliver()`` core, still
+    stores ``tree_event`` AND records ``source=tree_event`` + ``event_id`` so its
+    idempotency key is the same per-(endpoint, event_id) key (WEBHOOKS-020)."""
+    w = _world()
+    w.store.add_endpoint(endpoint(url="http://x", event_types=[NVU]))
+    w.execute(
+        "updateCell",
+        {"sheet": w.fx.sheet, "node": w.fx.X, "column": w.fx.col_budget, "value": 5},
+        Actor(C),
+    )
+    d = w.deliveries_for("EXT_ENDPOINT")[0]
+    assert d["source"] == TREE_EVENT_SOURCE
+    assert d["event_id"] == d["tree_event"]  # same stable id
+    req = w.transport.requests[-1]
+    assert req["headers"][SOURCE_HEADER] == TREE_EVENT_SOURCE
+    assert req["headers"][EVENT_ID_HEADER] == d["tree_event"]
+
+
+def test_notification_endpoints_filters_by_source_and_active():
+    """The store's ``notification_endpoints(source)`` returns only ACTIVE endpoints
+    whose ``notification_sources`` contains the source — the fan-out endpoint set
+    (WS-A3b) reuses this, disjoint from the tree-event ``active_endpoints``."""
+    w = _world()
+    w.store.add_endpoint(_notif_endpoint("EP_COMMENT", sources=["comment"]))
+    w.store.add_endpoint(_notif_endpoint("EP_MULTI", sources=["comment", "process"]))
+    inactive = _notif_endpoint("EP_OFF", sources=["comment"])
+    inactive.active = False
+    w.store.add_endpoint(inactive)
+    # a pure tree-event endpoint (no notification_sources) never matches a source
+    w.store.add_endpoint(endpoint("EP_TREE", url="http://x", event_types=[NVU]))
+
+    names = {e.name for e in w.store.notification_endpoints("comment")}
+    assert names == {"EP_COMMENT", "EP_MULTI"}
+    assert {e.name for e in w.store.notification_endpoints("process")} == {"EP_MULTI"}
+    assert w.store.notification_endpoints("change_request") == []

@@ -288,24 +288,31 @@ _S_END_IMPERSONATION = {
 # --- process / SLA (Area 3) -----------------------------------------------
 _S_DEFINE_PROCESS = {
     "type": "object",
-    "required": ["sheet", "stages"],
+    "required": ["sheet", "rules"],
     "properties": {
         "sheet": {"type": "string"},
         "title": {"type": "string"},
-        "stages": {
+        "rules": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["column"],
+                "required": ["trigger_kind", "expected_columns"],
                 "properties": {
-                    "column": {"type": "string"},
-                    "sla_seconds": {"type": "integer", "minimum": 0},
-                    "notify_on_enter": {"type": "boolean"},
+                    "rule_key": {"type": "string"},
+                    "label": {"type": "string"},
+                    "trigger_kind": {"enum": ["row", "column"]},
+                    "trigger_column": {"type": ["string", "null"]},
+                    "trigger_op": {"enum": ["created", "updated", "created-or-updated"]},
+                    "expected_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "within_seconds": {"type": "integer", "minimum": 0},
+                    "notify_on_expect": {"type": "boolean"},
                 },
             },
         },
         "row_scope": {"enum": ["root-children", "all-nodes", "depth"]},
-        "start_trigger": {"enum": ["node-created", "manual"]},
         "sla_breach_notify": {"type": "boolean"},
     },
 }
@@ -750,7 +757,7 @@ _CAPABILITIES: tuple[Capability, ...] = (
     # + SLA sweep are dispatch-lane side effects, deliberately NOT capabilities.
     Capability(
         id="defineProcess",
-        name="Define a per-sheet process (stage order + SLA)",
+        name="Define a per-sheet process (trigger->expectation rule DAG + SLA)",
         params_schema=_S_DEFINE_PROCESS,
         axis=Axis.META,
         target_kind=TargetKind.COLUMN_SCHEMA,

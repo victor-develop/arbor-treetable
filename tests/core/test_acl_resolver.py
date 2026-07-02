@@ -132,7 +132,11 @@ import pytest  # noqa: E402
 def test_process_cap_authorized_only_for_structural_owner(cid):
     fx = seed_canonical_sheet()
     cap = get_capability(cid)
-    params = {"sheet": fx.sheet, "stages": [{"column": fx.col_status}], "node": fx.X}
+    params = {
+        "sheet": fx.sheet,
+        "rules": [{"trigger_kind": "row", "expected_columns": [fx.col_status]}],
+        "node": fx.X,
+    }
     # A is the sheet structural owner → authorized (direct path).
     auth_owner = resolve_authority(cap, params, Actor(A), fx.repo)
     assert auth_owner.is_authorized is True

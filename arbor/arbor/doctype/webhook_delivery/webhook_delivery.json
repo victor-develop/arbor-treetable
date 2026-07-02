@@ -6,7 +6,10 @@
  "engine": "InnoDB",
  "field_order": [
   "endpoint",
+  "source",
   "tree_event",
+  "notification",
+  "event_id",
   "status",
   "attempts",
   "signature",
@@ -23,13 +26,33 @@
    "reqd": 1
   },
   {
-   "description": "Payload source.",
+   "default": "tree_event",
+   "description": "Payload source discriminator: a Tree Event, or a non-tree-event notification (comment/process/sla/change_request) routed through the fan-out seam.",
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "tree_event\ncomment\nprocess\nsla\nchange_request"
+  },
+  {
+   "description": "Payload source when source=tree_event. Nullable (a notification-sourced delivery has no Tree Event).",
    "fieldname": "tree_event",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Tree Event",
-   "options": "Tree Event",
-   "reqd": 1
+   "options": "Tree Event"
+  },
+  {
+   "description": "Payload source when source is a non-tree-event notification. Nullable.",
+   "fieldname": "notification",
+   "fieldtype": "Link",
+   "label": "Notification",
+   "options": "Notification"
+  },
+  {
+   "description": "The source's stable id (tree_event event_id or notification name), the per-(endpoint, event_id) delivery idempotency key.",
+   "fieldname": "event_id",
+   "fieldtype": "Data",
+   "label": "Event ID"
   },
   {
    "default": "pending",

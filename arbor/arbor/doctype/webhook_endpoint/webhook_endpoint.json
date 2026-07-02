@@ -5,15 +5,26 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "label",
   "url",
   "secret",
   "active",
+  "sheet",
+  "owner_user",
   "scope",
   "target_doctype",
   "target",
-  "event_types"
+  "event_types",
+  "notification_sources"
  ],
  "fields": [
+  {
+   "description": "Human label for the endpoint (registration surface + delivery log).",
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label"
+  },
   {
    "description": "Delivery URL.",
    "fieldname": "url",
@@ -34,6 +45,20 @@
    "fieldname": "active",
    "fieldtype": "Check",
    "label": "Active"
+  },
+  {
+   "description": "The sheet whose admin registered + owns this endpoint (registration gating + per-sheet listing). Null for a legacy global endpoint.",
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "label": "Sheet",
+   "options": "Tree Sheet"
+  },
+  {
+   "description": "The User who registered this endpoint (must be a sheet admin at register time). Null for a legacy endpoint.",
+   "fieldname": "owner_user",
+   "fieldtype": "Link",
+   "label": "Owner User",
+   "options": "User"
   },
   {
    "default": "sheet",
@@ -62,6 +87,12 @@
    "fieldname": "event_types",
    "fieldtype": "JSON",
    "label": "Event Types"
+  },
+  {
+   "description": "Subscribed NON-tree-event notification sources (e.g. comment, process, sla, change_request) for the notification fan-out seam. JSON array of source discriminators; empty/null means tree-events only.",
+   "fieldname": "notification_sources",
+   "fieldtype": "Small Text",
+   "label": "Notification Sources"
   }
  ],
  "index_web_pages_for_search": 1,

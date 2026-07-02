@@ -169,6 +169,18 @@ def test_webhook_endpoint_fields():
 	assert secret["fieldtype"] == "Password"
 
 
+def test_webhook_endpoint_notification_fan_out_extension():
+	# Notification-webhook fan-out surface: sheet-owned registration + subscribing
+	# to non-tree-event notification sources. Additive to the existing endpoint.
+	dt = _load("webhook_endpoint")
+	f = _fieldnames(dt)
+	assert {"sheet", "owner_user", "notification_sources", "label"} <= f
+	sheet = next(x for x in dt["fields"] if x["fieldname"] == "sheet")
+	assert sheet["fieldtype"] == "Link" and sheet["options"] == "Tree Sheet"
+	owner_user = next(x for x in dt["fields"] if x["fieldname"] == "owner_user")
+	assert owner_user["fieldtype"] == "Link" and owner_user["options"] == "User"
+
+
 def test_webhook_delivery_fields():
 	dt = _load("webhook_delivery")
 	f = _fieldnames(dt)
@@ -180,6 +192,22 @@ def test_webhook_delivery_fields():
 	assert set(status["options"].split("\n")) == {
 		"pending", "delivered", "failed", "exhausted",
 	}
+
+
+def test_webhook_delivery_notification_fan_out_extension():
+	# The delivery log can be sourced from a non-tree-event notification, so
+	# tree_event is now nullable and a source discriminator + notification link +
+	# event_id (the per-(endpoint, event_id) idempotency key) are added.
+	dt = _load("webhook_delivery")
+	f = _fieldnames(dt)
+	assert {"source", "notification", "event_id"} <= f
+	tree_event = next(x for x in dt["fields"] if x["fieldname"] == "tree_event")
+	assert not tree_event.get("reqd"), "Webhook Delivery.tree_event must be nullable"
+	source = next(x for x in dt["fields"] if x["fieldname"] == "source")
+	assert source["fieldtype"] == "Select"
+	assert "tree_event" in set(source["options"].split("\n"))
+	notification = next(x for x in dt["fields"] if x["fieldname"] == "notification")
+	assert notification["fieldtype"] == "Link" and notification["options"] == "Notification"
 
 
 def test_tree_event_options_equal_core_closed_set():
@@ -202,18 +230,20 @@ def test_tree_event_is_append_only_in_permissions():
 # and new columns on existing DocTypes. Same bench-free, JSON-on-disk regime.
 # ===========================================================================
 
-#: Wave-0 additions: 4 top-level DocTypes + 2 child tables.
+#: Wave-0 additions: 4 top-level DocTypes + 2 child tables. The process feature
+#: is a trigger->expectation DAG (rules + per-expectation ledger), NOT the old
+#: linear ordered-stage machine.
 WAVE4_DOCTYPES = [
 	("arbor_impersonation_session", "Arbor Impersonation Session"),
 	("arbor_cell_comment", "Arbor Cell Comment"),
 	("arbor_process", "Arbor Process"),
-	("arbor_process_stage", "Arbor Process Stage"),
+	("arbor_process_rule", "Arbor Process Rule"),
 	("arbor_process_run", "Arbor Process Run"),
-	("arbor_process_run_stage", "Arbor Process Run Stage"),
+	("arbor_process_run_expectation", "Arbor Process Run Expectation"),
 ]
 
 #: The Wave-4 child tables MUST carry istable=1.
-WAVE4_CHILD_TABLES = {"arbor_process_stage", "arbor_process_run_stage"}
+WAVE4_CHILD_TABLES = {"arbor_process_rule", "arbor_process_run_expectation"}
 
 
 @pytest.mark.parametrize("snake,label", WAVE4_DOCTYPES)
@@ -288,19 +318,33 @@ def test_arbor_cell_comment_fields():
 		assert fld["options"] == "Arbor Cell Comment"
 
 
-def test_arbor_process_fields_and_stages_child():
+def test_arbor_process_fields_and_rules_child():
 	dt = _load("arbor_process")
 	f = _fieldnames(dt)
-	assert {"sheet", "title", "enabled", "stages"} <= f
-	stages = next(x for x in dt["fields"] if x["fieldname"] == "stages")
-	assert stages["fieldtype"] == "Table"
-	assert stages["options"] == "Arbor Process Stage"
+	# The linear-stage fields are GONE (replaced by the rule DAG).
+	assert "stages" not in f and "start_trigger" not in f
+	assert {"sheet", "title", "enabled", "row_scope", "rules"} <= f
+	rules = next(x for x in dt["fields"] if x["fieldname"] == "rules")
+	assert rules["fieldtype"] == "Table"
+	assert rules["options"] == "Arbor Process Rule"
 
 
-def test_arbor_process_stage_fields():
-	dt = _load("arbor_process_stage")
+def test_arbor_process_rule_fields():
+	dt = _load("arbor_process_rule")
 	assert dt.get("istable") == 1
-	assert {"column", "sla_seconds"} <= _fieldnames(dt)
+	f = _fieldnames(dt)
+	assert {
+		"rule_key", "trigger_kind", "trigger_column", "trigger_op",
+		"expected_columns", "within_seconds", "notify_on_expect",
+	} <= f
+	trigger_kind = next(x for x in dt["fields"] if x["fieldname"] == "trigger_kind")
+	assert set(trigger_kind["options"].split("\n")) == {"row", "column"}
+	trigger_op = next(x for x in dt["fields"] if x["fieldname"] == "trigger_op")
+	assert set(trigger_op["options"].split("\n")) == {
+		"created", "updated", "created-or-updated",
+	}
+	expected = next(x for x in dt["fields"] if x["fieldname"] == "expected_columns")
+	assert expected["fieldtype"] == "JSON"
 
 
 def test_arbor_process_run_link_field_is_arbor_process_not_process():
@@ -313,17 +357,19 @@ def test_arbor_process_run_link_field_is_arbor_process_not_process():
 	link = next(x for x in dt["fields"] if x["fieldname"] == "arbor_process")
 	assert link["fieldtype"] == "Link"
 	assert link["options"] == "Arbor Process"
-	assert {"sheet", "node", "status", "run_stages"} <= f
-	run_stages = next(x for x in dt["fields"] if x["fieldname"] == "run_stages")
-	assert run_stages["fieldtype"] == "Table"
-	assert run_stages["options"] == "Arbor Process Run Stage"
+	# The stage cursor is GONE; the run tracks expectations, not a current stage.
+	assert "current_stage_idx" not in f
+	assert {"sheet", "node", "status", "expectations"} <= f
+	expectations = next(x for x in dt["fields"] if x["fieldname"] == "expectations")
+	assert expectations["fieldtype"] == "Table"
+	assert expectations["options"] == "Arbor Process Run Expectation"
 
 
-def test_arbor_process_run_stage_fields():
-	dt = _load("arbor_process_run_stage")
+def test_arbor_process_run_expectation_fields():
+	dt = _load("arbor_process_run_expectation")
 	assert dt.get("istable") == 1
 	assert {
-		"stage_idx", "column", "entered_at", "filled_at",
+		"rule_key", "expected_column", "opened_at", "satisfied_at",
 		"due_at", "breached",
 	} <= _fieldnames(dt)
 

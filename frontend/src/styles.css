@@ -3535,19 +3535,149 @@ body {
   line-height: 1.45;
   color: var(--ink-muted);
 }
-/* Empty state — the padded, muted treatment used elsewhere, not bare text. */
-.arbor-pc-empty {
+/* ============================================================================
+   Process DAG canvas (.arbor-canvas-*) — the bespoke SVG/DOM flow editor that is
+   the ProcessConfigPanel body. A fixed START node + one node per participating
+   column; edges (trigger -> expected column) each carry a within-duration chip.
+   Calm/dense tokens: hairline surfaces, quiet icon buttons, tinted state.
+   ========================================================================= */
+.arbor-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Add-a-node row — pick a sheet column, add it to the canvas to connect. */
+.arbor-canvas-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.arbor-canvas-add select {
+  flex: 1;
+  min-width: 0;
+}
+.arbor-canvas-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+/* aria-live rejection banner — a self-loop / cycle / dup attempt is announced
+   here. Empty by default (0-height, no visual noise); tinted amber when set. */
+.arbor-canvas-reject:empty {
+  display: none;
+}
+.arbor-canvas-reject {
   margin: 0;
-  padding: 20px 12px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  border-radius: var(--r-sm);
+}
+.arbor-canvas-connect-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-ink);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+}
+/* The scrollable stage — the SVG (edges) with the node overlay on top. */
+.arbor-canvas-stage {
+  border: 1px solid var(--outline-subtle);
+  border-radius: var(--r);
+  background:
+    radial-gradient(circle, var(--outline-subtle) 1px, transparent 1px) 0 0 / 20px 20px,
+    var(--surface);
+  overflow: auto;
+  max-height: 320px;
+}
+.arbor-canvas-svg {
+  display: block;
+}
+/* A node box — an absolutely-positioned card with a label body + action cluster.
+   START is tinted the accent; a node armed for connecting gets an accent ring. */
+.arbor-canvas-node {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.arbor-canvas-node.is-start {
+  background: var(--accent-tint);
+  border-color: var(--accent-ring);
+}
+.arbor-canvas-node.is-connecting {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.arbor-canvas-node-body {
+  flex: 1;
+  min-width: 0;
+  border: none !important;
+  background: none !important;
+  min-height: 0 !important;
+  padding: 0 8px !important;
+  height: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.arbor-canvas-node-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.arbor-canvas-node-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--outline-subtle);
+}
+.arbor-canvas-connect,
+.arbor-canvas-node-del {
+  border: none !important;
+  background: none !important;
+  min-height: 0 !important;
+  padding: 4px 6px !important;
+  color: var(--ink-subtle);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.arbor-canvas-connect[aria-pressed="true"] {
+  color: var(--accent);
+}
+.arbor-canvas-connect:hover {
+  background: var(--surface-3) !important;
+  color: var(--accent-ink);
+}
+.arbor-canvas-node-del:hover {
+  background: var(--red-bg) !important;
+  color: var(--red);
+}
+/* Empty state — the padded, muted treatment used elsewhere, not bare text. */
+.arbor-canvas-empty {
+  margin: 0;
+  padding: 16px 12px;
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--ink-subtle);
   background: var(--surface-1);
   border: 1px dashed var(--outline);
   border-radius: var(--r);
 }
-/* The ordered stage list — a bordered card of dense rows (no raw <ol> markers). */
-.arbor-pc-stages {
+/* Edge list — the accessible fallback + home of each edge's within editor. */
+.arbor-canvas-edges {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3556,99 +3686,82 @@ body {
   overflow: hidden;
   background: var(--surface);
 }
-.arbor-pc-stage {
+.arbor-canvas-edge-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--outline-subtle);
 }
-.arbor-pc-stage:last-child {
+.arbor-canvas-edge-row:last-child {
   border-bottom: none;
 }
-/* Numbered step chip — fixed-width muted badge reading as a step indicator. */
-.arbor-pc-stage-idx {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  color: var(--ink-muted);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.arbor-pc-stage-label {
+.arbor-canvas-edge-desc {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink);
-  font-weight: 500;
+  font-size: 12px;
+  color: var(--ink-2);
 }
-/* SLA field cluster: a tiny label, a width-capped right-aligned number input,
-   and a friendly duration echo. The input is constrained (was stretching wide). */
-.arbor-pc-stage-sla {
+.arbor-canvas-edge-within {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.arbor-pc-stage-sla .arbor-field-label {
+.arbor-canvas-edge-within .arbor-field-label {
   white-space: nowrap;
 }
-.arbor-pc-stage-sla input {
+.arbor-canvas-edge-within input {
   flex: 0 0 80px;
   width: 80px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.arbor-pc-stage-sla-hint {
+.arbor-canvas-edge-within-hint {
   min-width: 42px;
   font-size: 11px;
   color: var(--ink-subtle);
   white-space: nowrap;
 }
-/* Move up/down + remove are quiet icon buttons (borderless, hover-tinted). */
-.arbor-pc-stage-move {
-  display: inline-flex;
-  gap: 2px;
-}
-.arbor-pc-stage-move button,
-.arbor-pc-stage-remove {
+.arbor-canvas-edge-del {
   border: none !important;
   background: none !important;
   min-height: 0 !important;
   padding: 2px 6px !important;
   color: var(--ink-subtle);
-  font-size: 12px;
   line-height: 1;
   border-radius: var(--r-sm);
 }
-.arbor-pc-stage-move button:hover:not(:disabled) {
-  background: var(--surface-3) !important;
-  color: var(--ink-2);
-}
-.arbor-pc-stage-remove:hover {
+.arbor-canvas-edge-del:hover {
   background: var(--red-bg) !important;
   color: var(--red);
 }
-/* Add-a-stage row — its own fenced affordance (top border + spacing) so it reads
-   as a distinct "add" action between the list and the footer. */
-.arbor-pc-add {
+/* Inline validation — hard errors (red) block Save; warnings (amber) advise. */
+.arbor-canvas-validation {
   display: flex;
-  gap: 8px;
-  align-items: center;
-  padding-top: 12px;
-  border-top: 1px solid var(--outline-subtle);
+  flex-direction: column;
+  gap: 4px;
 }
-.arbor-pc-add select {
-  flex: 1;
-  min-width: 0;
+.arbor-canvas-error,
+.arbor-canvas-warning {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid;
+}
+.arbor-canvas-error {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: var(--red-border);
+}
+.arbor-canvas-warning {
+  color: var(--amber);
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
 }
 /* Footer: hairline-separated action bar. Save is the solid near-black primary
    (mirrors .arbor-comment-post); Enable/Disable is a quiet secondary. */

@@ -1,13 +1,14 @@
 # Copyright (c) 2026, Arbor and contributors
 # For license information, please see license.txt
-"""Arbor Process Run controller (Area 3 dataModel).
+"""Arbor Process Run controller (process DAG dataModel).
 
-Per-row process state: which node (the 'row') is running which process, the
-active stage, and the per-stage timestamp ledger (the ``run_stages`` child
-table). Runs are created/advanced by the dispatch-lane consumer off the Tree
-Event stream (NODE_CREATED starts a run; a NODE_VALUE_UPDATED on the current
-stage column advances it) — never by a user capability. This controller stays
-thin: it only guards the (process, node) uniqueness the schema cannot express.
+Per-row process state: which node (the 'row') is running which process and the
+per-(rule, expected-column) expectation ledger (the ``expectations`` child
+table). Runs are created/updated by the dispatch-lane consumer off the Tree
+Event stream (NODE_CREATED starts a run + fires row rules; a NODE_VALUE_UPDATED
+on a column satisfies pending expectations on it and fires column rules) — never
+by a user capability. This controller stays thin: it only guards the (process,
+node) uniqueness the schema cannot express.
 """
 
 from __future__ import annotations

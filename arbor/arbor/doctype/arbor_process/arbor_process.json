@@ -9,8 +9,7 @@
   "title",
   "enabled",
   "row_scope",
-  "start_trigger",
-  "stages",
+  "rules",
   "sla_breach_notify",
   "created_by",
   "settings"
@@ -47,19 +46,11 @@
    "options": "root-children\nall-nodes\ndepth"
   },
   {
-   "default": "node-created",
-   "description": "How a run starts: automatically on NODE_CREATED, or manually via startProcessRun.",
-   "fieldname": "start_trigger",
-   "fieldtype": "Select",
-   "label": "Start Trigger",
-   "options": "node-created\nmanual"
-  },
-  {
-   "description": "The ordered stage sequence (left->right fill order by row idx).",
-   "fieldname": "stages",
+   "description": "The trigger->expectation rules that compose the process DAG. A column EXPECTED by one rule may be the trigger_column of another; validated acyclic on define.",
+   "fieldname": "rules",
    "fieldtype": "Table",
-   "label": "Stages",
-   "options": "Arbor Process Stage"
+   "label": "Rules",
+   "options": "Arbor Process Rule"
   },
   {
    "default": "1",

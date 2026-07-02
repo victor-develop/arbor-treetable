@@ -87,31 +87,45 @@ class RoleGrantView(Protocol):
 
 
 @runtime_checkable
-class ProcessStageView(Protocol):
-    """One ordered stage of an Arbor Process (Area 3). ``idx`` IS the left->right
-    fill order; ``column`` is the column whose owner fills the stage; the stage's
-    responsible owner is resolved LIVE via ``acl.resolve_column_approvers`` (never
-    stored), so re-grants reroute automatically."""
+class ProcessRuleView(Protocol):
+    """One trigger->expectation rule of an Arbor Process (process DAG). A rule
+    reads "On <trigger>: expect (``expected_columns`` — an 'and' set sharing ONE
+    window) filled within ``within_seconds``". ``trigger_kind`` is 'row' (a node
+    create/update — the canvas START node) or 'column' (``trigger_column``
+    create/update). Rules compose into a DAG because a column EXPECTED by one rule
+    may be the ``trigger_column`` of another. Each expected column's responsible
+    owner is resolved LIVE via ``acl.resolve_column_approvers`` (never stored), so
+    re-grants reroute automatically.
 
+    ``rule_key`` is the stable id an Expectation points back to (the 'rule_ref');
+    ``idx`` is presentation/canvas order only and MUST NOT be used as the ledger
+    reference.
+    """
+
+    rule_key: str
     idx: int
-    column: str
-    sla_seconds: int  # 0 => no SLA
-    notify_on_enter: bool
+    trigger_kind: str  # 'row' | 'column'
+    trigger_column: Optional[str]  # set iff trigger_kind == 'column'
+    trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
+    expected_columns: list[str]
+    within_seconds: int  # 0 => no SLA
+    notify_on_expect: bool
+    label: Optional[str]
 
 
 @runtime_checkable
 class ProcessView(Protocol):
-    """A per-sheet Arbor Process definition (Area 3). Exactly one ENABLED process
-    per sheet (enforced in the controller + on enable)."""
+    """A per-sheet Arbor Process definition (process DAG). Exactly one ENABLED
+    process per sheet (enforced in the controller + on enable). ``rules`` is the
+    trigger->expectation rule SET (validated acyclic on define)."""
 
     name: str
     sheet: str
     title: str
     enabled: bool
     row_scope: str  # 'root-children' | 'all-nodes' | 'depth'
-    start_trigger: str  # 'node-created' | 'manual'
     sla_breach_notify: bool
-    stages: list[ProcessStageView]
+    rules: list[ProcessRuleView]
 
 
 class Repository(Protocol):
@@ -256,11 +270,12 @@ class Repository(Protocol):
         """Deactivate any active overlay for ``real_user`` (idempotent)."""
         ...
 
-    # --- process / SLA (Area 3) ---------------------------------------------
+    # --- process / SLA (process DAG) ----------------------------------------
     def upsert_process(self, data: dict[str, Any]) -> str:
-        """Create or replace the sheet's Arbor Process definition (+ stages);
-        return its id. ``data`` = {sheet, title?, stages:[{column, sla_seconds?,
-        notify_on_enter?}], row_scope?, start_trigger?, sla_breach_notify?}."""
+        """Create or replace the sheet's Arbor Process definition (+ rules);
+        return its id. ``data`` = {sheet, title?, rules:[{rule_key, trigger_kind,
+        trigger_column?, trigger_op, expected_columns:[...], within_seconds?,
+        notify_on_expect?, label?}], row_scope?, sla_breach_notify?}."""
         ...
 
     def get_process(self, sheet: str) -> Optional["ProcessView"]:
@@ -277,8 +292,9 @@ class Repository(Protocol):
         ...
 
     def create_process_run(self, data: dict[str, Any]) -> str:
-        """Create an Arbor Process Run (+ its per-stage ledger). ``data`` =
-        {process, sheet, node, status, current_stage_idx, started_at, stages:[...]}"""
+        """Create an Arbor Process Run (+ its expectation ledger). ``data`` =
+        {process, sheet, node, status, started_at, expectations:[{rule_key,
+        expected_column, opened_at?, satisfied_at?, due_at?, ...}]}"""
         ...
 
     def get_process_run(self, process: str, node: str) -> Optional[dict[str, Any]]:
@@ -286,7 +302,7 @@ class Repository(Protocol):
         ...
 
     def update_process_run(self, run: str, patch: dict[str, Any]) -> None:
-        """Patch a run row (status/current_stage_idx/completed_at/stages)."""
+        """Patch a run row (status/completed_at/expectations)."""
         ...
 
     def list_process_runs(
@@ -296,8 +312,8 @@ class Repository(Protocol):
         ...
 
     def list_active_runs_with_due(self, now: str) -> list[dict[str, Any]]:
-        """Active runs whose current stage has a due_at <= ``now`` and is not yet
-        filled — the bounded SLA-sweep candidate set."""
+        """Active runs with an OPEN (unsatisfied) expectation whose due_at <=
+        ``now`` — the bounded SLA-sweep candidate set."""
         ...
 
 

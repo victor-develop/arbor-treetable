@@ -191,48 +191,78 @@ def grant_column_handler(params: dict[str, Any], actor: Actor, repo: Repository)
 
 # --- process / SLA (Area 3) -------------------------------------------------
 def define_process_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
-    """Upsert the sheet's Arbor Process definition (+ ordered stages). Emits
-    COLUMN_CONFIG_UPDATED with ``op='process-define'`` so the closed 11-event set
-    is preserved (op-discriminated, like the role flow reuses DELEGATION_CHANGED).
+    """Upsert the sheet's Arbor Process definition (+ its trigger->expectation
+    rule DAG). Validates the rule set (self-loop / duplicate-edge / cycle) via the
+    pure ``process_graph.validate_rules`` — a cyclic or self-looping set raises a
+    ``ValidationError`` (400) BEFORE any write. Emits COLUMN_CONFIG_UPDATED with
+    ``op='process-define'`` so the closed 11-event set is preserved (op-
+    discriminated, like the role flow reuses DELEGATION_CHANGED).
     """
+    from .process_graph import ValidationError, validate_rules
+
     sheet = params["sheet"]
-    stages = []
-    for i, st in enumerate(params.get("stages") or []):
-        stages.append(
+    rules = []
+    for i, r in enumerate(params.get("rules") or []):
+        kind = r["trigger_kind"]
+        rules.append(
             {
+                "rule_key": r.get("rule_key") or f"r{i}",
                 "idx": i,
-                "column": st["column"],
-                "sla_seconds": int(st.get("sla_seconds") or 0),
-                "notify_on_enter": st.get("notify_on_enter", True),
+                "trigger_kind": kind,
+                "trigger_column": r.get("trigger_column"),
+                "trigger_op": r.get("trigger_op") or ("created" if kind == "row" else "updated"),
+                "expected_columns": list(r.get("expected_columns") or []),
+                "within_seconds": int(r.get("within_seconds") or 0),
+                "notify_on_expect": r.get("notify_on_expect", True),
+                "label": r.get("label"),
             }
         )
+    # Server-side DAG authority: reject a self-loop / duplicate-edge / cycle.
+    verdict = validate_rules(rules)
+    if not verdict.ok:
+        raise ValidationError(verdict.errors)
+
     process = repo.upsert_process(
         {
             "sheet": sheet,
             "title": params.get("title") or "",
-            "stages": stages,
+            "rules": rules,
             "row_scope": params.get("row_scope", "root-children"),
-            "start_trigger": params.get("start_trigger", "node-created"),
             "sla_breach_notify": params.get("sla_breach_notify", True),
         }
     )
     return HandlerResult(
-        event_payload={"op": "process-define", "process": process, "sheet": sheet, "stages": stages},
-        data={"process": process},
+        event_payload={"op": "process-define", "process": process, "sheet": sheet, "rules": rules},
+        data={"process": process, "warnings": verdict.warnings},
     )
 
 
 def enable_process_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
-    """Enable the sheet's process + backfill active runs for existing in-scope
-    nodes at stage 0. Emits COLUMN_CONFIG_UPDATED (op='process-enable')."""
+    """Enable the sheet's process + backfill runs for existing in-scope nodes
+    through the SAME NODE_CREATED start path the dispatch lane uses (so a node
+    that already carries filled columns opens/satisfies/cascades exactly as a
+    fresh row would). Emits COLUMN_CONFIG_UPDATED (op='process-enable')."""
+    from . import process as process_module
+
     sheet = params["sheet"]
     process = repo.get_process(sheet)
     if process is None:
         raise ValueError(f"no process defined for sheet {sheet!r}")
     repo.set_process_enabled(process.name, True)
+    # re-read so the enabled flag is live for the backfill start path.
+    process = repo.get_process(sheet)
+    now = params.get("now")
+    backfilled = 0
+    for node in repo.list_in_scope_nodes(sheet, process.row_scope):
+        if repo.get_process_run(process.name, node) is not None:
+            continue
+        process_module.on_event(
+            repo, process, {"type": "NODE_CREATED", "node": node}, now=now
+        )
+        backfilled += 1
     return HandlerResult(
         event_payload={"op": "process-enable", "process": process.name, "sheet": sheet},
-        data={"process": process.name},
+        data={"process": process.name, "backfilled": backfilled},
     )
 
 

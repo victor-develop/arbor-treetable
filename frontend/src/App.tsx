@@ -548,11 +548,11 @@ function ConnectedShell({
   }, [loadProcess]);
   const defineProcessOp = useCallback(
     (
-      stages: import("./api").ProcessStageInput[],
-      opts?: { title?: string; row_scope?: string; start_trigger?: string },
+      rules: import("./api").ProcessRuleInput[],
+      opts?: { title?: string; row_scope?: string },
     ) => {
       if (!client.defineProcess) return;
-      void client.defineProcess(sheetName, stages, opts).then((o) => {
+      void client.defineProcess(sheetName, rules, opts).then((o) => {
         if (!o.error) {
           loadProcess();
           void sheet.refetch();

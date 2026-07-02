@@ -158,11 +158,26 @@ def test_process_caps_are_meta_llm_exposed_emit_column_config():
         assert cap.axis == Axis.META
         assert cap.is_exposed_to_llm is True
         assert cap.emits == ("COLUMN_CONFIG_UPDATED",)  # reuse the closed event set
-    # defineProcess requires sheet + stages.
+    # defineProcess requires sheet + rules (the trigger->expectation rule DAG).
+    # (The per-rule structural contract — trigger_kind/expected_columns, self-
+    # loop/cycle — is enforced server-side by process_graph.validate_rules in the
+    # handler, not by the minimal JSON-schema validator.)
     with pytest.raises(SchemaValidationError):
         validate_schema({"sheet": "S"}, get_capability("defineProcess").params_schema)
     validate_schema(
-        {"sheet": "S", "stages": [{"column": "c1"}, {"column": "c2", "sla_seconds": 60}]},
+        {
+            "sheet": "S",
+            "rules": [
+                {"trigger_kind": "row", "trigger_op": "created", "expected_columns": ["c1"]},
+                {
+                    "trigger_kind": "column",
+                    "trigger_column": "c1",
+                    "trigger_op": "updated",
+                    "expected_columns": ["c2"],
+                    "within_seconds": 60,
+                },
+            ],
+        },
         get_capability("defineProcess").params_schema,
     )
 

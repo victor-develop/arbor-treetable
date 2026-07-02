@@ -1,24 +1,38 @@
-"""The pure process stage machine (Area 3 — Process/SLA).
+"""The pure process RULE/DAG evaluator (process DAG + SLA).
 
-ZERO frappe. A "process" is a per-sheet ordered list of column stages
-(A -> B -> C). Each in-scope node (a "row") gets a per-row Process Run tracking
-which stage is active + the timestamp each stage was entered/filled. Stage
-advancement is DERIVED from the SAME Tree Event stream the notification/webhook
-dispatchers consume — NOT a new EventType (the closed 11-type set is preserved):
+ZERO frappe. A "process" is a per-sheet SET of trigger->expectation RULES (not an
+ordered stage list). Each rule reads:
 
-    NODE_CREATED   (in-scope node)  -> start a run at stage 0, notify owner(A)
-    NODE_VALUE_UPDATED (col==current stage column) -> advance, notify next owner
-    terminal-stage fill -> status=completed
+    "On <trigger>: expect (colA [and colB...]) filled within <within_seconds>"
 
-Per-transition SLA: each stage carries ``sla_seconds``; a stage's ``due_at`` =
-``entered_at`` + sla; a sweep marks runs breached when ``now > due_at`` and the
-stage is not yet filled. All of this is idempotent (a replayed event / a repeated
-sweep does not double-advance or double-notify) via per-stage ``filled_at`` +
-``notified_owner`` guards.
+where ``<trigger>`` is a ROW event (a node created/updated — the canvas START
+node) or a COLUMN event (a specific ``trigger_column`` created/updated). Rules
+compose into a DAG because a column EXPECTED by one rule may be the
+``trigger_column`` of another. Per-row tracking is ONE Expectation per
+``(run, rule_key, expected_column)``.
 
-The module operates over the Repository PORT + the ONE ACL resolver
-(``resolve_column_approvers``, resolved LIVE so re-grants reroute) and a plain
-``notify`` sink so it is unit-testable against the in-memory doubles.
+Runtime is a THIRD pure consumer off the SAME Tree Event stream the notification/
+webhook dispatchers consume — NO new EventType (the closed 11-type set stands):
+
+    NODE_CREATED (in-scope node)
+        -> create a run, fire every ROW rule, treat every already-filled column
+           as an implicit column trigger (op 'created'), open the resulting
+           expectations, SATISFY any whose expected column is already filled
+           (a default / head-label counts), and CASCADE downstream
+           (cycle-guarded). If the run is quiescent it completes at creation.
+    NODE_VALUE_UPDATED(colX)
+        -> SATISFY every open expectation on colX, then fire COLUMN(colX) rules,
+           open + maybe-satisfy their expectations, and CASCADE. Complete when
+           quiescent.
+    sla_sweep(now)
+        -> breach every OPEN expectation whose ``due_at <= now`` (idempotent),
+           optionally notifying the expected column's live owner once.
+
+"filled" == ``is_filled`` (non-empty; a default at row-creation counts). Owners
+are resolved LIVE via the ONE ACL resolver so re-grants reroute automatically.
+Idempotency spans MANY expectations per event: a per-(run, rule_key,
+expected_column) existence guard + ``satisfied_at`` + ``notified_owner`` all hold
+so replays never double-open, double-satisfy, or double-notify.
 """
 
 from __future__ import annotations
@@ -27,135 +41,118 @@ from typing import Any, Callable, Optional
 
 from .acl import resolve_column_approvers
 from .ports import ProcessView, Repository
+from .process_graph import START, build_edges
 
-#: A transition record returned by ``on_event`` — one per (run) side effect, so
-#: callers/tests can assert exactly what happened without re-reading the store.
+#: A transition record returned by ``on_event``/``sla_sweep`` — one per side
+#: effect, so callers/tests assert exactly what happened without re-reading.
 Transition = dict[str, Any]
 
-#: Recipient-resolver + notify callback seam. ``notify(recipients, message)`` is
-#: how a stage-enter / SLA-breach notification is fanned out. Defaults route
-#: through ``repo.create_notification`` (in-app), but a caller may inject its own.
+#: Recipient-resolver + notify callback seam. ``notify(recipients, data)`` fans
+#: out an expectation-open / SLA-breach notification. Defaults route through
+#: ``repo.create_notification`` (in-app), but a caller may inject its own.
 NotifyFn = Callable[[list[str], dict[str, Any]], None]
 
 
 # ---------------------------------------------------------------------------
-# Time helpers — the machine treats timestamps as comparable strings/ints. The
-# adapter passes ISO-8601 strings (lexically ordered) or epoch seconds; the pure
-# math is done on ``sla_seconds`` via ``add_seconds`` which the caller supplies
-# for its clock. To stay framework-free we accept a pluggable ``add_seconds``.
+# Empty-check + SLA math (unchanged public helpers)
 # ---------------------------------------------------------------------------
 def is_filled(value: Any) -> bool:
-    """A stage is FILLED iff its column value is non-empty.
+    """A column is FILLED iff its value is non-empty.
 
     Mirrors the FRONTEND cell empty-check (``renderStatic`` in
-    ``frontend/src/components/cells/Cell.tsx``): a value renders as "empty" when
-    ``renderStatic(value)`` is the empty string. ``renderStatic`` returns ``""``
-    for ``None``, joins arrays (so ``[]`` -> ``""``), and otherwise ``str(value)``.
+    ``frontend/src/components/cells/Cell.tsx``): a value renders "empty" when
+    ``renderStatic(value)`` is ``""``. ``renderStatic`` returns ``""`` for
+    ``None``, joins arrays (so ``[]`` -> ``""``), and otherwise ``str(value)``.
 
-    Therefore NOT-filled == ``None`` / ``""`` / ``[]`` (and, symmetric with the
-    array-join, an all-empty list). Everything else counts as filled — notably a
-    value written at row-creation (a default, or the head/label cell) COUNTS. A
-    numeric ``0`` or boolean ``False`` render to a non-empty string ("0"/"False")
-    on the frontend, so they are filled here too (parity with the grid).
+    Therefore NOT-filled == ``None`` / ``""`` / ``[]`` (empty tuple too).
+    Everything else is filled — notably a value written at row-creation (a
+    DEFAULT, or the head/label cell) COUNTS. Numeric ``0`` / boolean ``False``
+    render to non-empty strings on the grid, so they are filled here too.
     """
     if value is None:
         return False
     if isinstance(value, str):
         return value != ""
     if isinstance(value, (list, tuple)):
-        # Array cell: joined by ", " on the frontend -> empty iff no members.
         return len(value) > 0
-    # Any other scalar (int/float/bool/etc.) renders to a non-empty string.
     return True
 
 
-def default_due_at(entered_at: Any, sla_seconds: int) -> Optional[Any]:
-    """Compute a stage's ``due_at`` from ``entered_at`` + ``sla_seconds``.
+def default_due_at(opened_at: Any, within_seconds: int) -> Optional[Any]:
+    """Compute an expectation's ``due_at`` from ``opened_at`` + ``within_seconds``.
 
-    ``sla_seconds == 0`` means "no SLA" -> None (never breaches). When
-    ``entered_at`` is an ``int``/``float`` epoch we add directly; otherwise we
-    return a ``(entered_at, sla_seconds)`` marker the adapter resolves against its
-    clock. Kept trivial + pure so tests use plain numeric timestamps.
+    ``within_seconds == 0`` means "no SLA" -> None (never breaches). A numeric
+    epoch adds directly; otherwise a ``{base, add_seconds}`` marker the adapter
+    resolves against its clock is returned. Kept trivial + pure so tests use
+    plain numeric timestamps.
     """
-    if not sla_seconds:
+    if not within_seconds:
         return None
-    if isinstance(entered_at, (int, float)):
-        return entered_at + sla_seconds
-    return {"base": entered_at, "add_seconds": sla_seconds}
-
-
-def _stage_owners(repo: Repository, sheet: str, column: str) -> list[str]:
-    """The users responsible for a stage — resolved LIVE at notification time via
-    the ONE ACL resolver, so a grantColumn re-grant / ``role:<key>`` reroute takes
-    effect on the NEXT notification (mirrors CR decision-time re-resolution)."""
-    return sorted(resolve_column_approvers(repo, sheet, column))
-
-
-def _build_run_stages(
-    process: ProcessView, started_at: Any, active_pos: int
-) -> list[dict[str, Any]]:
-    """The per-stage ledger for a fresh run.
-
-    ``active_pos`` is the position (0-based) of the CURRENT stage — the first
-    stage whose column is still empty at creation. Every LEADING stage
-    (``pos < active_pos``) was already filled at row-creation, so it is stamped
-    ``entered_at``/``filled_at`` == ``started_at`` (a synchronous auto-advance —
-    it was entered and filled at creation). The current stage (``active_pos``)
-    is entered (``entered_at`` + ``due_at`` set) but not filled; later stages are
-    pending. ``notified_owner`` is the idempotency guard on enter.
-
-    When ``active_pos == len(ordered)`` ALL stages were pre-filled: every stage is
-    entered+filled at ``started_at`` (the caller completes the run).
-    """
-    stages: list[dict[str, Any]] = []
-    ordered = _ordered_stages(process)
-    for i, st in enumerate(ordered):
-        if i < active_pos:
-            # already-filled leading stage: entered AND filled at creation.
-            entered = started_at
-            filled = started_at
-            due = None  # filled -> never breaches
-        elif i == active_pos:
-            # the first EMPTY stage becomes the active/pending one.
-            entered = started_at
-            filled = None
-            due = default_due_at(started_at, st.sla_seconds)
-        else:
-            entered = None
-            filled = None
-            due = None
-        stages.append(
-            {
-                "stage_idx": st.idx,
-                "column": st.column,
-                "entered_at": entered,
-                "filled_at": filled,
-                "due_at": due,
-                "breached": False,
-                "breached_at": None,
-                "notified_owner": "",  # "" = not yet notified (idempotency guard)
-            }
-        )
-    return stages
-
-
-def _first_empty_pos(repo: Repository, node: str, ordered: list[Any]) -> int:
-    """The position of the FIRST stage whose column value is still empty for
-    ``node`` — evaluated against the node's CURRENT values (a row-creation
-    default / the head/label cell COUNTS as filled). Returns ``len(ordered)`` when
-    every stage column is already filled (=> the run completes immediately)."""
-    for pos, st in enumerate(ordered):
-        if not is_filled(repo.get_value(node, st.column)):
-            return pos
-    return len(ordered)
-
-
-def _ordered_stages(process: ProcessView):
-    return sorted(process.stages, key=lambda s: s.idx)
+    if isinstance(opened_at, (int, float)):
+        return opened_at + within_seconds
+    return {"base": opened_at, "add_seconds": within_seconds}
 
 
 # ---------------------------------------------------------------------------
-# Event-driven advancement
+# Rule helpers
+# ---------------------------------------------------------------------------
+def _rule_key(rule: "Any", idx: int) -> str:
+    key = getattr(rule, "rule_key", None)
+    return key if key else f"r{idx}"
+
+
+def _ordered_rules(process: ProcessView) -> list[Any]:
+    """Rules in presentation order (by ``idx``); ``idx`` is NOT the ledger ref."""
+    return sorted(process.rules, key=lambda r: getattr(r, "idx", 0))
+
+
+def _expected_owners(repo: Repository, sheet: str, column: str) -> list[str]:
+    """The users responsible for an expected column — resolved LIVE at
+    notification time via the ONE ACL resolver, so a grantColumn re-grant /
+    ``role:<key>`` reroute takes effect on the NEXT notification."""
+    return sorted(resolve_column_approvers(repo, sheet, column))
+
+
+def _row_trigger_fires(trigger_op: str, etype: str) -> bool:
+    """Whether a ROW rule with ``trigger_op`` fires for this event type."""
+    if etype == "NODE_CREATED":
+        return trigger_op in ("created", "created-or-updated")
+    if etype == "NODE_VALUE_UPDATED":
+        return trigger_op in ("updated", "created-or-updated")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Expectation-ledger primitives (operate on a mutable list of expectation dicts)
+# ---------------------------------------------------------------------------
+def _exp_key(exp: dict[str, Any]) -> tuple[str, str]:
+    return (exp.get("rule_key"), exp.get("expected_column"))
+
+
+def _has_expectation(exps: list[dict[str, Any]], rule_key: str, column: str) -> bool:
+    return any(_exp_key(e) == (rule_key, column) for e in exps)
+
+
+def _open_expectation(
+    exps: list[dict[str, Any]], rule_key: str, column: str, *, opened_at: Any, within_seconds: int
+) -> dict[str, Any]:
+    """Append one OPEN expectation (idempotent via the existence guard upstream)."""
+    exp = {
+        "rule_key": rule_key,
+        "expected_column": column,
+        "opened_at": opened_at,
+        "satisfied_at": None,
+        "due_at": default_due_at(opened_at, within_seconds),
+        "breached": False,
+        "breached_at": None,
+        "notified_owner": "",
+    }
+    exps.append(exp)
+    return exp
+
+
+# ---------------------------------------------------------------------------
+# Event-driven evaluation
 # ---------------------------------------------------------------------------
 def on_event(
     repo: Repository,
@@ -165,35 +162,36 @@ def on_event(
     now: Any,
     notify: Optional[NotifyFn] = None,
 ) -> list[Transition]:
-    """React to ONE Tree Event, mutating Process Runs via ``repo`` and returning
-    the transitions performed (possibly empty).
+    """React to ONE Tree Event, mutating the Process Run for the event's node and
+    returning the transitions performed (possibly empty).
 
-    ``event`` is a light dict ``{type, node, column?, tree_event?}`` (the dispatch
-    lane extracts these from the persisted Tree Event). ``now`` is the enter
-    timestamp for a newly-entered stage. Idempotent: a replayed event never
-    double-advances (guarded by ``current_stage_idx`` + ``filled_at``) or
-    double-notifies (``notified_owner``).
-
-    Only fires when ``process.enabled``; a disabled process is inert.
+    ``event`` is ``{type, node, column?, tree_event?}``. ``now`` is the
+    open/satisfy timestamp. Idempotent: a replayed event never double-opens
+    (per-(rule_key, expected_column) existence guard), double-satisfies
+    (``satisfied_at``) or double-notifies (``notified_owner``). Only fires when
+    ``process.enabled``; a disabled process is inert.
     """
     if not process.enabled:
         return []
     notify = notify or _default_notify(repo)
     etype = event.get("type")
     node = event.get("node")
+    if node is None:
+        return []
 
     if etype == "NODE_CREATED":
-        return _start_run(repo, process, node, now=now, notify=notify)
+        return _on_node_created(repo, process, node, now=now, notify=notify)
     if etype == "NODE_VALUE_UPDATED":
-        return _maybe_advance(repo, process, event, now=now, notify=notify)
+        column = event.get("column")
+        if column is None:
+            return []
+        return _on_value_updated(repo, process, node, column, now=now, notify=notify)
     return []
 
 
-def _start_run(
+def _on_node_created(
     repo: Repository, process: ProcessView, node: str, *, now: Any, notify: NotifyFn
 ) -> list[Transition]:
-    if node is None:
-        return []
     # scope guard: only in-scope nodes become process rows.
     in_scope = set(repo.list_in_scope_nodes(process.sheet, process.row_scope))
     if node not in in_scope:
@@ -201,164 +199,280 @@ def _start_run(
     # idempotency: never create a second run for the same (process, node).
     if repo.get_process_run(process.name, node) is not None:
         return []
-    ordered = _ordered_stages(process)
-    if not ordered:
-        return []
-    # Evaluate the node's CURRENT values and auto-advance past every LEADING
-    # stage whose column is ALREADY filled at creation (a default / the head/label
-    # cell counts). Start PENDING at the FIRST stage whose column is still empty.
-    active_pos = _first_empty_pos(repo, node, ordered)
-    stages = _build_run_stages(process, now, active_pos)
 
-    if active_pos >= len(ordered):
-        # ALL stage columns already filled at creation -> COMPLETE immediately,
-        # notifying no one (nobody is waiting on an empty cell).
-        run = repo.create_process_run(
-            {
-                "process": process.name,
-                "sheet": process.sheet,
-                "node": node,
-                "status": "completed",
-                "current_stage_idx": ordered[-1].idx,
-                "started_at": now,
-                "completed_at": now,
-                "stages": stages,
-            }
-        )
-        return [
-            {"run": run, "node": node, "kind": "started", "stage_idx": ordered[-1].idx},
-            {"run": run, "node": node, "kind": "completed"},
-        ]
-
-    cur = ordered[active_pos]
-    run = repo.create_process_run(
+    run_name = repo.create_process_run(
         {
             "process": process.name,
             "sheet": process.sheet,
             "node": node,
             "status": "active",
-            "current_stage_idx": cur.idx,
             "started_at": now,
-            "stages": stages,
+            "expectations": [],
         }
     )
-    trans = [{"run": run, "node": node, "kind": "started", "stage_idx": cur.idx}]
-    # notify the FIRST-EMPTY stage's owner (NOT stage 0 unless it is empty).
-    trans += _notify_stage_enter(repo, process, run, node, active_pos, now, notify)
+    trans: list[Transition] = [{"run": run_name, "node": node, "kind": "started"}]
+
+    exps: list[dict[str, Any]] = []
+    fired: set[str] = set()  # rule_keys already fired this event (cascade guard)
+
+    # 1) fire every ROW rule that matches NODE_CREATED.
+    for i, rule in enumerate(_ordered_rules(process)):
+        if getattr(rule, "trigger_kind", None) != "row":
+            continue
+        if not _row_trigger_fires(getattr(rule, "trigger_op", "created"), "NODE_CREATED"):
+            continue
+        _fire_rule(exps, rule, i, now=now)
+        fired.add(_rule_key(rule, i))
+
+    # 2) treat every already-filled column as an implicit column trigger with
+    #    op 'created': fire column rules whose trigger_column is filled at
+    #    creation AND whose trigger_op includes 'created' (an 'updated'-only rule
+    #    is NOT fired at creation — nothing was updated). This reproduces
+    #    "defaults count as filled + auto-advance" without spuriously firing
+    #    update-only rules.
+    for i, rule in enumerate(_ordered_rules(process)):
+        if getattr(rule, "trigger_kind", None) != "column":
+            continue
+        rk = _rule_key(rule, i)
+        if rk in fired:
+            continue
+        if getattr(rule, "trigger_op", "updated") not in ("created", "created-or-updated"):
+            continue
+        tcol = getattr(rule, "trigger_column", None)
+        if tcol is None:
+            continue
+        if is_filled(repo.get_value(node, tcol)):
+            _fire_rule(exps, rule, i, now=now)
+            fired.add(rk)
+
+    # 3) satisfy every expectation whose expected column is already filled, and
+    #    CASCADE (a satisfied column may be another column rule's trigger).
+    trans += _satisfy_and_cascade(
+        repo, process, node, exps, fired, now=now, notify=notify, initial=True
+    )
+
+    # 4) notify open (unsatisfied) expectations' owners once.
+    trans += _notify_open(repo, process, node, exps, now=now, notify=notify)
+
+    # persist + maybe complete.
+    repo.update_process_run(run_name, {"expectations": exps})
+    trans += _maybe_complete(repo, process, node, run_name, exps, now=now)
     return trans
 
 
-def _maybe_advance(
-    repo: Repository, process: ProcessView, event: dict[str, Any], *, now: Any, notify: NotifyFn
+def _on_value_updated(
+    repo: Repository, process: ProcessView, node: str, column: str, *, now: Any, notify: NotifyFn
 ) -> list[Transition]:
-    node = event.get("node")
-    column = event.get("column")
-    if node is None or column is None:
-        return []
     run = repo.get_process_run(process.name, node)
     if run is None or run.get("status") != "active":
         return []
-    stages = [dict(s) for s in run.get("stages") or []]
-    cur_pos = _pos_of_idx(stages, run.get("current_stage_idx"))
-    if cur_pos is None:
-        return []
-    cur = stages[cur_pos]
-    # STRICT ordering (design default): only a fill on the CURRENT stage column
-    # advances. A value update on any other column is ignored (out-of-order guard).
-    if cur["column"] != column:
-        return []
-    # idempotency: if the current stage is already filled, do nothing (a repeated
-    # edit of the same column must advance ONCE).
-    if cur.get("filled_at") is not None:
-        return []
+    exps = [dict(e) for e in run.get("expectations") or []]
+    fired: set[str] = set()
 
-    cur["filled_at"] = now
-    trans: list[Transition] = [
-        {"run": run["name"], "node": node, "kind": "filled", "stage_idx": cur["stage_idx"]}
-    ]
+    # fire COLUMN(column) rules (op 'updated' / 'created-or-updated' always;
+    # op 'created' fires only if this rule has not fired for the run yet — the
+    # first time the column becomes filled).
+    for i, rule in enumerate(_ordered_rules(process)):
+        if getattr(rule, "trigger_kind", None) != "column":
+            continue
+        if getattr(rule, "trigger_column", None) != column:
+            continue
+        rk = _rule_key(rule, i)
+        op = getattr(rule, "trigger_op", "updated")
+        already = any(e.get("rule_key") == rk for e in exps)
+        if op == "created" and already:
+            continue  # 'created' fires once (first fill only)
+        if _fire_rule(exps, rule, i, now=now):
+            fired.add(rk)
 
-    next_pos = cur_pos + 1
-    if next_pos >= len(stages):
-        # terminal fill -> complete the run; no further notify.
-        repo.update_process_run(
-            run["name"],
-            {"status": "completed", "completed_at": now, "stages": stages, "current_stage_idx": cur["stage_idx"]},
-        )
-        trans.append({"run": run["name"], "node": node, "kind": "completed"})
-        return trans
-
-    nxt = stages[next_pos]
-    nxt["entered_at"] = now
-    # due_at from the definition's sla for that stage.
-    sla = _sla_for_idx(process, nxt["stage_idx"])
-    nxt["due_at"] = default_due_at(now, sla)
-    repo.update_process_run(
-        run["name"],
-        {"current_stage_idx": nxt["stage_idx"], "stages": stages},
+    # satisfy open expectations on this column + cascade downstream.
+    trans = _satisfy_and_cascade(
+        repo, process, node, exps, fired, now=now, notify=notify,
+        initial=False, satisfied_col=column,
     )
-    trans.append({"run": run["name"], "node": node, "kind": "advanced", "stage_idx": nxt["stage_idx"]})
-    # re-read the persisted run so notify guard mutates the stored ledger.
-    trans += _notify_stage_enter(repo, process, run["name"], node, next_pos, now, notify)
+    trans += _notify_open(repo, process, node, exps, now=now, notify=notify)
+
+    repo.update_process_run(run["name"], {"expectations": exps})
+    trans += _maybe_complete(repo, process, node, run["name"], exps, now=now)
     return trans
 
 
-def _notify_stage_enter(
+def _fire_rule(exps: list[dict[str, Any]], rule: Any, idx: int, *, now: Any) -> bool:
+    """Open one expectation per expected column of ``rule`` (skipping any that
+    already exists — the per-(rule_key, expected_column) idempotency guard).
+    Returns True if any NEW expectation was opened."""
+    rk = _rule_key(rule, idx)
+    within = int(getattr(rule, "within_seconds", 0) or 0)
+    opened_any = False
+    for col in getattr(rule, "expected_columns", None) or []:
+        if _has_expectation(exps, rk, col):
+            continue
+        _open_expectation(exps, rk, col, opened_at=now, within_seconds=within)
+        opened_any = True
+    return opened_any
+
+
+def _satisfy_and_cascade(
     repo: Repository,
     process: ProcessView,
-    run: str,
     node: str,
-    stage_pos: int,
+    exps: list[dict[str, Any]],
+    fired: set[str],
+    *,
+    now: Any,
+    notify: NotifyFn,
+    initial: bool,
+    satisfied_col: Optional[str] = None,
+) -> list[Transition]:
+    """Satisfy expectations whose expected column is filled, then fire any
+    downstream column rule the newly-satisfied column triggers, opening its
+    expectations and repeating to a fixpoint. Cycle-guarded by ``fired`` (a rule
+    fires at most once per event) + the per-(rule_key, expected_column)
+    existence guard so a cyclic-but-passed-validation edge can never spin."""
+    trans: list[Transition] = []
+    ordered = _ordered_rules(process)
+    # Seed the work list: columns to (re)check for satisfaction.
+    if initial:
+        # every distinct expected column present so far.
+        pending_cols = {e["expected_column"] for e in exps}
+    else:
+        pending_cols = {satisfied_col} if satisfied_col else set()
+
+    processed_cols: set[str] = set()
+    while pending_cols:
+        col = pending_cols.pop()
+        processed_cols.add(col)
+        filled = is_filled(repo.get_value(node, col)) if initial else True
+        if not filled:
+            continue
+        # satisfy every OPEN expectation on this column.
+        newly_satisfied = False
+        for e in exps:
+            if e["expected_column"] != col:
+                continue
+            if e.get("satisfied_at") is not None or e.get("breached"):
+                continue
+            e["satisfied_at"] = now
+            newly_satisfied = True
+            trans.append(
+                {"run": None, "node": node, "kind": "satisfied",
+                 "rule_key": e["rule_key"], "column": col}
+            )
+        if not newly_satisfied and initial is False:
+            # nothing to cascade from a column with no open expectation.
+            # (still allow initial pass to fire downstream from prefilled cols.)
+            pass
+        # CASCADE: this column may be the trigger_column of downstream rules.
+        # A cascade observes ``col`` as ALREADY filled (a default / a just-
+        # satisfied prefilled column), so it counts as a 'created' observation:
+        # only rules whose trigger_op includes 'created' cascade-fire. The
+        # directly-updated column's own rules are fired by the caller (and are
+        # already in ``fired``), so an 'updated'-only rule still fires there.
+        for i, rule in enumerate(ordered):
+            if getattr(rule, "trigger_kind", None) != "column":
+                continue
+            if getattr(rule, "trigger_column", None) != col:
+                continue
+            rk = _rule_key(rule, i)
+            if rk in fired:
+                continue
+            if getattr(rule, "trigger_op", "updated") not in ("created", "created-or-updated"):
+                fired.add(rk)  # not eligible on a cascade observation; mark seen
+                continue
+            # a downstream column rule fires once its trigger column is filled.
+            if not is_filled(repo.get_value(node, col)):
+                continue
+            if _fire_rule(exps, rule, i, now=now):
+                # its expected columns may be pre-filled -> re-check them.
+                for c in getattr(rule, "expected_columns", None) or []:
+                    if c not in processed_cols:
+                        pending_cols.add(c)
+            fired.add(rk)
+    return trans
+
+
+def _notify_open(
+    repo: Repository,
+    process: ProcessView,
+    node: str,
+    exps: list[dict[str, Any]],
+    *,
     now: Any,
     notify: NotifyFn,
 ) -> list[Transition]:
-    """Notify the stage's live owners exactly once (``notified_owner`` guard).
-    Honors the stage's ``notify_on_enter`` flag."""
-    stored = repo.get_process_run(process.name, node)
-    if stored is None:
-        return []
-    stages = [dict(s) for s in stored.get("stages") or []]
-    if stage_pos >= len(stages):
-        return []
-    st = stages[stage_pos]
-    if st.get("notified_owner"):  # already notified — idempotent
-        return []
-    ordered = _ordered_stages(process)
-    defn = ordered[stage_pos] if stage_pos < len(ordered) else None
-    if defn is not None and not defn.notify_on_enter:
-        return []
-    owners = _stage_owners(repo, process.sheet, st["column"])
-    if not owners:
-        return []
-    notify(
-        owners,
-        {
-            "source": "process",
-            "op": "process-stage-assigned",
-            "sheet": process.sheet,
-            "node": node,
-            "process": process.name,
-            "stage_idx": st["stage_idx"],
-            "column": st["column"],
-        },
-    )
-    st["notified_owner"] = ",".join(owners)
-    stages[stage_pos] = st
-    repo.update_process_run(run, {"stages": stages})
-    return [{"run": run, "node": node, "kind": "notified", "stage_idx": st["stage_idx"], "owners": owners}]
+    """Notify the live owners of every OPEN (unsatisfied, un-notified)
+    expectation whose rule opted into ``notify_on_expect`` — exactly once
+    (``notified_owner`` guard)."""
+    trans: list[Transition] = []
+    # rule_key -> notify_on_expect flag (default True).
+    notify_flag: dict[str, bool] = {}
+    for i, rule in enumerate(_ordered_rules(process)):
+        notify_flag[_rule_key(rule, i)] = bool(getattr(rule, "notify_on_expect", True))
+
+    for e in exps:
+        if e.get("satisfied_at") is not None or e.get("breached"):
+            continue
+        if e.get("notified_owner"):
+            continue
+        if not notify_flag.get(e["rule_key"], True):
+            continue
+        owners = _expected_owners(repo, process.sheet, e["expected_column"])
+        if not owners:
+            continue
+        notify(
+            owners,
+            {
+                "source": "process",
+                "op": "process-expect-opened",
+                "sheet": process.sheet,
+                "node": node,
+                "process": process.name,
+                "rule_key": e["rule_key"],
+                "column": e["expected_column"],
+            },
+        )
+        e["notified_owner"] = ",".join(owners)
+        trans.append(
+            {"run": None, "node": node, "kind": "notified",
+             "rule_key": e["rule_key"], "column": e["expected_column"], "owners": owners}
+        )
+    return trans
 
 
-def _pos_of_idx(stages: list[dict[str, Any]], stage_idx: Any) -> Optional[int]:
-    for pos, s in enumerate(stages):
-        if s.get("stage_idx") == stage_idx:
-            return pos
-    return None
-
-
-def _sla_for_idx(process: ProcessView, stage_idx: Any) -> int:
-    for s in process.stages:
-        if s.idx == stage_idx:
-            return int(s.sla_seconds or 0)
-    return 0
+def _maybe_complete(
+    repo: Repository,
+    process: ProcessView,
+    node: str,
+    run_name: str,
+    exps: list[dict[str, Any]],
+    *,
+    now: Any,
+) -> list[Transition]:
+    """Complete the run when it is QUIESCENT: at least one expectation exists,
+    every expectation is satisfied-or-breached, and no rule that could still fire
+    (its trigger already occurred) remains unfired. A run with NO expectations at
+    all (a row rule expecting nothing, or nothing triggered) stays active until a
+    trigger opens work."""
+    if not exps:
+        return []
+    if any(e.get("satisfied_at") is None and not e.get("breached") for e in exps):
+        return []
+    # no OPEN expectation. Check no un-fired rule whose trigger has occurred:
+    # a column rule whose trigger_column is filled but which has no expectation.
+    fired_keys = {e["rule_key"] for e in exps}
+    for i, rule in enumerate(_ordered_rules(process)):
+        rk = _rule_key(rule, i)
+        if rk in fired_keys:
+            continue
+        if getattr(rule, "trigger_kind", None) == "column":
+            tcol = getattr(rule, "trigger_column", None)
+            if tcol is not None and is_filled(repo.get_value(node, tcol)):
+                return []  # a triggerable rule has not fired -> not quiescent
+    run = repo.get_process_run(process.name, node)
+    if run is not None and run.get("status") == "completed":
+        return []
+    repo.update_process_run(run_name, {"status": "completed", "completed_at": now})
+    return [{"run": run_name, "node": node, "kind": "completed"}]
 
 
 # ---------------------------------------------------------------------------
@@ -371,65 +485,69 @@ def sla_sweep(
     process_of: Optional[Callable[[str], ProcessView]] = None,
     notify: Optional[NotifyFn] = None,
 ) -> list[Transition]:
-    """Mark the current stage of every candidate active run breached when
-    ``now > due_at`` and the stage is not yet filled. Idempotent: an already-
-    breached stage is skipped. Optionally notifies the stage owner once (when the
-    owning process has ``sla_breach_notify`` and a ``process_of`` resolver is
-    given). ``sla_seconds == 0`` stages have ``due_at == None`` and never breach.
-    """
+    """Breach every OPEN expectation whose ``due_at <= now`` across candidate
+    active runs. Idempotent: an already-breached or already-satisfied expectation
+    is skipped. Optionally notifies the expected column's live owner once (when
+    the owning process has ``sla_breach_notify`` and a ``process_of`` resolver is
+    given). ``within_seconds == 0`` expectations have ``due_at == None`` and never
+    breach."""
     breached: list[Transition] = []
     for run in repo.list_active_runs_with_due(now):
-        stages = [dict(s) for s in run.get("stages") or []]
-        pos = _pos_of_idx(stages, run.get("current_stage_idx"))
-        if pos is None:
-            continue
-        st = stages[pos]
-        due = st.get("due_at")
-        if due is None or st.get("filled_at") is not None or st.get("breached"):
-            continue
-        if not _past_due(now, due):
-            continue
-        st["breached"] = True
-        st["breached_at"] = now
-        stages[pos] = st
-        repo.update_process_run(run["name"], {"stages": stages})
-        rec: Transition = {
-            "run": run["name"],
-            "node": run.get("node"),
-            "kind": "breached",
-            "stage_idx": st["stage_idx"],
-        }
-        if process_of is not None and notify is not None:
-            proc = process_of(run["process"])
-            if proc is not None and getattr(proc, "sla_breach_notify", False):
-                owners = _stage_owners(repo, proc.sheet, st["column"])
+        exps = [dict(e) for e in run.get("expectations") or []]
+        changed = False
+        proc = None
+        if process_of is not None:
+            proc = process_of(run.get("process"))
+        for e in exps:
+            due = e.get("due_at")
+            if due is None or e.get("satisfied_at") is not None or e.get("breached"):
+                continue
+            if not _past_due(now, due):
+                continue
+            e["breached"] = True
+            e["breached_at"] = now
+            changed = True
+            rec: Transition = {
+                "run": run["name"],
+                "node": run.get("node"),
+                "kind": "breached",
+                "rule_key": e.get("rule_key"),
+                "column": e.get("expected_column"),
+            }
+            if proc is not None and notify is not None and getattr(proc, "sla_breach_notify", False):
+                owners = _expected_owners(repo, proc.sheet, e["expected_column"])
                 if owners:
                     notify(
                         owners,
                         {
                             "source": "sla",
-                            "op": "process-stage-due",
+                            "op": "process-expect-due",
                             "sheet": proc.sheet,
                             "node": run.get("node"),
                             "process": proc.name,
-                            "stage_idx": st["stage_idx"],
-                            "column": st["column"],
+                            "rule_key": e.get("rule_key"),
+                            "column": e["expected_column"],
                         },
                     )
                     rec["owners"] = owners
-        breached.append(rec)
+            breached.append(rec)
+        if changed:
+            repo.update_process_run(run["name"], {"expectations": exps})
+            # a breach may make the run quiescent -> complete it.
+            if proc is not None:
+                _maybe_complete(repo, proc, run.get("node"), run["name"], exps, now=now)
     return breached
 
 
 def _past_due(now: Any, due: Any) -> bool:
-    """``now > due``. Numeric epochs compare directly; ISO strings compare
-    lexically (ISO-8601 is lexically ordered). The ``default_due_at`` marker dict
-    is treated as not-yet-resolvable here (adapter resolves it) -> never breaches
-    in the pure path unless numeric/string."""
+    """``now >= due``. Numeric epochs compare directly; ISO strings compare
+    lexically (ISO-8601 is lexically ordered). The ``{base, add_seconds}`` marker
+    dict is treated as not-yet-resolvable here (adapter resolves it) -> never
+    breaches in the pure path."""
     if isinstance(due, dict):
         return False
     try:
-        return now > due
+        return now >= due
     except TypeError:  # pragma: no cover - defensive: incomparable types
         return False
 
@@ -440,62 +558,74 @@ def _past_due(now: Any, due: Any) -> bool:
 def dashboard_aggregate(
     process: ProcessView, runs: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Pure aggregation over a list of run dicts -> the kanban/flow metrics:
-    per-stage pending_count / breached_count / avg_enter_to_fill_seconds, plus
-    throughput totals. Table-driven-testable; no repo access."""
-    ordered = _ordered_stages(process)
-    stage_out: list[dict[str, Any]] = []
+    """Pure aggregation over run dicts -> per-EDGE flow metrics + throughput.
+
+    An edge is a (rule_key, from_column, to_column) dependency derived from the
+    rules (START for a row trigger). Per edge: pending / satisfied / breached
+    counts (over the matching expectations across runs, keyed by
+    (rule_key, expected_column)) and the average open->satisfy duration. No repo
+    access — table-driven-testable."""
+    ordered = _ordered_rules(process)
+    edges = build_edges(
+        [
+            {
+                "rule_key": _rule_key(r, i),
+                "trigger_kind": getattr(r, "trigger_kind", None),
+                "trigger_column": getattr(r, "trigger_column", None),
+                "expected_columns": list(getattr(r, "expected_columns", None) or []),
+            }
+            for i, r in enumerate(ordered)
+        ]
+    )
+    within_by_rule = {_rule_key(r, i): int(getattr(r, "within_seconds", 0) or 0)
+                      for i, r in enumerate(ordered)}
+
     total_active = sum(1 for r in runs if r.get("status") == "active")
     total_completed = sum(1 for r in runs if r.get("status") == "completed")
 
-    for defn in ordered:
-        pending = 0
-        breached = 0
+    edge_out: list[dict[str, Any]] = []
+    for edge in edges:
+        pending = satisfied = breached = 0
         durations: list[float] = []
         for r in runs:
-            st = _stage_in_run(r, defn.idx)
-            if st is None:
-                continue
-            if st.get("breached"):
-                breached += 1
-            filled = st.get("filled_at")
-            entered = st.get("entered_at")
-            if filled is None and entered is not None and r.get("status") == "active" \
-                    and r.get("current_stage_idx") == defn.idx:
-                pending += 1
-            if filled is not None and entered is not None:
-                d = _duration_seconds(entered, filled)
-                if d is not None:
-                    durations.append(d)
+            for e in r.get("expectations") or []:
+                if e.get("rule_key") != edge.rule_key or e.get("expected_column") != edge.to:
+                    continue
+                if e.get("breached"):
+                    breached += 1
+                elif e.get("satisfied_at") is not None:
+                    satisfied += 1
+                    d = _duration_seconds(e.get("opened_at"), e.get("satisfied_at"))
+                    if d is not None:
+                        durations.append(d)
+                else:
+                    pending += 1
         avg = (sum(durations) / len(durations)) if durations else None
-        stage_out.append(
+        edge_out.append(
             {
-                "idx": defn.idx,
-                "column": defn.column,
+                "rule_key": edge.rule_key,
+                "from_kind": edge.from_kind,
+                "from_column": None if edge.from_node == START else edge.from_node,
+                "to_column": edge.to,
+                "within_seconds": within_by_rule.get(edge.rule_key, 0),
                 "pending_count": pending,
+                "satisfied_count": satisfied,
                 "breached_count": breached,
-                "avg_enter_to_fill_seconds": avg,
+                "avg_open_to_satisfy_seconds": avg,
             }
         )
 
     return {
-        "stages": stage_out,
+        "edges": edge_out,
         "total_active": total_active,
         "total_completed": total_completed,
         "throughput": total_completed,
     }
 
 
-def _stage_in_run(run: dict[str, Any], stage_idx: Any) -> Optional[dict[str, Any]]:
-    for s in run.get("stages") or []:
-        if s.get("stage_idx") == stage_idx:
-            return s
-    return None
-
-
-def _duration_seconds(entered: Any, filled: Any) -> Optional[float]:
-    if isinstance(entered, (int, float)) and isinstance(filled, (int, float)):
-        return float(filled - entered)
+def _duration_seconds(opened: Any, satisfied: Any) -> Optional[float]:
+    if isinstance(opened, (int, float)) and isinstance(satisfied, (int, float)):
+        return float(satisfied - opened)
     return None
 
 
