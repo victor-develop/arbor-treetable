@@ -359,12 +359,22 @@ export type ProcessTriggerOp = "created" | "updated" | "created-or-updated";
 // `expected_owners` maps expected column -> LIVE-resolved owner (server-side; null
 // when the viewer can't read that column). `*_label` are readable labels (null =>
 // redacted for a column the viewer cannot read; never leak the field key).
+// How a column trigger's SET fires: 'any' (fire when ANY named trigger column is
+// updated — today's behavior / a single trigger) or 'all' (an AND-join / fan-in:
+// fire ONCE when EVERY trigger column is filled). `trigger_column` remains a
+// back-compat alias == `trigger_columns[0]`.
+export type ProcessTriggerJoin = "any" | "all";
+
 export type ProcessRuleView = {
   rule_key: string;
   idx: number;
   trigger_kind: ProcessTriggerKind;
   trigger_column: string | null;
   trigger_column_label: string | null;
+  // The trigger SET (1+); `*_labels` null => redacted for an unreadable column.
+  trigger_columns: (string | null)[];
+  trigger_labels: (string | null)[];
+  trigger_join: ProcessTriggerJoin;
   trigger_op: ProcessTriggerOp;
   expected_columns: string[];
   expected_labels: (string | null)[];
@@ -381,7 +391,12 @@ export type ProcessRuleView = {
 export type ProcessRuleInput = {
   rule_key?: string;
   trigger_kind: ProcessTriggerKind;
+  // Either the single `trigger_column` (back-compat) OR the full `trigger_columns`
+  // SET. `trigger_join` defaults to 'any' (server normalizes a single column to a
+  // one-entry set). Set `trigger_join='all'` for an AND-join / fan-in trigger.
   trigger_column?: string | null;
+  trigger_columns?: string[];
+  trigger_join?: ProcessTriggerJoin;
   trigger_op: ProcessTriggerOp;
   expected_columns: string[];
   within_seconds?: number;
@@ -409,6 +424,10 @@ export type ProcessDashboardEdge = {
   from_label: string | null;
   to_column: string;
   to_label: string | null;
+  // 'all' => this edge is one leg of an AND-join (fan-in); edges sharing a
+  // `rule_key` with join='all' group into one join node on the canvas. 'any' =>
+  // a plain single/any trigger edge.
+  join: ProcessTriggerJoin;
   within_seconds: number;
   pending_count: number;
   breached_count: number;

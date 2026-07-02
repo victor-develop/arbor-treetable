@@ -802,6 +802,13 @@ def _process_view_dict(repo, actor, process):
                 # redact the field key for a column the viewer cannot read.
                 expected_columns.append(None)
                 expected_owners[col] = None
+        # trigger SET labels (redact each unreadable column, like expected).
+        trigger_columns: list = []
+        trigger_labels: list = []
+        for col in (r.trigger_columns or ([r.trigger_column] if r.trigger_column else [])):
+            tlabel, treadable = _readable_column_label(repo, process.sheet, actor, col)
+            trigger_labels.append(tlabel)
+            trigger_columns.append(col if treadable else None)
         rules.append(
             {
                 "rule_key": r.rule_key,
@@ -809,6 +816,9 @@ def _process_view_dict(repo, actor, process):
                 "trigger_kind": r.trigger_kind,
                 "trigger_column": r.trigger_column if trig_readable else None,
                 "trigger_column_label": trig_label,
+                "trigger_columns": trigger_columns,
+                "trigger_labels": trigger_labels,
+                "trigger_join": r.trigger_join,
                 "trigger_op": r.trigger_op,
                 "expected_columns": expected_columns,
                 "expected_labels": expected_labels,

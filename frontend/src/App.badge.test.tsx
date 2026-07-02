@@ -33,6 +33,7 @@ function edge(over: Partial<Dash["edges"][number]>): Dash["edges"][number] {
     from_label: null,
     to_column: "owner_c",
     to_label: "Owner",
+    join: "any",
     within_seconds: 0,
     pending_count: 0,
     breached_count: 0,

@@ -32,6 +32,7 @@ function edge(from: string, to: string, over: Partial<GraphEdge> = {}): GraphEdg
     within_seconds: 0,
     trigger_op: "created-or-updated",
     notify_on_expect: true,
+    join: "any",
     ...over,
   };
 }
@@ -43,6 +44,9 @@ function view(over: Partial<ProcessRuleView>): ProcessRuleView {
     trigger_kind: "row",
     trigger_column: null,
     trigger_column_label: null,
+    trigger_columns: [],
+    trigger_labels: [],
+    trigger_join: "any",
     trigger_op: "created-or-updated",
     expected_columns: ["a"],
     expected_labels: ["A"],
@@ -96,6 +100,59 @@ describe("buildGraph", () => {
     const g = buildGraph(rules);
     expect(g.edges[0].rule_key).toBe("r0");
     expect(g.edges[0].notify_on_expect).toBe(true); // defaults to notify
+  });
+
+  it("tags a plain (single/row) rule's edges join='any'", () => {
+    const g = buildGraph([
+      view({ rule_key: "r0", trigger_kind: "row", expected_columns: ["a"] }),
+      view({ rule_key: "r1", trigger_kind: "column", trigger_column: "a", expected_columns: ["b"] }),
+    ]);
+    expect(g.edges.every((e) => e.join === "any")).toBe(true);
+  });
+
+  it("treats trigger_column (singular) as a one-entry set", () => {
+    const g = buildGraph([
+      view({ rule_key: "r1", trigger_kind: "column", trigger_column: "a", trigger_columns: [], expected_columns: ["b"] }),
+    ]);
+    expect(g.edges).toHaveLength(1);
+    expect(g.edges[0]).toMatchObject({ from: "a", to: "b", join: "any" });
+  });
+
+  it("fans an ALL-join (N triggers x M expected) into N*M edges sharing one rule_key + join='all'", () => {
+    const g = buildGraph([
+      view({
+        rule_key: "j1",
+        trigger_kind: "column",
+        trigger_column: "a",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        expected_columns: ["c", "d"],
+        within_seconds: 60,
+      }),
+    ]);
+    // 2 triggers x 2 expected = 4 edges.
+    expect(g.edges).toHaveLength(4);
+    expect(g.edges.every((e) => e.rule_key === "j1")).toBe(true);
+    expect(g.edges.every((e) => e.join === "all")).toBe(true);
+    expect(g.edges.every((e) => e.within_seconds === 60)).toBe(true);
+    const pairs = g.edges.map((e) => `${e.from}->${e.to}`).sort();
+    expect(pairs).toEqual(["a->c", "a->d", "b->c", "b->d"]);
+    // every trigger + expected column is a node.
+    expect(g.nodes.map((n) => n.id).sort()).toEqual([START_ID, "a", "b", "c", "d"]);
+  });
+
+  it("prefers trigger_columns over the singular alias when both are present", () => {
+    const g = buildGraph([
+      view({
+        rule_key: "j",
+        trigger_kind: "column",
+        trigger_column: "a",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        expected_columns: ["c"],
+      }),
+    ]);
+    expect(g.edges.map((e) => e.from).sort()).toEqual(["a", "b"]);
   });
 });
 
@@ -301,5 +358,155 @@ describe("packRules", () => {
   it("maps a START-origin edge to a row-trigger rule", () => {
     const packed = packRules([edge(START_ID, "a")]);
     expect(packed[0]).toMatchObject({ trigger_kind: "row", trigger_column: null });
+  });
+});
+
+describe("packRules — AND-join (fan-in)", () => {
+  it("packs edges sharing a rule_key with join='all' into ONE rule (trigger_columns=all sources)", () => {
+    // a->c and b->c share rule_key 'j' and join='all' => expect c when a AND b.
+    const edges = [
+      edge("a", "c", { rule_key: "j", join: "all", within_seconds: 60 }),
+      edge("b", "c", { rule_key: "j", join: "all", within_seconds: 60 }),
+    ];
+    const packed = packRules(edges);
+    expect(packed).toHaveLength(1);
+    expect(packed[0]).toMatchObject({
+      trigger_kind: "column",
+      trigger_join: "all",
+      trigger_columns: ["a", "b"],
+      trigger_column: "a", // back-compat alias == trigger_columns[0]
+      expected_columns: ["c"],
+      within_seconds: 60,
+    });
+  });
+
+  it("groups an ALL-join's multiple expected columns into one rule (N*M edges)", () => {
+    const edges = [
+      edge("a", "c", { rule_key: "j", join: "all" }),
+      edge("a", "d", { rule_key: "j", join: "all" }),
+      edge("b", "c", { rule_key: "j", join: "all" }),
+      edge("b", "d", { rule_key: "j", join: "all" }),
+    ];
+    const packed = packRules(edges);
+    expect(packed).toHaveLength(1);
+    expect(packed[0].trigger_columns).toEqual(["a", "b"]);
+    expect(packed[0].expected_columns).toEqual(["c", "d"]);
+    expect(packed[0].trigger_join).toBe("all");
+  });
+
+  it("round-trips an ALL-join through buildGraph -> packRules", () => {
+    const rules: ProcessRuleInput[] = [
+      {
+        rule_key: "j1",
+        trigger_kind: "column",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        trigger_op: "created-or-updated",
+        expected_columns: ["c"],
+        within_seconds: 120,
+        notify_on_expect: true,
+      },
+    ];
+    const packed = packRules(buildGraph(rules).edges);
+    expect(packed).toEqual([
+      {
+        trigger_kind: "column",
+        trigger_join: "all",
+        trigger_columns: ["a", "b"],
+        trigger_column: "a",
+        trigger_op: "created-or-updated",
+        expected_columns: ["c"],
+        within_seconds: 120,
+        notify_on_expect: true,
+      },
+    ]);
+  });
+
+  it("keeps two separate any-join rules distinct from an all-join into the same target", () => {
+    // Two INDEPENDENT any triggers into c (separate rule_keys) stay two rules.
+    const edges = [
+      edge("a", "c", { rule_key: "ra", join: "any" }),
+      edge("b", "c", { rule_key: "rb", join: "any" }),
+    ];
+    const packed = packRules(edges);
+    expect(packed).toHaveLength(2);
+    expect(packed.every((r) => r.trigger_join === undefined || r.trigger_join === "any")).toBe(true);
+  });
+
+  it("does NOT merge two all-joins that carry DIFFERENT rule_keys", () => {
+    const edges = [
+      edge("a", "c", { rule_key: "j1", join: "all" }),
+      edge("b", "c", { rule_key: "j2", join: "all" }),
+    ];
+    const packed = packRules(edges);
+    expect(packed).toHaveLength(2);
+  });
+});
+
+describe("validate — AND-join", () => {
+  it("passes a clean all-join (a AND b -> c) with no errors", () => {
+    const g = buildGraph([
+      view({ rule_key: "r0", trigger_kind: "row", expected_columns: ["a", "b"] }),
+      view({
+        rule_key: "j",
+        trigger_kind: "column",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        expected_columns: ["c"],
+      }),
+    ]);
+    const res = validate(g);
+    expect(res.errors).toEqual([]);
+    expect(res.warnings).toEqual([]);
+  });
+
+  it("errors when an all-join trigger column is also its own expected column (self-loop)", () => {
+    const g = buildGraph([
+      view({
+        rule_key: "j",
+        trigger_kind: "column",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        expected_columns: ["b", "c"], // b triggers AND is expected -> self-loop
+      }),
+    ]);
+    const res = validate(g);
+    expect(res.errors.some((e) => /itself/i.test(e))).toBe(true);
+  });
+
+  it("warns (does not error) when an all-join trigger column is unreachable from START", () => {
+    // a is fed from START; b is orphaned. The join a AND b -> c can never complete.
+    const g = buildGraph(
+      [
+        view({ rule_key: "r0", trigger_kind: "row", expected_columns: ["a"] }),
+        view({
+          rule_key: "j",
+          trigger_kind: "column",
+          trigger_columns: ["a", "b"],
+          trigger_join: "all",
+          expected_columns: ["c"],
+        }),
+      ],
+      (c) => c.toUpperCase(),
+    );
+    const res = validate(g);
+    expect(res.errors).toEqual([]);
+    expect(res.warnings.some((w) => /not reachable/i.test(w) && /B/.test(w))).toBe(true);
+  });
+
+  it("errors on a cycle formed through an all-join leg", () => {
+    // c is expected by the join (a AND b -> c); c then triggers b -> cycle b->c->b.
+    const g = buildGraph([
+      view({
+        rule_key: "j",
+        trigger_kind: "column",
+        trigger_columns: ["a", "b"],
+        trigger_join: "all",
+        expected_columns: ["c"],
+      }),
+      view({ rule_key: "r1", trigger_kind: "column", trigger_column: "c", expected_columns: ["b"] }),
+    ]);
+    const res = validate(g);
+    expect(res.errors.some((e) => /cycle/i.test(e))).toBe(true);
   });
 });

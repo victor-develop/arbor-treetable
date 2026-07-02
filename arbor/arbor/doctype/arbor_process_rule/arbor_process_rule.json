@@ -9,6 +9,8 @@
   "label",
   "trigger_kind",
   "trigger_column",
+  "trigger_columns",
+  "trigger_join",
   "trigger_op",
   "expected_columns",
   "within_seconds",
@@ -40,11 +42,25 @@
    "reqd": 1
   },
   {
-   "description": "The Tree Column whose create/update fires this rule. Required when trigger_kind='column'; empty for a 'row' trigger.",
+   "description": "Back-compat single-trigger alias == trigger_columns[0]. The Tree Column whose create/update fires this rule when there is a single trigger column. Kept in sync with the first entry of trigger_columns.",
    "fieldname": "trigger_column",
    "fieldtype": "Link",
    "label": "Trigger Column",
    "options": "Tree Column"
+  },
+  {
+   "description": "The trigger SET (1+ Tree Column names, stored as a JSON array). trigger_join='any' (or a single column) fires when ANY named column is updated; trigger_join='all' (an AND-join / fan-in) fires ONCE when EVERY column is filled. A single-column rule has one entry; trigger_column mirrors trigger_columns[0].",
+   "fieldname": "trigger_columns",
+   "fieldtype": "JSON",
+   "label": "Trigger Columns"
+  },
+  {
+   "default": "any",
+   "description": "How the trigger SET fires: 'any' (fire when any trigger column is updated — today's behavior) or 'all' (an AND-join / fan-in: fire ONCE when every trigger column is filled, the fill that completes the set being the trigger moment).",
+   "fieldname": "trigger_join",
+   "fieldtype": "Select",
+   "label": "Trigger Join",
+   "options": "any\nall"
   },
   {
    "default": "updated",

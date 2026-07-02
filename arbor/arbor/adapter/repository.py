@@ -206,6 +206,9 @@ class _ProcessRuleView:
     trigger_kind: str  # 'row' | 'column'
     trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
     expected_columns: list[str] = field(default_factory=list)
+    # The trigger SET (1+); ``trigger_column`` is a back-compat alias == [0].
+    trigger_columns: list[str] = field(default_factory=list)
+    trigger_join: str = "any"  # 'any' | 'all'
     trigger_column: Optional[str] = None
     within_seconds: int = 0
     notify_on_expect: bool = True
@@ -981,23 +984,31 @@ class FrappeRepository:
         """Build a ``ProcessView`` from an Arbor Process Document. Rule ``idx`` is
         0-based (child-row order), so the pure machine + the expectation ledger
         agree with the bench-free fixture (which numbers rules 0,1,2…)."""
-        rules = [
-            _ProcessRuleView(
-                rule_key=row.rule_key or f"r{i}",
-                idx=i,
-                trigger_kind=row.trigger_kind,
-                trigger_op=row.trigger_op
-                or ("created" if row.trigger_kind == "row" else "updated"),
-                expected_columns=self._parse_expected_columns(row.get("expected_columns")),
-                trigger_column=row.get("trigger_column") or None,
-                within_seconds=int(row.get("within_seconds") or 0),
-                notify_on_expect=bool(
-                    1 if row.get("notify_on_expect") is None else row.get("notify_on_expect")
-                ),
-                label=row.get("label") or None,
+        rules = []
+        for i, row in enumerate(doc.get("rules") or []):
+            # trigger SET: prefer the stored JSON trigger_columns; fall back to the
+            # single trigger_column alias for legacy/back-compat rows.
+            tcols = self._parse_expected_columns(row.get("trigger_columns"))
+            if not tcols and row.get("trigger_column"):
+                tcols = [row.get("trigger_column")]
+            rules.append(
+                _ProcessRuleView(
+                    rule_key=row.rule_key or f"r{i}",
+                    idx=i,
+                    trigger_kind=row.trigger_kind,
+                    trigger_op=row.trigger_op
+                    or ("created" if row.trigger_kind == "row" else "updated"),
+                    expected_columns=self._parse_expected_columns(row.get("expected_columns")),
+                    trigger_columns=tcols,
+                    trigger_join=row.get("trigger_join") or "any",
+                    trigger_column=(tcols[0] if tcols else None),
+                    within_seconds=int(row.get("within_seconds") or 0),
+                    notify_on_expect=bool(
+                        1 if row.get("notify_on_expect") is None else row.get("notify_on_expect")
+                    ),
+                    label=row.get("label") or None,
+                )
             )
-            for i, row in enumerate(doc.get("rules") or [])
-        ]
         return _ProcessView(
             name=doc.name,
             sheet=doc.sheet,
@@ -1030,13 +1041,21 @@ class FrappeRepository:
         doc.set("rules", [])
         for i, r in enumerate(data.get("rules") or []):
             kind = r["trigger_kind"]
+            # normalize the trigger SET: prefer trigger_columns, else the single
+            # trigger_column alias. Store both (trigger_column == the first entry)
+            # so legacy readers still resolve a single trigger.
+            tcols = [c for c in (r.get("trigger_columns") or []) if c is not None]
+            if not tcols and r.get("trigger_column"):
+                tcols = [r["trigger_column"]]
             doc.append(
                 "rules",
                 {
                     "rule_key": r.get("rule_key") or f"r{i}",
                     "label": r.get("label"),
                     "trigger_kind": kind,
-                    "trigger_column": r.get("trigger_column") or None,
+                    "trigger_column": (tcols[0] if tcols else None),
+                    "trigger_columns": frappe.as_json(tcols),
+                    "trigger_join": r.get("trigger_join") or "any",
                     "trigger_op": r.get("trigger_op")
                     or ("created" if kind == "row" else "updated"),
                     "expected_columns": frappe.as_json(list(r.get("expected_columns") or [])),

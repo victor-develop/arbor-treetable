@@ -126,6 +126,8 @@ export function ProcessCanvas({
       setReject("That connection would create a cycle.");
       return;
     }
+    // A freshly drawn edge is always a plain 'any' trigger; the target's ANY/ALL
+    // toggle (below) promotes a multi-source target to an AND-join.
     const next: GraphEdge = {
       rule_key: `${from}->${to}`,
       from,
@@ -133,6 +135,7 @@ export function ProcessCanvas({
       within_seconds: 0,
       trigger_op: "created-or-updated",
       notify_on_expect: true,
+      join: "any",
     };
     // `to` is now edge-touched, so drop it from loose (it will come from graph).
     setLooseNodes((prev) => prev.filter((id) => id !== to && id !== from));
@@ -156,6 +159,58 @@ export function ProcessCanvas({
         e.from === from && e.to === to ? { ...e, within_seconds: Math.max(0, seconds) } : e,
       ),
     );
+  };
+
+  // Incoming trigger edges per target column (in edge order). A target with >1
+  // distinct incoming source can become an AND-join (expect it when ALL sources
+  // are filled) instead of separate OR (ANY) rules.
+  const incomingByTarget = useMemo(() => {
+    const map = new Map<string, GraphEdge[]>();
+    for (const e of graph.edges) {
+      const list = map.get(e.to);
+      if (list) list.push(e);
+      else map.set(e.to, [e]);
+    }
+    return map;
+  }, [graph.edges]);
+
+  // A target is an AND-join when ALL its incoming edges are tagged join='all' AND
+  // share ONE rule_key (packRules groups an all-join by rule_key). Otherwise ANY.
+  const joinOf = (to: string): "any" | "all" => {
+    const inc = incomingByTarget.get(to) ?? [];
+    if (inc.length < 2) return "any";
+    const key = inc[0].rule_key;
+    return inc.every((e) => e.join === "all" && e.rule_key === key) ? "all" : "any";
+  };
+
+  // Set the ANY/ALL join for a target's incoming trigger set. ALL rewrites every
+  // incoming edge to a SHARED rule_key + join='all' (and a shared window/op/notify,
+  // taken from the first incoming edge — one join fires on one window). ANY splits
+  // them back into independent join='any' edges with per-edge rule_keys.
+  const setTargetJoin = (to: string, join: "any" | "all") => {
+    const inc = incomingByTarget.get(to) ?? [];
+    if (inc.length < 2) return;
+    const others = graph.edges.filter((e) => e.to !== to);
+    let rewritten: GraphEdge[];
+    if (join === "all") {
+      const key = `all:${to}`;
+      const lead = inc[0];
+      rewritten = inc.map((e) => ({
+        ...e,
+        rule_key: key,
+        join: "all",
+        within_seconds: lead.within_seconds,
+        trigger_op: lead.trigger_op,
+        notify_on_expect: lead.notify_on_expect,
+      }));
+    } else {
+      rewritten = inc.map((e) => ({
+        ...e,
+        rule_key: `${e.from}->${e.to}`,
+        join: "any",
+      }));
+    }
+    emit([...others, ...rewritten]);
   };
 
   const nodeLabel = (id: string): string => {
@@ -240,18 +295,37 @@ export function ProcessCanvas({
             const y1 = a.y;
             const x2 = b.x - w / 2;
             const y2 = b.y;
+            const isAll = e.join === "all";
             return (
-              <line
-                key={`${e.from}->${e.to}`}
-                data-testid={`canvas-edge-${e.from}-${e.to}`}
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
-                stroke="var(--outline-strong)"
-                strokeWidth={1.5}
-                markerEnd="url(#arbor-arrow)"
-              />
+              <g key={`${e.from}->${e.to}`}>
+                <line
+                  data-testid={`canvas-edge-${e.from}-${e.to}`}
+                  data-join={e.join}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={isAll ? "var(--accent, var(--outline-strong))" : "var(--outline-strong)"}
+                  strokeWidth={isAll ? 2 : 1.5}
+                  strokeDasharray={isAll ? "5 3" : undefined}
+                  markerEnd="url(#arbor-arrow)"
+                />
+                {isAll && (
+                  // A "∧" (AND) marker at the edge midpoint so a converging join
+                  // reads at a glance — every leg of an all-join carries it.
+                  <text
+                    data-testid={`canvas-edge-join-${e.from}-${e.to}`}
+                    x={(x1 + x2) / 2}
+                    y={(y1 + y2) / 2 - 4}
+                    textAnchor="middle"
+                    fontSize={12}
+                    fill="var(--accent, var(--outline-strong))"
+                    aria-label="AND-join"
+                  >
+                    ∧
+                  </text>
+                )}
+              </g>
             );
           })}
         </svg>
@@ -300,6 +374,31 @@ export function ProcessCanvas({
               >
                 →
               </button>
+              {/* ANY/ALL join toggle — only on a target fed by >1 trigger. ANY =
+                  separate OR rules (fire on any one); ALL = a single AND-join that
+                  fires once every incoming column is filled. */}
+              {(incomingByTarget.get(n.id)?.length ?? 0) > 1 && (
+                <button
+                  type="button"
+                  className={
+                    "arbor-canvas-join-toggle" +
+                    (joinOf(n.id) === "all" ? " is-all" : "")
+                  }
+                  data-testid={`canvas-join-toggle-${n.id}`}
+                  data-join={joinOf(n.id)}
+                  aria-pressed={joinOf(n.id) === "all"}
+                  aria-label={
+                    joinOf(n.id) === "all"
+                      ? `${nodeLabel(n.id)} waits for ALL triggers — switch to ANY`
+                      : `${nodeLabel(n.id)} fires on ANY trigger — switch to ALL (wait for all)`
+                  }
+                  onClick={() =>
+                    setTargetJoin(n.id, joinOf(n.id) === "all" ? "any" : "all")
+                  }
+                >
+                  {joinOf(n.id) === "all" ? "ALL" : "ANY"}
+                </button>
+              )}
               {n.kind !== "start" && (
                 <button
                   type="button"
