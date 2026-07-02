@@ -48,6 +48,10 @@ scheduler_events = {
     "cron": {
         "* * * * *": [
             "arbor.arbor.dispatch.frappe_dispatch.run_webhook_retries",
+            # Process/SLA sweep (Area 3): mark the current stage of over-due active
+            # runs breached + notify the stage owner once (when the process opts in
+            # via sla_breach_notify). Bounded to active runs with a past due_at.
+            "arbor.arbor.dispatch.frappe_dispatch.run_process_sla_sweep",
         ],
     },
 }
@@ -91,6 +95,17 @@ override_whitelisted_methods = {
     "arbor.enable_process": "arbor.arbor.api.enable_process",
     "arbor.disable_process": "arbor.arbor.api.disable_process",
     "arbor.start_process_run": "arbor.arbor.api.start_process_run",
+    # Process READ shims (NOT capabilities) — definition, kanban/flow dashboard,
+    # per-stage run drill-down, and the cross-sheet per-user inbox (Area 3).
+    "arbor.get_process": "arbor.arbor.api.get_process",
+    "arbor.process_dashboard": "arbor.arbor.api.process_dashboard",
+    "arbor.list_process_runs": "arbor.arbor.api.list_process_runs",
+    "arbor.inbox": "arbor.arbor.api.inbox",
+    # Impersonation ("act as") — traceable, admin-gated overlay (Area 1). Both
+    # funnel through the SAME executor as every capability; begin/end emit NO
+    # Tree Event (the Arbor Impersonation Session row IS the audit record).
+    "arbor.begin_impersonation": "arbor.arbor.api.begin_impersonation",
+    "arbor.end_impersonation": "arbor.arbor.api.end_impersonation",
     "arbor.create_sheet": "arbor.arbor.api.create_sheet",
     "arbor.list_sheets": "arbor.arbor.api.list_sheets",
     "arbor.list_change_requests": "arbor.arbor.api.list_change_requests",
@@ -123,6 +138,14 @@ override_whitelisted_methods = {
     "arbor.discard_cell_draft": "arbor.arbor.api.discard_cell_draft",
     "arbor.discard_cell_drafts": "arbor.arbor.api.discard_cell_drafts",
     "arbor.submit_cell_drafts": "arbor.arbor.api.submit_cell_drafts",
+    # Per-cell comments drawer (Feature: comments, Area 2) — threaded, cell-keyed
+    # collaboration metadata. NOT registry capabilities and NOT Tree Events; read/
+    # post gated by can_read_column, resolve by column approvers, delete by
+    # author-or-approver. add fans out a source='comment' Notification directly.
+    "arbor.add_cell_comment": "arbor.arbor.api.add_cell_comment",
+    "arbor.list_cell_comments": "arbor.arbor.api.list_cell_comments",
+    "arbor.resolve_cell_comment": "arbor.arbor.api.resolve_cell_comment",
+    "arbor.delete_cell_comment": "arbor.arbor.api.delete_cell_comment",
     # Server-side Re-Act agent
     "arbor.agent.chat": "arbor.arbor.agent.chat.chat",
     # Accountability aggregate (N notified / M acked)

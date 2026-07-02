@@ -27,6 +27,7 @@ Error contracts (api.md):
 from __future__ import annotations
 
 import base64
+import re
 from typing import Any, Optional
 
 import frappe
@@ -71,16 +72,64 @@ except ModuleNotFoundError:  # pragma: no cover - dev-layout fallback
 # ---------------------------------------------------------------------------
 # Wiring helpers
 # ---------------------------------------------------------------------------
-def _actor() -> Actor:
-    """The acting identity = the authenticated Frappe user (always ``human`` on
-    the REST surface)."""
+def _is_admin_user(user: str) -> bool:
+    """Platform-admin (System Manager) signal for a user — the ONLY admin gate the
+    framework-free core cannot compute. Administrator is always admin."""
+    return user == "Administrator" or "System Manager" in set(frappe.get_roles(user))
+
+
+def _actor(repo: Optional[FrappeRepository] = None) -> Actor:
+    """The acting identity — the authenticated Frappe user, PLUS a traceable
+    impersonation overlay (Area 1).
+
+    Ordering is load-bearing (impersonation-comments-process.md aclImplications):
+      1. read ``frappe.session.user`` = the REAL, authenticated principal — we
+         NEVER call ``frappe.set_user`` to "become" someone, so the framework
+         boundary keeps telling the truth;
+      2. compute ``real_is_admin`` from the REAL user's roles;
+      3. look up the active Arbor Impersonation Session for the real user;
+      4. if present AND real_is_admin -> build Actor(user=impersonated,
+         real_user=real, impersonated_as=impersonated, is_admin recomputed from the
+         IMPERSONATED user so the admin genuinely experiences that user's
+         affordances); if present but the real user is NO LONGER admin -> force-end
+         the overlay (fail-safe: you cannot keep a foreign identity by losing
+         admin) and act as the real user; else a normal, non-impersonated Actor.
+
+    begin/end authority is gated on ``real_is_admin`` computed HERE (before the
+    overlay is applied), so an impersonated non-admin identity can never start a
+    nested impersonation or escalate.
+    """
     user = frappe.session.user
     if not user or user == "Guest":
         # Defense in depth; Frappe normally rejects unauthenticated calls to a
         # whitelisted method (no allow_guest) with 403/401 before we get here.
         raise frappe.AuthenticationError(_("Authentication required"))
-    is_admin = user == "Administrator" or "System Manager" in set(frappe.get_roles(user))
-    return Actor(user=user, actor_type=ActorType.HUMAN, is_admin=is_admin)
+
+    real_user = user
+    real_is_admin = _is_admin_user(real_user)
+
+    repo = repo or _repo()
+    session = repo.get_active_impersonation(real_user)
+    if session:
+        impersonated = session["impersonated_user"]
+        if real_is_admin and impersonated and impersonated != real_user:
+            # Effective identity = the impersonated user; ACL/executor run against
+            # it. is_admin is recomputed from the impersonated user (so an admin
+            # acting as a plain user sees exactly that user's affordances).
+            return Actor(
+                user=impersonated,
+                actor_type=ActorType.HUMAN,
+                is_admin=_is_admin_user(impersonated),
+                real_user=real_user,
+                impersonated_as=impersonated,
+            )
+        # Fail-safe: an overlay persisted for a user who is no longer admin (grant
+        # revoked mid-session) must NOT grant lingering foreign identity. Force-end
+        # it and act as the real user.
+        if not real_is_admin:
+            repo.end_impersonation(real_user)
+
+    return Actor(user=real_user, actor_type=ActorType.HUMAN, is_admin=real_is_admin)
 
 
 def _repo() -> FrappeRepository:
@@ -132,13 +181,36 @@ def _outcome_dict(outcome: Outcome) -> dict[str, Any]:
     return body
 
 
-def _dispatch(action_id: str, params: dict[str, Any]) -> dict[str, Any]:
+def _actor_real(repo: Optional[FrappeRepository] = None) -> Actor:
+    """The REAL, authenticated principal WITHOUT any impersonation overlay — with
+    ``is_admin`` computed from the real user's roles (Area 1).
+
+    The begin/end impersonation control caps are gated on the REAL user's admin
+    (impersonation-comments-process.md aclImplications: "computed before the
+    overlay is applied"). ``_actor()`` returns the EFFECTIVE (possibly impersonated,
+    non-admin) identity, which would wrongly block ``endImpersonation`` while an
+    overlay is live; so those two shims dispatch AS the real user instead. This is
+    the ONLY place the overlay is bypassed, and it can never escalate: it grants
+    admin only when the real session user genuinely holds System Manager."""
+    user = frappe.session.user
+    if not user or user == "Guest":
+        raise frappe.AuthenticationError(_("Authentication required"))
+    return Actor(user=user, actor_type=ActorType.HUMAN, is_admin=_is_admin_user(user))
+
+
+def _dispatch(
+    action_id: str, params: dict[str, Any], actor: Optional[Actor] = None
+) -> dict[str, Any]:
     """The ONE funnel: every capability method routes here → core.execute_action.
 
     Translates core/adapter exceptions into Frappe's HTTP status conventions.
+    ``actor`` defaults to the effective identity (``_actor()``, which applies any
+    impersonation overlay); the begin/end impersonation shims pass the REAL-user
+    actor so their admin gate is the real principal's, never the impersonated one.
     """
-    actor = _actor()
     repo = _repo()
+    if actor is None:
+        actor = _actor(repo)
     sink = _sink()
     try:
         outcome = executor.execute_action(action_id, params or {}, actor, repo, sink)
@@ -224,9 +296,9 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     agent lane passes its own ``Actor`` (``actor_type=agent``) so its read
     reflects agent affordances. Either way the SAME serializer runs.
     """
-    if actor is None:
-        actor = _actor()
     repo = _repo()
+    if actor is None:
+        actor = _actor(repo)
 
     if not frappe.db.exists("Tree Sheet", sheet):
         frappe.local.response["http_status_code"] = 404
@@ -288,10 +360,37 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     # Built only for the already read-ACL-filtered columns → cannot leak.
     pending = _pending_cell_marks(sheet, repo, {c.name for c in columns})
 
+    # Per-cell comment SUMMARY (Area 2): {(node, column): {open, resolved,
+    # unresolved}} built ONLY over the read-ACL-visible columns (same guarantee as
+    # pending marks / the values loop) so a comment on a forbidden column never
+    # leaks into another viewer's grid. ONE grouped query over Arbor Cell Comment,
+    # never N+1 per cell.
+    comments = _cell_comment_marks(sheet, {c.name for c in columns}, node_names)
+
     acl_hints = _acl_hints(actor, repo, sheet, columns, nodes)
-    return serialize_snapshot(
+    snap = serialize_snapshot(
         sheet_view, columns, nodes, values, acl_hints, versions=versions, pending=pending
     )
+    # Fold the per-cell comment summary onto each node under a sparse ``comments``
+    # map (mirrors how ``pending`` is threaded); nodes with no comments carry none.
+    if comments:
+        by_node: dict[str, dict[str, dict[str, int]]] = {}
+        for (node_name, col_name), summary in comments.items():
+            by_node.setdefault(node_name, {})[col_name] = summary
+        for n in snap.get("nodes", []):
+            cmap = by_node.get(n.get("name"))
+            if cmap:
+                n["comments"] = cmap
+    # Impersonation viewer block (Area 1): the pure serializer's ``viewer`` is
+    # framework-free and carries only the shared affordances; overlay the
+    # "act as" hints here (api.py owns the impersonation surface) so the banner +
+    # "stop impersonating" control render off snapshot hints with NO ACL
+    # re-derivation. effective_user == actor.user (the identity the grid renders
+    # for); real_user is the authenticated admin when impersonating (else null).
+    snap["viewer"]["impersonating"] = acl_hints.get("impersonating", False)
+    snap["viewer"]["real_user"] = acl_hints.get("real_user")
+    snap["viewer"]["effective_user"] = acl_hints.get("effective_user", actor.user)
+    return snap
 
 
 def _pending_cell_marks(
@@ -332,6 +431,42 @@ def _pending_cell_marks(
         else:
             p = cr.get("payload") or {}
             _add(p.get("node"), p.get("column"), p.get("value"), name, requester)
+    return marks
+
+
+def _cell_comment_marks(
+    sheet: str, visible_col_names: set[str], node_names: set[str]
+) -> dict[tuple[str, str], dict[str, int]]:
+    """``{(node, column): {open, resolved, unresolved}}`` — the per-cell comment
+    summary the grid renders a glyph off (Area 2).
+
+    Counts THREAD ROOTS only (a cell hosts one badge per thread, not per reply):
+    ``open``/``unresolved`` = roots with ``resolved=0``, ``resolved`` = roots with
+    ``resolved=1`` (a deleted-but-tombstoned root still counts — it is still a
+    thread). Built ONLY over the read-ACL-visible columns + present nodes, so a
+    comment on a forbidden column can never leak (same guarantee as
+    ``_pending_cell_marks`` and the values loop). ONE grouped query, never N+1.
+    """
+    marks: dict[tuple[str, str], dict[str, int]] = {}
+    if not visible_col_names or not node_names:
+        return marks
+    # Thread ROOTS only: a root has thread_root NULL/empty. frappe stores an unset
+    # Link as NULL; ["is", "not set"] matches it portably.
+    rows = frappe.get_all(
+        "Arbor Cell Comment",
+        filters={"sheet": sheet, "thread_root": ["is", "not set"]},
+        fields=["node", "column", "resolved"],
+    )
+    for r in rows:
+        if r.column not in visible_col_names or r.node not in node_names:
+            continue
+        key = (r.node, r.column)
+        summary = marks.setdefault(key, {"open": 0, "resolved": 0, "unresolved": 0})
+        if r.resolved:
+            summary["resolved"] += 1
+        else:
+            summary["open"] += 1
+            summary["unresolved"] += 1
     return marks
 
 
@@ -467,6 +602,14 @@ def _acl_hints(actor, repo, sheet, columns, nodes) -> dict[str, Any]:
         # Platform-admin hint: the ONLY gate for the admin Roles panel. Follows the
         # "gate on a server hint, never re-derive ACL" rule (Feature: roles).
         "is_admin": bool(getattr(actor, "is_admin", False)),
+        # Impersonation viewer block (Area 1): powers the persistent "acting as"
+        # banner + the "stop impersonating" control off snapshot hints, with NO ACL
+        # re-derivation. effective_user == actor.user (the identity the grid is
+        # rendered for); real_user is the authenticated admin when impersonating
+        # (else null); impersonating flips the banner.
+        "impersonating": bool(getattr(actor, "is_impersonated", False)),
+        "real_user": actor.real_user if getattr(actor, "is_impersonated", False) else None,
+        "effective_user": actor.user,
         "subscribed": bool(subscription),
         "subscription": subscription,
         "branch_grants": branch_grants,
@@ -601,6 +744,312 @@ def disable_process(sheet):
 @frappe.whitelist()
 def start_process_run(sheet, node):
     return _dispatch("startProcessRun", {"sheet": sheet, "node": node})
+
+
+# Process READ shims (NOT registry capabilities — like list_change_requests /
+# list_activity): the definition, the kanban/flow dashboard aggregate, and the
+# per-stage run drill-down. Read-ACL: a stage column the viewer cannot read
+# (arbor.core.acl.can_read_column) has its LABEL redacted (structural stage
+# position/counts are always safe); run rows never carry cell VALUES.
+@frappe.whitelist()
+def get_process(sheet):
+    """The sheet's Arbor Process definition (enabled or not), or ``None``.
+
+    ``GET /api/method/arbor.get_process?sheet=…`` →
+    ``{name, sheet, title, enabled, row_scope, start_trigger, sla_breach_notify,
+    stages:[{idx, column, label, sla_seconds, notify_on_enter, owners}]}`` where
+    ``owners`` are the LIVE resolved stage responsibles and ``label`` is redacted
+    (null) when the viewer cannot read that stage's column."""
+    actor = _actor()
+    repo = _repo()
+    process = repo.get_process(sheet)
+    if process is None:
+        return None
+    return _process_view_dict(repo, actor, process)
+
+
+def _process_view_dict(repo, actor, process):
+    stages = []
+    for st in sorted(process.stages, key=lambda s: s.idx):
+        label, readable = _readable_column_label(repo, process.sheet, actor, st.column)
+        stages.append(
+            {
+                "idx": st.idx,
+                "column": st.column if readable else None,
+                "label": label,
+                "sla_seconds": st.sla_seconds,
+                "notify_on_enter": st.notify_on_enter,
+                "owners": sorted(resolve_column_approvers(repo, process.sheet, st.column)),
+            }
+        )
+    return {
+        "name": process.name,
+        "sheet": process.sheet,
+        "title": process.title,
+        "enabled": bool(process.enabled),
+        "row_scope": process.row_scope,
+        "start_trigger": process.start_trigger,
+        "sla_breach_notify": bool(process.sla_breach_notify),
+        "stages": stages,
+    }
+
+
+@frappe.whitelist()
+def process_dashboard(sheet):
+    """The kanban/flow metrics for the sheet's process (Area 3).
+
+    ``GET /api/method/arbor.process_dashboard?sheet=…`` →
+    ``{stages:[{idx, column, label, pending_count, breached_count,
+    avg_enter_to_fill_seconds}], total_active, total_completed, throughput}`` —
+    the pure ``arbor.core.process.dashboard_aggregate`` over every run of the
+    sheet. Returns ``None`` when no process is defined. A stage column the viewer
+    cannot read has its LABEL redacted; the structural counts are always safe."""
+    from arbor.core import process as _process
+    actor = _actor()
+    repo = _repo()
+    process = repo.get_process(sheet)
+    if process is None:
+        return None
+    runs = repo.list_process_runs(sheet)
+    agg = _process.dashboard_aggregate(process, runs)
+    for st in agg.get("stages", []):
+        label, readable = _readable_column_label(repo, sheet, actor, st.get("column"))
+        st["label"] = label
+        if not readable:
+            st["column"] = None
+    return agg
+
+
+@frappe.whitelist()
+def list_process_runs(sheet, status=None):
+    """The sheet's process runs (optionally filtered by ``status``) — the kanban
+    column drill-down.
+
+    ``GET /api/method/arbor.list_process_runs?sheet=…&status=active`` →
+    ``[{name, node, node_label, status, current_stage_idx, started_at,
+    completed_at, stages:[{stage_idx, column, entered_at, filled_at, due_at,
+    breached}]}]``. Carries node/column LABELS (redacted when unreadable), NEVER
+    a cell VALUE."""
+    actor = _actor()
+    repo = _repo()
+    label_col = next((c.name for c in repo.list_columns(sheet) if c.is_label), None)
+    out = []
+    for run in repo.list_process_runs(sheet, status=status):
+        stages = []
+        for s in run.get("stages") or []:
+            label, readable = _readable_column_label(repo, sheet, actor, s.get("column"))
+            stages.append(
+                {
+                    "stage_idx": s.get("stage_idx"),
+                    "column": s.get("column") if readable else None,
+                    "column_label": label,
+                    "entered_at": s.get("entered_at"),
+                    "filled_at": s.get("filled_at"),
+                    "due_at": s.get("due_at"),
+                    "breached": bool(s.get("breached")),
+                }
+            )
+        out.append(
+            {
+                "name": run.get("name"),
+                "node": run.get("node"),
+                "node_label": _node_label(repo, sheet, label_col, run.get("node")),
+                "status": run.get("status"),
+                "current_stage_idx": run.get("current_stage_idx"),
+                "started_at": run.get("started_at"),
+                "completed_at": run.get("completed_at"),
+                "stages": stages,
+            }
+        )
+    return out
+
+
+@frappe.whitelist()
+def inbox():
+    """The viewer's in-app notifications ACROSS ALL sheets — the per-user Inbox
+    page (Area 3). Generalizes ``list_notifications`` (which is sheet-scoped) by
+    dropping the sheet filter and resolving each notification's context + a deep
+    link.
+
+    Self-scoped to ``_actor().user`` (like ``list_cell_drafts``); a user only ever
+    sees their OWN notifications, and ``acknowledge`` already enforces
+    ``recipient == actor``.
+
+    ``GET /api/method/arbor.inbox`` → ``[{name, source, event_type, message,
+    sheet, node, requires_ack, acked}]`` newest first. tree_event rows resolve
+    their {sheet, type, actor} from the Tree Event; comment rows from the linked
+    Arbor Cell Comment; process/sla rows resolve their actionable {sheet, node,
+    stage} from the viewer's LIVE-owned Process Run stages (the Notification schema
+    carries no process link, so context is derived from the runs the viewer is a
+    responsible owner of — exactly the work an inbox surfaces)."""
+    actor = _actor()
+    repo = _repo()
+    rows = frappe.get_all(
+        "Notification",
+        filters={"recipient": actor.user, "channel": "in-app"},
+        fields=["name", "source", "tree_event", "comment", "requires_ack", "creation"],
+        order_by="creation desc",
+    )
+    # Resolve the viewer's live process work ONCE (context for process/sla rows),
+    # newest run first so successive process notifications map to distinct runs.
+    process_ctx = _inbox_process_context(repo, actor)
+    proc_cursor = 0
+    out = []
+    for r in rows:
+        source = r.source or "tree_event"
+        if source in ("process", "sla"):
+            ctx = process_ctx[proc_cursor] if proc_cursor < len(process_ctx) else None
+            proc_cursor += 1
+            row = _inbox_process_row(r, source, ctx, actor)
+        elif source == "comment":
+            row = _inbox_comment_row(r, repo, actor)
+        else:
+            row = _inbox_tree_event_row(r, actor)
+        if row is not None:
+            out.append(row)
+    return out
+
+
+def _inbox_tree_event_row(r, actor):
+    ev = (
+        frappe.db.get_value(
+            "Tree Event", r.tree_event, ["sheet", "type", "actor", "payload"], as_dict=True
+        )
+        if r.tree_event
+        else None
+    )
+    if not ev:
+        return None
+    acked = bool(
+        frappe.db.exists("Acknowledgement", {"notification": r.name, "user": actor.user})
+    )
+    payload = ev.payload
+    if isinstance(payload, str):
+        payload = frappe.parse_json(payload) if payload else {}
+    return {
+        "name": r.name,
+        "source": "tree_event",
+        "event_type": ev.type,
+        "message": f"{ev.actor} {_NOTIF_VERB.get(ev.type, ev.type)}",
+        "sheet": ev.sheet,
+        "node": (payload or {}).get("node"),
+        "requires_ack": bool(r.requires_ack),
+        "acked": acked,
+    }
+
+
+def _inbox_comment_row(r, repo, actor):
+    if not r.comment:
+        return None
+    c = frappe.db.get_value(
+        "Arbor Cell Comment", r.comment, ["sheet", "node", "author"], as_dict=True
+    )
+    if not c:
+        return None
+    acked = bool(
+        frappe.db.exists("Acknowledgement", {"notification": r.name, "user": actor.user})
+    )
+    return {
+        "name": r.name,
+        "source": "comment",
+        "event_type": "COMMENT_ADDED",
+        "message": f"{c.author} commented on a cell",
+        "sheet": c.sheet,
+        "node": c.node,
+        "requires_ack": bool(r.requires_ack),
+        "acked": acked,
+    }
+
+
+def _inbox_process_row(r, source, ctx, actor):
+    acked = bool(
+        frappe.db.exists("Acknowledgement", {"notification": r.name, "user": actor.user})
+    )
+    if source == "sla":
+        event_type = "PROCESS_SLA_DUE"
+        verb = "a process stage is overdue"
+    else:
+        event_type = "PROCESS_STAGE_ASSIGNED"
+        verb = "a process stage is waiting on you"
+    return {
+        "name": r.name,
+        "source": source,
+        "event_type": event_type,
+        "message": verb,
+        "sheet": ctx.get("sheet") if ctx else None,
+        "node": ctx.get("node") if ctx else None,
+        "requires_ack": bool(r.requires_ack),
+        "acked": acked,
+    }
+
+
+def _inbox_process_context(repo, actor):
+    """The viewer's process work across all sheets: for every run (active OR
+    completed) that NOTIFIED the viewer as a stage owner, a ``{sheet, node,
+    stage_idx}`` deep-link context. Newest run first (mirrors the notification
+    ordering) so successive process notifications map to distinct runs.
+
+    Derived from the runs (not a Notification link) because the Notification
+    schema carries no process reference. A recipient is matched via the run
+    stage's ``notified_owner`` ledger (who was notified at enter time) UNION the
+    LIVE ``resolve_column_approvers`` of the run's current stage — so both a live
+    stage assignment and an already-completed run whose stage notified the viewer
+    resolve to a deep link."""
+    ctx = []
+    run_names = frappe.get_all(
+        "Arbor Process Run",
+        fields=["name"],
+        order_by="creation desc",
+    )
+    for rn in run_names:
+        run = frappe.get_doc("Arbor Process Run", rn["name"])
+        cur = run.current_stage_idx
+        matched_stage_idx = None
+        for s in run.get("run_stages") or []:
+            notified = (s.get("notified_owner") or "").split(",") if s.get("notified_owner") else []
+            live_owner = (
+                s.stage_idx == cur
+                and run.status == "active"
+                and actor.user in resolve_column_approvers(repo, run.sheet, s.column)
+            )
+            if actor.user in notified or live_owner:
+                matched_stage_idx = s.stage_idx
+                break
+        if matched_stage_idx is not None:
+            ctx.append(
+                {"sheet": run.sheet, "node": run.node, "stage_idx": matched_stage_idx}
+            )
+    return ctx
+
+
+# Impersonation ("act as") — traceable, admin-gated overlay (Area 1). Thin shims
+# funnel through the SAME _dispatch → executor as every capability, so the admin
+# gate (_ADMIN_IMPERSONATION_CAPS), the AuthorizationError→403 mapping, and
+# surface parity all hold. begin/end emit NO Tree Event — the Arbor Impersonation
+# Session row IS the audit record. Authority is the REAL user's admin: _actor()
+# computes it BEFORE applying any overlay, so an impersonated non-admin can never
+# begin/end.
+@frappe.whitelist()
+def begin_impersonation(impersonated_user, reason=None):
+    """Start acting as ``impersonated_user`` (admin only → 403 otherwise).
+
+    ``POST /api/method/arbor.begin_impersonation {impersonated_user, reason?}`` →
+    ``{kind:'executed', data:{impersonating:<user>, session:<id>}}``.
+    """
+    return _dispatch(
+        "beginImpersonation",
+        {"impersonated_user": impersonated_user, "reason": reason},
+        actor=_actor_real(),
+    )
+
+
+@frappe.whitelist()
+def end_impersonation():
+    """Stop the active "act as" overlay for the real (authenticated) user.
+
+    ``POST /api/method/arbor.end_impersonation`` →
+    ``{kind:'executed', data:{impersonating:null}}``. Idempotent."""
+    return _dispatch("endImpersonation", {}, actor=_actor_real())
 
 
 @frappe.whitelist()
@@ -822,33 +1271,73 @@ def list_notifications(sheet):
     rows = frappe.get_all(
         "Notification",
         filters={"recipient": actor.user, "channel": "in-app"},
-        fields=["name", "tree_event", "requires_ack"],
+        fields=["name", "source", "tree_event", "comment", "requires_ack"],
         order_by="creation desc",
     )
     out = []
     for r in rows:
-        ev = (
-            frappe.db.get_value(
-                "Tree Event", r.tree_event, ["sheet", "type", "actor"], as_dict=True
-            )
-            if r.tree_event
-            else None
-        )
-        if not ev or ev.sheet != sheet:
-            continue
-        acked = bool(
-            frappe.db.exists("Acknowledgement", {"notification": r.name, "user": actor.user})
-        )
-        out.append(
-            {
-                "name": r.name,
-                "event_type": ev.type,
-                "message": f"{ev.actor} {_NOTIF_VERB.get(ev.type, ev.type)}",
-                "requires_ack": bool(r.requires_ack),
-                "acked": acked,
-            }
-        )
+        # Branch on ``source`` to resolve the owning sheet. Comment notifications
+        # carry ``tree_event=NULL`` (a comment is not a Tree Event), so they must
+        # resolve their sheet from the linked Arbor Cell Comment instead of the
+        # tree_event join — a miss here would silently hide the comment inbox.
+        source = r.source or "tree_event"
+        if source == "comment":
+            row = _comment_notification_row(r, sheet, actor)
+        else:
+            row = _tree_event_notification_row(r, sheet)
+        if row is not None:
+            out.append(row)
     return out
+
+
+def _tree_event_notification_row(r, sheet):
+    """Render a ``source='tree_event'`` Notification for ``sheet``, or None when it
+    belongs to another sheet / has no resolvable event."""
+    ev = (
+        frappe.db.get_value(
+            "Tree Event", r.tree_event, ["sheet", "type", "actor"], as_dict=True
+        )
+        if r.tree_event
+        else None
+    )
+    if not ev or ev.sheet != sheet:
+        return None
+    acked = bool(
+        frappe.db.exists("Acknowledgement", {"notification": r.name, "user": frappe.session.user})
+    )
+    return {
+        "name": r.name,
+        "event_type": ev.type,
+        "message": f"{ev.actor} {_NOTIF_VERB.get(ev.type, ev.type)}",
+        "requires_ack": bool(r.requires_ack),
+        "acked": acked,
+    }
+
+
+def _comment_notification_row(r, sheet, actor):
+    """Render a ``source='comment'`` Notification for ``sheet`` (Area 2), or None
+    when the comment is gone / belongs to another sheet.
+
+    The event_type is a DISPLAY-ONLY string ``COMMENT_ADDED`` — NOT an EventType —
+    so the existing NotificationItem renders it in the ONE inbox without touching
+    the closed 11-type set."""
+    if not r.comment:
+        return None
+    c = frappe.db.get_value(
+        "Arbor Cell Comment", r.comment, ["sheet", "author"], as_dict=True
+    )
+    if not c or c.sheet != sheet:
+        return None
+    acked = bool(
+        frappe.db.exists("Acknowledgement", {"notification": r.name, "user": actor.user})
+    )
+    return {
+        "name": r.name,
+        "event_type": "COMMENT_ADDED",
+        "message": f"{c.author} commented on a cell",
+        "requires_ack": bool(r.requires_ack),
+        "acked": acked,
+    }
 
 
 # Friendly PAST-TENSE verbs for the activity feed, keyed by EventType (the
@@ -1400,3 +1889,261 @@ def submit_cell_drafts(sheet):
         frappe.delete_doc("Arbor Cell Draft", r.name, ignore_permissions=True)
 
     return _outcome_dict(outcome)
+
+
+# ---------------------------------------------------------------------------
+# Per-cell COMMENTS (Feature: comments drawer, Area 2). Threaded, cell-keyed
+# collaboration metadata — NOT registry capabilities and NOT Tree Events (the
+# closed 11-EventType set is untouched). Governance reuses the ONE ACL resolver:
+#   read/post  -> can_read_column         (you may discuss any cell you can read)
+#   resolve    -> resolve_column_approvers (column owner + editors settle threads)
+#   delete     -> author OR column approver (self-moderation + owner moderation)
+# On add we fan out a Notification (source='comment', tree_event=NULL) directly to
+# the column owner/editors + any @mentioned users who can STILL read the column,
+# minus the author. These shims re-enforce authority server-side on every call;
+# the FE ``can_resolve``/``can_delete`` hints are display-only.
+# ---------------------------------------------------------------------------
+_MENTION_RE = re.compile(r"(?<![\w.])@([A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9._-]+)")
+
+
+def _extract_mentions(body: str) -> list[str]:
+    """Parse ``@token`` mentions from a comment body into candidate User ids,
+    de-duplicated and order-preserving. Pure string work — the read-ACL filter +
+    User-existence check happen in the caller. Matches either an ``@email`` or a
+    bare ``@handle``; a token mid-word (``a@b``) is NOT a mention."""
+    if not body:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _MENTION_RE.finditer(body):
+        tok = m.group(1)
+        if tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def _comment_col(comment_doc) -> Any:
+    """Load the Tree Column view for a comment's cell (raises if the column is
+    gone — a 404-shaped condition the shim maps)."""
+    repo = _repo()
+    return repo.get_column(comment_doc.sheet, comment_doc.column)
+
+
+def _require_readable_cell(repo, sheet, node, column, actor):
+    """Assert the cell (sheet,node,column) exists and ``actor`` may READ its column;
+    raise the Frappe error the REST layer maps to 404 / 403. Returns the ColumnView."""
+    if not frappe.db.exists("Tree Sheet", sheet):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such sheet {0}").format(sheet), exc=frappe.DoesNotExistError)
+    if not frappe.db.exists("Tree Node", node) or frappe.db.get_value("Tree Node", node, "sheet") != sheet:
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such node {0}").format(node), exc=frappe.DoesNotExistError)
+    try:
+        col = repo.get_column(sheet, column)
+    except Exception:
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such column {0}").format(column), exc=frappe.DoesNotExistError)
+    if not can_read_column(repo, sheet, col, actor):
+        # A cell the viewer cannot read → 403 (never leak its existence/content).
+        raise frappe.PermissionError(_("You do not have access to this column"))
+    return col
+
+
+def _can_resolve_comment(repo, sheet, column, actor) -> bool:
+    """Resolve/reopen authority — the column approvers (owner + editors), plus an
+    explicit admin honor (admins may moderate)."""
+    if getattr(actor, "is_admin", False):
+        return True
+    return actor.user in resolve_column_approvers(repo, sheet, column)
+
+
+@frappe.whitelist()
+def add_cell_comment(sheet, node, column, body, parent_comment=None):
+    """Post a comment on the cell ``(sheet, node, column)`` (or a reply when
+    ``parent_comment`` is given).
+
+    AUTHZ: ``can_read_column`` — you may discuss any cell you can read (else 403).
+    400 on an empty body; 404 on an unknown sheet/node/column/parent. Derives
+    ``thread_root`` (the parent's root, or self on a new root — via the controller).
+    Parses @mentions, drops any who cannot read the column, then fans out a
+    Notification (source='comment', tree_event=NULL) to the column owner/editors +
+    surviving mentions, minus the author. Returns ``{name, thread_root, mentions}``.
+    """
+    actor = _actor()
+    repo = _repo()
+    _require_readable_cell(repo, sheet, node, column, actor)
+
+    body = (body or "").strip() if isinstance(body, str) else ""
+    if not body:
+        frappe.local.response["http_status_code"] = 400
+        frappe.throw(_("Comment body must not be empty"), exc=frappe.ValidationError)
+
+    if parent_comment and not frappe.db.exists("Arbor Cell Comment", parent_comment):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such comment {0}").format(parent_comment), exc=frappe.DoesNotExistError)
+
+    # @mentions: resolve to existing Users who can STILL read the column (a mention
+    # of a non-reader is silently dropped — never signal an owner-only cell to
+    # someone who can't read it).
+    col = repo.get_column(sheet, column)
+    mentions: list[str] = []
+    for tok in _extract_mentions(body):
+        if not frappe.db.exists("User", tok):
+            continue
+        mentioned_actor = Actor(user=tok, actor_type=ActorType.HUMAN, is_admin=_is_admin_user(tok))
+        if can_read_column(repo, sheet, col, mentioned_actor):
+            mentions.append(tok)
+
+    doc = frappe.new_doc("Arbor Cell Comment")
+    doc.sheet = sheet
+    doc.node = node
+    doc.column = column
+    doc.parent_comment = parent_comment or None
+    doc.author = actor.user
+    doc.body = body
+    doc.mentions = frappe.as_json(mentions)
+    doc.insert(ignore_permissions=True)  # controller derives thread_root
+
+    # Fan out FYI notifications directly (a comment is NOT a Tree Event, so it does
+    # NOT go through the Tree-Event→subscription dispatcher). Recipients = column
+    # owner + editors + surviving mentions, minus the author. Each is read-gated by
+    # construction (approvers can read; mentions were filtered above).
+    recipients = set(resolve_column_approvers(repo, sheet, column)) | set(mentions)
+    recipients.discard(actor.user)
+    for recipient in sorted(recipients):
+        # Idempotent per (comment, recipient) — the same comment never double-notifies.
+        if frappe.db.exists(
+            "Notification",
+            {"comment": doc.name, "recipient": recipient, "channel": "in-app"},
+        ):
+            continue
+        n = frappe.new_doc("Notification")
+        n.source = "comment"
+        n.comment = doc.name
+        n.tree_event = None
+        n.recipient = recipient
+        n.channel = "in-app"
+        n.requires_ack = 0
+        n.insert(ignore_permissions=True)
+
+    return {"name": doc.name, "thread_root": doc.thread_root, "mentions": mentions}
+
+
+@frappe.whitelist()
+def list_cell_comments(sheet, node, column):
+    """The comment thread(s) for a cell, oldest-first (grouped by ``thread_root``
+    client-side). AUTHZ: ``can_read_column`` else 403.
+
+    Each row carries author/body/mentions/resolved state + the display-only
+    ``can_resolve`` (actor is a column approver) and ``can_delete`` (actor is the
+    author OR a column approver) hints. The server re-enforces both on
+    resolve/delete — the hints never gate on their own."""
+    actor = _actor()
+    repo = _repo()
+    _require_readable_cell(repo, sheet, node, column, actor)
+
+    can_resolve = _can_resolve_comment(repo, sheet, column, actor)
+    rows = frappe.get_all(
+        "Arbor Cell Comment",
+        filters={"sheet": sheet, "node": node, "column": column},
+        fields=[
+            "name", "thread_root", "parent_comment", "author", "body", "mentions",
+            "resolved", "resolved_by", "resolved_at", "creation",
+        ],
+        order_by="creation asc",
+    )
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "name": r.name,
+                "thread_root": r.thread_root,
+                "parent_comment": r.parent_comment,
+                "author": r.author,
+                "body": r.body,
+                "mentions": _coerce(r.mentions) or [],
+                "resolved": bool(r.resolved),
+                "resolved_by": r.resolved_by,
+                "resolved_at": str(r.resolved_at) if r.resolved_at else None,
+                "timestamp": str(r.creation),
+                "can_resolve": can_resolve,
+                "can_delete": (actor.user == r.author) or can_resolve,
+            }
+        )
+    return out
+
+
+@frappe.whitelist()
+def resolve_cell_comment(comment, resolved=True):
+    """Mark a thread resolved (or reopen with ``resolved=False``) on its ROOT.
+
+    AUTHZ: ``resolve_column_approvers`` (column owner + editors) else 403.
+    Idempotent (re-resolving / re-opening is a no-op success). Resolving a REPLY
+    resolves its whole thread (the root carries the resolved flag)."""
+    actor = _actor()
+    repo = _repo()
+    if not frappe.db.exists("Arbor Cell Comment", comment):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such comment {0}").format(comment), exc=frappe.DoesNotExistError)
+
+    doc = frappe.get_doc("Arbor Cell Comment", comment)
+    if not _can_resolve_comment(repo, doc.sheet, doc.column, actor):
+        raise frappe.PermissionError(_("Only the column owner or editors may resolve a thread"))
+
+    root_name = doc.thread_root or doc.name
+    root = frappe.get_doc("Arbor Cell Comment", root_name)
+    want = (
+        frappe.utils.cint(resolved) == 1
+        if isinstance(resolved, (str, int)) else bool(resolved)
+    )
+    if want:
+        root.resolved = 1
+        root.resolved_by = actor.user
+        root.resolved_at = frappe.utils.now()
+    else:
+        root.resolved = 0
+        root.resolved_by = None
+        root.resolved_at = None
+    root.save(ignore_permissions=True)
+    return {"name": root.name, "resolved": bool(root.resolved)}
+
+
+@frappe.whitelist()
+def delete_cell_comment(comment):
+    """Delete a comment. AUTHZ: author OR column approver (else 403).
+
+    Soft-safe threading: deleting a thread ROOT that still has replies TOMBSTONES
+    it (blank body → ``[deleted]``, author cleared) rather than orphaning the
+    replies; a leaf (a reply, or a childless root) is hard-deleted."""
+    actor = _actor()
+    repo = _repo()
+    if not frappe.db.exists("Arbor Cell Comment", comment):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such comment {0}").format(comment), exc=frappe.DoesNotExistError)
+
+    doc = frappe.get_doc("Arbor Cell Comment", comment)
+    is_author = actor.user == doc.author
+    if not (is_author or _can_resolve_comment(repo, doc.sheet, doc.column, actor)):
+        raise frappe.PermissionError(_("Only the author or a column owner/editor may delete"))
+
+    is_root = not doc.thread_root
+    has_replies = bool(
+        frappe.db.exists("Arbor Cell Comment", {"thread_root": doc.name})
+    )
+    if is_root and has_replies:
+        # Tombstone: keep the row so replies stay threaded, but strip the content.
+        doc.body = "[deleted]"
+        doc.author = actor.user  # keep a valid (reqd) author link; body signals deletion
+        doc.mentions = frappe.as_json([])
+        doc.flags.arbor_tombstone = True
+        doc.save(ignore_permissions=True)
+        return {"ok": True, "tombstoned": True}
+    # Hard-delete a leaf: first drop the FYI Notification rows that link to this
+    # comment (source='comment'), else Frappe's link-integrity guard blocks the
+    # delete. These are transient inbox rows, not audit — removing them with the
+    # comment is correct (the discussion they pointed at is gone).
+    for n in frappe.get_all("Notification", filters={"comment": doc.name}, pluck="name"):
+        frappe.delete_doc("Notification", n, ignore_permissions=True, force=True)
+    frappe.delete_doc("Arbor Cell Comment", doc.name, ignore_permissions=True)
+    return {"ok": True, "tombstoned": False}

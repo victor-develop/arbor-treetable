@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
+from arbor.core import process as process_machine
 from arbor.core.backoff import is_exhausted
 
 from .matcher import selector_matches  # re-exported for integration tests
@@ -281,6 +282,116 @@ class RequestsTransport:
 
 
 # ---------------------------------------------------------------------------
+# Process lane (Area 3) — a THIRD pure consumer of the SAME Tree Event stream.
+#
+# ``NODE_CREATED`` in a process's scope STARTS a run at stage 0 + notifies the
+# stage-0 column owner; a ``NODE_VALUE_UPDATED`` on the CURRENT stage column
+# ADVANCES the run + notifies the next owner; the terminal fill completes the run
+# (no notify). Advancement emits NO Tree Event, so feeding this off the SAME
+# after_insert hook cannot recurse. Idempotency is the pure machine's job
+# (current_stage_idx + filled_at + notified_owner guards).
+# ---------------------------------------------------------------------------
+class FrappeProcessClock:
+    """Wall clock for the process lane, as an ISO-8601 string (lexically ordered,
+    so the pure ``_past_due`` string comparison + the Datetime column agree)."""
+
+    def now(self) -> str:
+        return str(now_datetime())
+
+
+class FrappeProcessNotifier:
+    """Persist ONE ``source in {'process','sla'}`` in-app Notification per
+    recipient (reusing the SAME Notification DocType as the tree-event + comment
+    inboxes). FYI only: ``requires_ack=0`` so process rows never pollute the
+    accountability aggregate. Idempotency is upstream (the pure ``notified_owner``
+    guard fires the notify at most once per stage-enter), so no de-dupe here beyond
+    the store's own uniqueness."""
+
+    def __call__(self, recipients: list[str], data: dict[str, Any]) -> None:
+        source = data.get("source", "process")
+        for r in recipients:
+            frappe.get_doc(
+                {
+                    "doctype": "Notification",
+                    "source": source,
+                    "tree_event": None,
+                    "recipient": r,
+                    "channel": "in-app",
+                    "requires_ack": 0,
+                    "delivered_at": now_datetime(),
+                }
+            ).insert(ignore_permissions=True)
+
+
+def _process_repo():
+    """A Frappe ``Repository`` for the process lane (the pure machine operates over
+    the SAME data seam the executor/handlers use)."""
+    try:  # ``arbor.adapter`` on a bench; ``arbor.arbor.adapter`` in the dev repo.
+        from arbor.adapter.repository import FrappeRepository
+    except ModuleNotFoundError:  # pragma: no cover - dev-layout fallback
+        from arbor.arbor.adapter.repository import FrappeRepository  # type: ignore
+    return FrappeRepository()
+
+
+class ProcessDispatcher:
+    """Thin Frappe binding around the pure ``arbor.core.process`` machine.
+
+    Injectable (repo/notify/clock) so tests drive it against the in-memory doubles
+    with a freezable clock; the default wires the Frappe repo + Notification
+    persister + wall clock. Holds NO logic of its own — start/advance/complete +
+    SLA breach all live in the pure module."""
+
+    def __init__(self, repo=None, notify=None, clock=None) -> None:
+        self.repo = repo or _process_repo()
+        self.notify = notify or FrappeProcessNotifier()
+        self.clock = clock or FrappeProcessClock()
+
+    def on_tree_event(self, event: Any) -> list[dict[str, Any]]:
+        """Drive the process consumer for ONE Tree Event. Resolves the sheet's
+        process (inert if none / disabled) and reacts to NODE_CREATED /
+        NODE_VALUE_UPDATED only; all other types are no-ops."""
+        etype = event.type
+        if etype not in ("NODE_CREATED", "NODE_VALUE_UPDATED"):
+            return []
+        process = self.repo.get_process(event.sheet)
+        if process is None or not process.enabled:
+            return []
+        payload = event.payload or {}
+        ev = {
+            "type": etype,
+            "node": payload.get("node"),
+            "column": payload.get("column"),
+            "tree_event": event.name,
+        }
+        return process_machine.on_event(
+            self.repo, process, ev, now=self.clock.now(), notify=self.notify
+        )
+
+    def sla_sweep(self) -> list[dict[str, Any]]:
+        """Mark the current stage of every over-due active run breached + notify
+        the stage owner once (when the owning process has ``sla_breach_notify``)."""
+        return process_machine.sla_sweep(
+            self.repo,
+            self.clock.now(),
+            process_of=self._process_of,
+            notify=self.notify,
+        )
+
+    def _process_of(self, process_name: str):
+        """Resolve a run's ``process`` link back to its ``ProcessView`` definition
+        (for the sweep's ``sla_breach_notify`` gate). Uses the adapter's
+        ``get_process_by_name`` when present, else falls back to scanning the
+        repo's process store (the in-memory double keyed by name)."""
+        by_name = getattr(self.repo, "get_process_by_name", None)
+        if by_name is not None:
+            return by_name(process_name)
+        store = getattr(self.repo, "processes", None)  # in-memory double
+        if store is not None:
+            return store.get(process_name)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Factories + doc_event / scheduler entrypoints (the integrator wires these).
 # ---------------------------------------------------------------------------
 def _notification_dispatcher() -> NotificationDispatcher:
@@ -293,20 +404,31 @@ def _webhook_dispatcher() -> WebhookDispatcher:
     )
 
 
+def _process_dispatcher() -> ProcessDispatcher:
+    return ProcessDispatcher()
+
+
 def on_tree_event_insert(doc: Any, method: Optional[str] = None) -> None:
     """``doc_events["Tree Event"]["after_insert"]`` entrypoint.
 
-    ONE hook feeds BOTH dispatchers off the SAME new Tree Event row (DRY,
-    ARCHITECTURE §6/§7). Order: notifications then webhooks; neither emits a Tree
-    Event, so no recursion."""
+    ONE hook feeds THREE pure consumers off the SAME new Tree Event row (DRY,
+    ARCHITECTURE §6/§7): notifications, webhooks, then the process consumer. None
+    emit a Tree Event, so there is no recursion."""
     event = _EventDoc(doc)
     _notification_dispatcher().on_tree_event(event)
     _webhook_dispatcher().on_tree_event(event)
+    _process_dispatcher().on_tree_event(event)
 
 
 def run_webhook_retries() -> None:
     """``scheduler_events`` entrypoint — drive the backoff retry runner."""
     _webhook_dispatcher().run_retries()
+
+
+def run_process_sla_sweep() -> None:
+    """``scheduler_events`` entrypoint — mark SLA breaches on over-due active runs
+    (+ notify the stage owner once when the process opts in)."""
+    _process_dispatcher().sla_sweep()
 
 
 def accountability(
@@ -322,11 +444,15 @@ def accountability(
 __all__ = [
     "on_tree_event_insert",
     "run_webhook_retries",
+    "run_process_sla_sweep",
     "accountability",
     "FrappeNotificationStore",
     "FrappeWebhookStore",
     "FrappeClock",
     "RequestsTransport",
+    "ProcessDispatcher",
+    "FrappeProcessClock",
+    "FrappeProcessNotifier",
     "Accountability",
     "is_exhausted",
     "serialize_event_dict",

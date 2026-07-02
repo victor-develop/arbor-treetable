@@ -18,10 +18,12 @@ from frappe.model.document import Document
 
 class ArborProcessRun(Document):
 	def validate(self) -> None:
+		# The run's process link FIELD is ``arbor_process`` (NOT ``process``); the
+		# uniqueness guard the schema cannot express is (arbor_process, node).
 		dupes = frappe.get_all(
 			"Arbor Process Run",
 			filters={
-				"process": self.process,
+				"arbor_process": self.arbor_process,
 				"node": self.node,
 				"name": ["!=", self.name or ""],
 			},
@@ -29,6 +31,6 @@ class ArborProcessRun(Document):
 		)
 		if dupes:
 			frappe.throw(
-				f"A process run already exists for process {self.process!r} "
-				f"and node {self.node!r} ({dupes[0]}); (process, node) is unique."
+				f"A process run already exists for process {self.arbor_process!r} "
+				f"and node {self.node!r} ({dupes[0]}); (arbor_process, node) is unique."
 			)
