@@ -107,8 +107,17 @@ describe("Cell editing → onCommit routing", () => {
 });
 
 describe("Cell — comment glyph", () => {
-  it("no glyph when the cell has no comment summary", () => {
+  it("shows an (empty) add-comment glyph when wired even with no summary", () => {
+    // A cell with zero comments still exposes the glyph so the viewer can START
+    // the first thread (hover-revealed via CSS; icon-only, no count).
     render(<Cell column={notes(true)} value="v1" onCommit={() => {}} onOpenComments={() => {}} />);
+    const glyph = screen.getByTestId("comment-glyph");
+    expect(glyph).toHaveAttribute("data-empty", "true");
+    expect(glyph).not.toHaveAttribute("data-count");
+  });
+
+  it("no glyph when onOpenComments is not wired (client without comments)", () => {
+    render(<Cell column={notes(true)} value="v1" onCommit={() => {}} />);
     expect(screen.queryByTestId("comment-glyph")).toBeNull();
   });
 

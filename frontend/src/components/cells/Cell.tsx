@@ -67,10 +67,12 @@ export function Cell({
 }): JSX.Element {
   const canEdit = column.can_edit;
   const interactive = isCellInteractive(column);
-  // The comment affordance: shown only OUTSIDE preview (inert in Proposed), only
-  // when the host wired onOpenComments AND the cell carries a comment summary.
+  // The comment affordance: shown OUTSIDE preview (inert in Proposed) whenever the
+  // host wired onOpenComments — even on a cell with ZERO comments, so a viewer can
+  // START the first thread (it's hover-revealed to stay calm; a count/dot appears
+  // once the cell has comments).
   const glyph =
-    !preview && onOpenComments && comments ? (
+    !preview && onOpenComments ? (
       <CommentGlyph summary={comments} onOpen={onOpenComments} />
     ) : null;
 
@@ -164,17 +166,19 @@ function CommentGlyph({
   summary,
   onOpen,
 }: {
-  summary: CellCommentSummary;
+  summary?: CellCommentSummary;
   onOpen: () => void;
 }): JSX.Element {
-  const { open, resolved, unread } = summary;
+  const { open, resolved, unread } = summary ?? { open: 0, resolved: 0, unread: 0 };
   const total = open + resolved;
   const title =
     unread > 0
       ? `${unread} unread comment${unread === 1 ? "" : "s"}`
       : open > 0
         ? `${open} open comment${open === 1 ? "" : "s"}`
-        : "Comments";
+        : total > 0
+          ? "Comments"
+          : "Add a comment";
   return (
     <button
       type="button"
@@ -182,6 +186,7 @@ function CommentGlyph({
       data-testid="comment-glyph"
       data-unread={unread > 0 ? "true" : undefined}
       data-count={open > 0 ? open : undefined}
+      data-empty={total === 0 ? "true" : undefined}
       aria-label={title}
       title={title}
       onClick={(e) => {
