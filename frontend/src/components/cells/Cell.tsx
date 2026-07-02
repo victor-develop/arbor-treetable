@@ -5,7 +5,8 @@
 // (WEB_UI-011..024, -026..035).
 
 import { useEffect, useRef, useState } from "react";
-import type { SnapshotColumn } from "../../api";
+import type { CellCommentSummary, SnapshotColumn } from "../../api";
+import { MessageIcon } from "../icons";
 import {
   isCellInteractive,
   isValidForType,
@@ -25,6 +26,8 @@ export function Cell({
   preview,
   proposed,
   startEditing,
+  comments,
+  onOpenComments,
   onCommit,
 }: {
   column: SnapshotColumn;
@@ -53,11 +56,23 @@ export function Cell({
   // mode and focuses — this is how the row's edit-pencil opens the label cell's
   // inline editor without the row reaching into the cell's internals.
   startEditing?: number;
+  // Per-cell comment rollup from the snapshot (open/resolved/unread counts).
+  // Sparse: only present when the cell has >=1 comment. Drives the comment glyph.
+  comments?: CellCommentSummary;
+  // Open this cell's comment thread (drawer). When supplied AND the cell has a
+  // comment summary (or the viewer may start a thread), a small glyph shows.
+  onOpenComments?: () => void;
   // Called only when the committed value differs from `value` (no-op guard).
   onCommit: (next: unknown) => void;
 }): JSX.Element {
   const canEdit = column.can_edit;
   const interactive = isCellInteractive(column);
+  // The comment affordance: shown only OUTSIDE preview (inert in Proposed), only
+  // when the host wired onOpenComments AND the cell carries a comment summary.
+  const glyph =
+    !preview && onOpenComments && comments ? (
+      <CommentGlyph summary={comments} onOpen={onOpenComments} />
+    ) : null;
 
   const commitIfChanged = (next: unknown) => {
     const normalized = normalizeValue(column.type, next);
@@ -121,6 +136,7 @@ export function Cell({
           onCommit={(arr) => commitIfChanged(arr)}
         />
         {draft && <DraftMarker />}
+        {glyph}
       </div>
     );
   }
@@ -135,8 +151,48 @@ export function Cell({
       pendingCount={pendingCount}
       isDraft={draft}
       startEditing={startEditing}
+      commentGlyph={glyph}
       onCommit={commitIfChanged}
     />
+  );
+}
+
+// The per-cell comment glyph: a small message icon with an open-count badge and
+// an unread dot. Clicking opens the drawer WITHOUT entering the cell editor
+// (stopPropagation), so it never fights the edit/draft/pending affordances.
+function CommentGlyph({
+  summary,
+  onOpen,
+}: {
+  summary: CellCommentSummary;
+  onOpen: () => void;
+}): JSX.Element {
+  const { open, resolved, unread } = summary;
+  const total = open + resolved;
+  const title =
+    unread > 0
+      ? `${unread} unread comment${unread === 1 ? "" : "s"}`
+      : open > 0
+        ? `${open} open comment${open === 1 ? "" : "s"}`
+        : "Comments";
+  return (
+    <button
+      type="button"
+      className="arbor-comment-glyph"
+      data-testid="comment-glyph"
+      data-unread={unread > 0 ? "true" : undefined}
+      data-count={open > 0 ? open : undefined}
+      aria-label={title}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      <MessageIcon size={13} />
+      {open > 0 && <span className="arbor-comment-glyph-count">{open}</span>}
+      {open === 0 && total > 0 && <span className="arbor-comment-glyph-dot" aria-hidden />}
+    </button>
   );
 }
 
@@ -184,6 +240,7 @@ function TextLikeCell({
   pendingCount,
   isDraft,
   startEditing,
+  commentGlyph,
   onCommit,
 }: {
   column: SnapshotColumn;
@@ -194,6 +251,9 @@ function TextLikeCell({
   pendingCount?: number;
   isDraft?: boolean;
   startEditing?: number;
+  // The (already gated) comment glyph node — rendered in the non-editing view
+  // beside the pending/draft markers. Undefined when there are no comments.
+  commentGlyph?: JSX.Element | null;
   onCommit: (next: unknown) => void;
 }): JSX.Element {
   const [editing, setEditing] = useState(false);
@@ -286,6 +346,7 @@ function TextLikeCell({
             {pendingCount && pendingCount > 1 ? pendingCount : "•"}
           </span>
         )}
+        {commentGlyph}
       </div>
     );
   }

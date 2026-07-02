@@ -5,7 +5,7 @@
 // suppressed before any round-trip (WEB_UI-044/-045).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { SnapshotColumn, SnapshotNode } from "../api";
+import type { CellCommentSummary, SnapshotColumn, SnapshotNode } from "../api";
 import { buildVisibleRows, computeMove, type DropPosition } from "../lib/tree";
 import { TreeRow } from "./TreeRow";
 import { GearIcon, PlusIcon } from "./icons";
@@ -44,6 +44,12 @@ export type TreeTableProps = {
   // cell's "unsaved draft" treatment (distinct from the pending dot). Optional so
   // seeded/standalone renders need not supply it.
   draftCell?: (node: string, column: string) => boolean;
+  // Per-cell comment summary (open/resolved/unread) keyed by (node, column),
+  // sparse: undefined when the cell has no comments. Drives the cell glyph.
+  commentSummary?: (node: string, column: string) => CellCommentSummary | undefined;
+  // Open the comment drawer for a cell. Threaded to the Cell glyph; omitted =>
+  // no glyph (e.g. a client without comment endpoints).
+  onOpenComments?: (node: string, column: string) => void;
   isPendingMove: (node: string) => boolean;
   onCommitCell: (node: SnapshotNode, column: SnapshotColumn, value: unknown) => void;
   onMove: (params: { node: string; new_parent: string | null; after: string | null }) => void;
@@ -90,6 +96,8 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     pendingTitle,
     pendingCount,
     draftCell,
+    commentSummary,
+    onOpenComments,
     isPendingMove,
     onCommitCell,
     onMove,
@@ -267,6 +275,8 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             pendingTitle={pendingTitle}
             pendingCount={pendingCount}
             draftCell={draftCell}
+            commentSummary={commentSummary}
+            onOpenComments={onOpenComments}
             pendingMove={isPendingMove(row.node.name)}
             onToggle={onToggle}
             onCommitCell={onCommitCell}

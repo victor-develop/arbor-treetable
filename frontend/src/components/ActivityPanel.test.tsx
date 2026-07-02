@@ -209,6 +209,49 @@ describe("ActivityPanel — filters refetch (reset, page 1)", () => {
   });
 });
 
+describe("ActivityPanel — impersonation 'via' affix", () => {
+  it("renders 'via <real_user>' when real_user is present and distinct from the actor", async () => {
+    const listActivity = vi.fn().mockResolvedValue(
+      page([
+        ev({
+          event_id: "E-imp",
+          actor: "owner@example.com",
+          real_user: "admin@example.com",
+          summary: "owner updated the Stage",
+        }),
+      ]),
+    );
+    const { client } = makeClient(listActivity);
+    render(<ActivityPanel client={client} sheet="S" />);
+
+    const row = await screen.findByTestId("activity-row-E-imp");
+    const via = within(row).getByTestId("activity-via");
+    expect(via).toHaveTextContent("via admin@example.com");
+  });
+
+  it("renders NO affix for a normal (non-impersonated) event", async () => {
+    const listActivity = vi.fn().mockResolvedValue(
+      page([ev({ event_id: "E-plain", actor: "alice", real_user: null })]),
+    );
+    const { client } = makeClient(listActivity);
+    render(<ActivityPanel client={client} sheet="S" />);
+
+    const row = await screen.findByTestId("activity-row-E-plain");
+    expect(within(row).queryByTestId("activity-via")).toBeNull();
+  });
+
+  it("renders NO affix when real_user equals the actor (self-attributed)", async () => {
+    const listActivity = vi.fn().mockResolvedValue(
+      page([ev({ event_id: "E-self", actor: "alice", real_user: "alice" })]),
+    );
+    const { client } = makeClient(listActivity);
+    render(<ActivityPanel client={client} sheet="S" />);
+
+    const row = await screen.findByTestId("activity-row-E-self");
+    expect(within(row).queryByTestId("activity-via")).toBeNull();
+  });
+});
+
 describe("ActivityPanel — onCount reporting", () => {
   it("reports loaded count + hasMore to the host", async () => {
     const onCount = vi.fn();

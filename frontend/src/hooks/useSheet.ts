@@ -8,7 +8,14 @@
 // client-side prediction (WEB_UI-020, -086).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ArborClient, Outcome, Snapshot, SnapshotColumn, SnapshotNode } from "../api";
+import type {
+  ArborClient,
+  CellCommentSummary,
+  Outcome,
+  Snapshot,
+  SnapshotColumn,
+  SnapshotNode,
+} from "../api";
 import {
   encodeView,
   resolveColumns,
@@ -385,6 +392,18 @@ export function useSheet(
     [drafts],
   );
   const draftCount = Object.keys(drafts).length;
+
+  // Per-cell comment summary accessor for the cell glyph. Reads the snapshot's
+  // sparse per-node `comments` map (server-sourced + read-ACL filtered), so a
+  // column the viewer can't read never surfaces a glyph. Undefined when the cell
+  // has no comments (no glyph). Pure lookup over the authoritative snapshot.
+  const commentSummary = useCallback(
+    (node: string, column: string): CellCommentSummary | undefined => {
+      const n = snapshot?.nodes.find((x) => x.name === node);
+      return n?.comments?.[column];
+    },
+    [snapshot],
+  );
   // The modal's row view of the draft box (stable cellKey + targeting + value).
   const draftList: DraftView[] = useMemo(
     () =>
@@ -505,6 +524,8 @@ export function useSheet(
     draftKey,
     draftCount,
     draftList,
+    // Comments — per-cell summary accessor for the cell glyph.
+    commentSummary,
     commitDraft,
     discardDraft,
     discardAllDrafts,
