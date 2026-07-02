@@ -10,12 +10,14 @@
   "operation",
   "status",
   "requester",
+  "real_requester",
   "resolved_approver",
   "approvals",
   "changes",
   "payload",
   "decision_section",
   "decided_by",
+  "real_decider",
   "decided_at",
   "resulting_event"
  ],
@@ -61,6 +63,13 @@
    "reqd": 1
   },
   {
+   "description": "The truly-authenticated principal when this CR was proposed under impersonation; NULL unless the CR was proposed under impersonation.",
+   "fieldname": "real_requester",
+   "fieldtype": "Link",
+   "label": "Real Requester",
+   "options": "User"
+  },
+  {
    "description": "Computed via the ACL resolver; re-checked at decision time.",
    "fieldname": "resolved_approver",
    "fieldtype": "Link",
@@ -89,6 +98,13 @@
    "fieldname": "decided_by",
    "fieldtype": "Link",
    "label": "Decided By",
+   "options": "User"
+  },
+  {
+   "description": "The truly-authenticated principal when this decision (approve/reject/withdraw) was performed under impersonation; NULL for a normal decision.",
+   "fieldname": "real_decider",
+   "fieldtype": "Link",
+   "label": "Real Decider",
    "options": "User"
   },
   {

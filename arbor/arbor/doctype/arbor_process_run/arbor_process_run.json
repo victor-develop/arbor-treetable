@@ -1,0 +1,107 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "process",
+  "sheet",
+  "node",
+  "status",
+  "current_stage_idx",
+  "started_at",
+  "completed_at",
+  "run_stages"
+ ],
+ "fields": [
+  {
+   "fieldname": "process",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Process",
+   "options": "Arbor Process",
+   "reqd": 1
+  },
+  {
+   "description": "Denormalized from the process for cheap dashboard filtering + indexing.",
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "description": "The node that constitutes this process 'row'. Unique per (process, node).",
+   "fieldname": "node",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Node",
+   "options": "Tree Node",
+   "reqd": 1
+  },
+  {
+   "default": "active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "active\ncompleted\nabandoned"
+  },
+  {
+   "default": "0",
+   "description": "Index of the currently-active stage.",
+   "fieldname": "current_stage_idx",
+   "fieldtype": "Int",
+   "label": "Current Stage Idx"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At"
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "description": "Per-stage timestamp ledger (entered/filled/due/breached) the dashboard aggregates.",
+   "fieldname": "run_stages",
+   "fieldtype": "Table",
+   "label": "Run Stages",
+   "options": "Arbor Process Run Stage"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process Run",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

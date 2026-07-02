@@ -1,0 +1,114 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "title",
+  "enabled",
+  "row_scope",
+  "start_trigger",
+  "stages",
+  "sla_breach_notify",
+  "created_by",
+  "settings"
+ ],
+ "fields": [
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title"
+  },
+  {
+   "default": "0",
+   "description": "Exactly one enabled process per sheet (validated in controller + core).",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "default": "root-children",
+   "description": "Which nodes count as a process 'row': direct children of root (default), every node, or a configured depth.",
+   "fieldname": "row_scope",
+   "fieldtype": "Select",
+   "label": "Row Scope",
+   "options": "root-children\nall-nodes\ndepth"
+  },
+  {
+   "default": "node-created",
+   "description": "How a run starts: automatically on NODE_CREATED, or manually via startProcessRun.",
+   "fieldname": "start_trigger",
+   "fieldtype": "Select",
+   "label": "Start Trigger",
+   "options": "node-created\nmanual"
+  },
+  {
+   "description": "The ordered stage sequence (left->right fill order by row idx).",
+   "fieldname": "stages",
+   "fieldtype": "Table",
+   "label": "Stages",
+   "options": "Arbor Process Stage"
+  },
+  {
+   "default": "1",
+   "description": "Notify the stage owner when the SLA sweep marks a run-stage breached.",
+   "fieldname": "sla_breach_notify",
+   "fieldtype": "Check",
+   "label": "SLA Breach Notify"
+  },
+  {
+   "fieldname": "created_by",
+   "fieldtype": "Link",
+   "label": "Created By",
+   "options": "User"
+  },
+  {
+   "description": "Advisory process settings (JSON).",
+   "fieldname": "settings",
+   "fieldtype": "JSON",
+   "label": "Settings"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

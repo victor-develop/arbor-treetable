@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "user",
+  "real_user",
   "approved_at"
  ],
  "fields": [
@@ -17,6 +18,13 @@
    "label": "User",
    "options": "User",
    "reqd": 1
+  },
+  {
+   "description": "The truly-authenticated principal who really approved when an admin approves under impersonation; NULL for a normal approval.",
+   "fieldname": "real_user",
+   "fieldtype": "Link",
+   "label": "Real User",
+   "options": "User"
   },
   {
    "fieldname": "approved_at",

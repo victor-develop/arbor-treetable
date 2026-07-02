@@ -1,0 +1,84 @@
+{
+ "actions": [],
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "stage_idx",
+  "column",
+  "entered_at",
+  "filled_at",
+  "due_at",
+  "breached",
+  "breached_at",
+  "notified_owner"
+ ],
+ "fields": [
+  {
+   "description": "The 0-based index of the Arbor Process Stage this run-stage mirrors (its fill sequence).",
+   "fieldname": "stage_idx",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Stage Idx",
+   "reqd": 1
+  },
+  {
+   "description": "The stage's Tree Column, denormalized for the timestamp ledger.",
+   "fieldname": "column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Column",
+   "options": "Tree Column"
+  },
+  {
+   "description": "When the run entered this stage (SLA clock start).",
+   "fieldname": "entered_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Entered At"
+  },
+  {
+   "description": "When this stage's column was filled (advancing the run); null until filled.",
+   "fieldname": "filled_at",
+   "fieldtype": "Datetime",
+   "label": "Filled At"
+  },
+  {
+   "description": "entered_at + stage SLA; null when the stage has no SLA.",
+   "fieldname": "due_at",
+   "fieldtype": "Datetime",
+   "label": "Due At"
+  },
+  {
+   "default": "0",
+   "description": "Set by the SLA sweep when now > due_at and the stage is not yet filled.",
+   "fieldname": "breached",
+   "fieldtype": "Check",
+   "label": "Breached"
+  },
+  {
+   "fieldname": "breached_at",
+   "fieldtype": "Datetime",
+   "label": "Breached At"
+  },
+  {
+   "description": "Idempotency guard for the stage-enter notification (records the notified owner identity/marker so a replay does not re-notify).",
+   "fieldname": "notified_owner",
+   "fieldtype": "Data",
+   "label": "Notified Owner"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process Run Stage",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

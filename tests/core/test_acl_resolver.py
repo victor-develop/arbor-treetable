@@ -122,3 +122,32 @@ def test_suggest_only_user_never_authorized_to_mutate():
     )
     assert auth.is_authorized is False
     assert auth.resolved_approver == C
+
+
+# --- process META caps (Area 3): structural-owner gated --------------------
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("cid", ["defineProcess", "enableProcess", "disableProcess", "startProcessRun"])
+def test_process_cap_authorized_only_for_structural_owner(cid):
+    fx = seed_canonical_sheet()
+    cap = get_capability(cid)
+    params = {"sheet": fx.sheet, "stages": [{"column": fx.col_status}], "node": fx.X}
+    # A is the sheet structural owner → authorized (direct path).
+    auth_owner = resolve_authority(cap, params, Actor(A), fx.repo)
+    assert auth_owner.is_authorized is True
+    assert auth_owner.resolved_approver == A
+    # D owns branch P2 structurally but is NOT the sheet owner → becomes a CR to A.
+    auth_other = resolve_authority(cap, params, Actor(D), fx.repo)
+    assert auth_other.is_authorized is False
+    assert auth_other.resolved_approver == A
+
+
+@pytest.mark.parametrize("cid", ["beginImpersonation", "endImpersonation"])
+def test_impersonation_caps_pass_through_acl_as_none_axis(cid):
+    """Axis.NONE control caps: the ACL resolver treats them as authorized (they
+    are gated in the executor admin block, NOT here)."""
+    fx = seed_canonical_sheet()
+    cap = get_capability(cid)
+    auth = resolve_authority(cap, {"impersonated_user": B}, Actor(E), fx.repo)
+    assert auth.is_authorized is True

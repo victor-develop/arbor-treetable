@@ -1,0 +1,131 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sheet",
+  "node",
+  "column",
+  "thread_root",
+  "parent_comment",
+  "author",
+  "body",
+  "mentions",
+  "resolved",
+  "resolved_by",
+  "resolved_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "sheet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sheet",
+   "options": "Tree Sheet",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "node",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Node",
+   "options": "Tree Node",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Column",
+   "options": "Tree Column",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Root comment of this cell-thread. NULL on the first/root comment of a cell-thread; set to the root's name on replies so a cell can host multiple threads.",
+   "fieldname": "thread_root",
+   "fieldtype": "Link",
+   "label": "Thread Root",
+   "options": "Arbor Cell Comment"
+  },
+  {
+   "description": "Direct reply target for nested rendering. NULL on a root comment.",
+   "fieldname": "parent_comment",
+   "fieldtype": "Link",
+   "label": "Parent Comment",
+   "options": "Arbor Cell Comment"
+  },
+  {
+   "fieldname": "author",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Author",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "description": "The comment text.",
+   "fieldname": "body",
+   "fieldtype": "Long Text",
+   "label": "Body",
+   "reqd": 1
+  },
+  {
+   "description": "JSON array of resolved + read-ACL-filtered User names parsed from @tokens at post time.",
+   "fieldname": "mentions",
+   "fieldtype": "Small Text",
+   "label": "Mentions"
+  },
+  {
+   "default": "0",
+   "fieldname": "resolved",
+   "fieldtype": "Check",
+   "label": "Resolved"
+  },
+  {
+   "fieldname": "resolved_by",
+   "fieldtype": "Link",
+   "label": "Resolved By",
+   "options": "User"
+  },
+  {
+   "fieldname": "resolved_at",
+   "fieldtype": "Datetime",
+   "label": "Resolved At"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Cell Comment",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

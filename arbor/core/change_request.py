@@ -57,6 +57,10 @@ def create_change_request(
             "operation": operation,
             "payload": enriched,
             "requester": requester.user,
+            # Impersonation trace (Area 1): the truly-authenticated admin when the
+            # CR was proposed under an "act as" overlay; None for a normal CR (so
+            # the persisted row is byte-for-byte as today).
+            "real_requester": requester.real_user if requester.is_impersonated else None,
             "resolved_approver": resolved_approver,
             "status": CRStatus.PROPOSED.value,
             "approvals": [],  # users who have approved so far (multi-approval)
@@ -96,6 +100,7 @@ def create_batch_change_request(
             "operation": "multi",
             "payload": {},
             "requester": requester.user,
+            "real_requester": requester.real_user if requester.is_impersonated else None,
             "resolved_approver": "",
             "status": CRStatus.PROPOSED.value,
             "approvals": [],

@@ -5,7 +5,9 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "source",
   "tree_event",
+  "comment",
   "change_request",
   "recipient",
   "channel",
@@ -14,13 +16,28 @@
  ],
  "fields": [
   {
-   "description": "Source event.",
+   "default": "tree_event",
+   "description": "Discriminator for what produced this notification.",
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Source",
+   "options": "tree_event\ncomment\nprocess\nsla"
+  },
+  {
+   "description": "Source event. Nullable; set when source is tree_event.",
    "fieldname": "tree_event",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Tree Event",
-   "options": "Tree Event",
-   "reqd": 1
+   "options": "Tree Event"
+  },
+  {
+   "description": "Nullable; set when source is comment.",
+   "fieldname": "comment",
+   "fieldtype": "Link",
+   "label": "Comment",
+   "options": "Arbor Cell Comment"
   },
   {
    "description": "Nullable; set when the event relates to a CR.",
