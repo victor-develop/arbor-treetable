@@ -1247,6 +1247,11 @@ function ConnectedShell({
                   </button>
                 </header>
                 <ProcessConfigPanel
+                  // Remount when the async getProcess load resolves so the canvas
+                  // re-seeds from the persisted rules (the panel seeds rules from
+                  // `process` once at mount; it opens with processDef=null then the
+                  // fetch fills it — without this key the loaded rules never hydrate).
+                  key={processDef ? `loaded:${processDef.rules.length}` : "new"}
                   sheet={sheetName}
                   columns={snap.columns}
                   process={processDef}
