@@ -34,7 +34,9 @@ import { ImportExport } from "./components/ImportExport";
 import { SubscriptionControl, NotificationItem } from "./components/SubscriptionControl";
 import { DelegationControl } from "./components/DelegationControl";
 import { ViewMenu } from "./components/ViewMenu";
+import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
 import { decodeView } from "./lib/view";
+import { applyProposedOverlay } from "./lib/overlay";
 
 // Trigger a browser download of `text` as `filename` (the ImportExport component
 // stays host-agnostic; the shell owns the actual file I/O).
@@ -290,6 +292,26 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
   // Row density for long-text cells (line-clamp): compact/comfortable/expand —
   // the pro "row height" control. Drives data-density on the tree card.
   const [density, setDensity] = useState<"compact" | "comfortable" | "expand">("comfortable");
+  // Live | Proposed view mode. "live" is today's editable view (default,
+  // untouched); "proposed" is a READ-ONLY preview overlaying every pending
+  // proposed change (cell suggestions + open move CRs) so the user SEES the
+  // hypothetical state instead of only red dots. The overlay is a pure lib.
+  const [viewMode, setViewMode] = useState<ViewMode>("live");
+  // Compute the proposed overlay only when previewing (pure; cheap either way).
+  // In "live" mode nothing is overlaid and the real sheet.nodes render as today.
+  const overlay = useMemo(
+    () => (viewMode === "proposed" ? applyProposedOverlay(sheet.nodes, crs) : null),
+    [viewMode, sheet.nodes, crs],
+  );
+  const proposedCell = useCallback(
+    (node: string, column: string): boolean => !!overlay?.proposedCells.has(cellKey(node, column)),
+    [overlay],
+  );
+  const movedNode = useCallback(
+    (node: string): boolean => !!overlay?.movedNodes.has(node),
+    [overlay],
+  );
+  const preview = viewMode === "proposed";
   // Inline label edit (the per-row edit-pencil): which node's label cell to open
   // and a monotonic signal bumped on each click so even re-clicking the SAME row
   // re-opens its editor. TreeTable hands the signal to the matching row's label
@@ -568,6 +590,10 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
         </div>
         {snap && (
           <div className="arbor-header-controls">
+            {/* Live | Proposed segmented control. "Proposed" overlays every
+                pending change as a READ-ONLY preview (cell suggestions + open
+                move CRs); "Live" restores today's editable view. */}
+            <ViewModeToggle mode={viewMode} onChange={setViewMode} />
             <SubscriptionControl
               sheet={sheetName}
               subscribed={snap.viewer?.subscribed ?? false}
@@ -710,7 +736,9 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
             <div className="arbor-tree-card" data-density={density}>
               <TreeTable
                 columns={sheet.columns}
-                nodes={sheet.nodes}
+                // Proposed preview renders the OVERLAID nodes (pending cell values
+                // + relocated moves); Live renders the real sheet.nodes as today.
+                nodes={preview && overlay ? overlay.nodes : sheet.nodes}
                 labelColumn={snap.label_column}
                 collapsed={sheet.collapsed}
                 onToggle={sheet.toggle}
@@ -729,6 +757,11 @@ function ConnectedShell({ client, sheetName }: { client: ArborClient; sheetName:
                 editingNode={editingNode}
                 editSignal={editSignal}
                 onAddNode={() => addNode(null)}
+                // Read-only Proposed preview: static cells, no drag, no row
+                // actions; proposed cells + relocated rows are styled distinctly.
+                preview={preview}
+                proposedCell={proposedCell}
+                movedNode={movedNode}
               />
             </div>
             {/* Draft flow — the "Review N change(s)" bar. Mounted ONLY while the

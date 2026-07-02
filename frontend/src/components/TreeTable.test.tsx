@@ -193,6 +193,55 @@ describe("TreeTable CREATE affordances (PART C)", () => {
   });
 });
 
+describe("TreeTable — Proposed preview (read-only)", () => {
+  it("hides the drag handle and the per-row action cluster in preview", () => {
+    renderTable({
+      preview: true,
+      onAddChild: vi.fn(),
+      onAddSibling: vi.fn(),
+      onEdit: vi.fn(),
+      onDeleteNode: vi.fn(),
+    });
+    // No drag handle anywhere.
+    expect(screen.queryByTestId("drag-handle-P2")).toBeNull();
+    // No row-action buttons.
+    expect(screen.queryByTestId("add-child-P2")).toBeNull();
+    expect(screen.queryByTestId("add-sibling-P2")).toBeNull();
+    expect(screen.queryByTestId("edit-node-P2")).toBeNull();
+    expect(screen.queryByTestId("delete-node-P2")).toBeNull();
+  });
+
+  it("still allows chevron expand/collapse in preview", () => {
+    const { onToggle } = renderTable({ preview: true });
+    fireEvent.click(screen.getByTestId("chevron-P2"));
+    expect(onToggle).toHaveBeenCalledWith("P2");
+  });
+
+  it("renders cells static in preview: clicking a cell does NOT open an editor", () => {
+    const { onCommitCell } = renderTable({ preview: true });
+    const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"] [data-testid="cell"]')!;
+    expect(notesCell).toHaveAttribute("data-mode", "preview");
+    fireEvent.click(notesCell);
+    expect(screen.queryByTestId("cell-input")).toBeNull();
+    expect(onCommitCell).not.toHaveBeenCalled();
+  });
+
+  it("marks proposed cells + moved rows via the predicates", () => {
+    renderTable({
+      preview: true,
+      proposedCell: (n, c) => n === "X" && c === "col:budget",
+      movedNode: (n) => n === "X",
+    });
+    const budgetCell = screen.getByTestId("row-X").querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    expect(budgetCell).toHaveAttribute("data-proposed", "true");
+    expect(screen.getByTestId("moved-X")).toBeInTheDocument();
+    // A non-proposed cell is unmarked; a non-moved row has no tag.
+    const yBudget = screen.getByTestId("row-Y").querySelector('[data-column="col:budget"] [data-testid="cell"]')!;
+    expect(yBudget).not.toHaveAttribute("data-proposed");
+    expect(screen.queryByTestId("moved-Y")).toBeNull();
+  });
+});
+
 describe("TreeTable drag-and-drop → moveNode", () => {
   function dropFromTop(targetTestId: string, fraction: number) {
     const row = screen.getByTestId(targetTestId);
