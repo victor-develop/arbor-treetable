@@ -2,7 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it } from "vitest";
 import App from "./App";
 import { loginAs, mockClient } from "./test/fixture";
-import type { ArborClient, ChangeRequestView, Snapshot } from "./api";
+import type {
+  ArborClient,
+  CellComment,
+  ChangeRequestView,
+  ProcessDef,
+  Snapshot,
+  Whoami,
+} from "./api";
 
 // Wrap the base mock client with a listChangeRequests that returns fixed CRs, so
 // the Proposed overlay's MOVE path is exercised end-to-end through the shell.
@@ -372,5 +379,300 @@ describe("App — snapshot-driven shell wiring", () => {
     expect(fab).toHaveAttribute("aria-label", "Close agent");
     fireEvent.click(fab);
     expect(dock).not.toHaveClass("is-open");
+  });
+});
+
+// ---- Wave 4 shell integration (auth gate / impersonation / comments / process) --
+
+// A comment thread the mocked listCellComments resolves to (a single root).
+function thread(): CellComment[] {
+  return [
+    {
+      name: "CMT-1",
+      thread_root: null,
+      parent_comment: null,
+      author: "c",
+      body: "Is this figure final?",
+      mentions: [],
+      resolved: false,
+      resolved_by: null,
+      resolved_at: null,
+      timestamp: "2026-06-20T10:00:00Z",
+      can_resolve: true,
+      can_delete: true,
+    },
+  ];
+}
+
+describe("App — auth gate (Feature: act-as)", () => {
+  it("unauthenticated whoami renders the LoginScreen INSTEAD of the sheet", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    const gated: ArborClient = {
+      ...client,
+      whoami: async (): Promise<Whoami> => ({ user: "Guest", authenticated: false }),
+    };
+    render(<App client={gated} sheetName="S" />);
+    expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
+    // The sheet is NOT rendered while unauthenticated.
+    expect(screen.queryByTestId("tree-table")).toBeNull();
+  });
+
+  it("authenticated whoami renders the sheet (passthrough)", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    const gated: ArborClient = {
+      ...client,
+      whoami: async (): Promise<Whoami> => ({ user: "B", authenticated: true }),
+    };
+    render(<App client={gated} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.queryByTestId("login-screen")).toBeNull();
+  });
+
+  it("a client WITHOUT whoami is a passthrough (no gate) — legacy tests keep rendering", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.queryByTestId("login-screen")).toBeNull();
+  });
+});
+
+describe("App — ImpersonationBar wiring (Feature: act-as)", () => {
+  it("admin sees the Act-as picker; begin calls the client + refetches whoami + sheet", async () => {
+    // Admin snapshot (is_admin) whose whoami reports a plain authenticated admin.
+    const snap = loginAs("B", { viewer: { is_admin: true } });
+    const { client, snapshotCalls } = mockClient({ snapshot: snap });
+    const beginCalls: { user: string; reason?: string }[] = [];
+    let whoamiCalls = 0;
+    const admin: ArborClient = {
+      ...client,
+      whoami: async (): Promise<Whoami> => {
+        whoamiCalls += 1;
+        return { user: "admin", authenticated: true };
+      },
+      beginImpersonation: async (user, reason) => {
+        beginCalls.push({ user, reason });
+        return { kind: "executed" };
+      },
+    };
+    render(<App client={admin} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const snapsBefore = snapshotCalls.length;
+    const whoamiBefore = whoamiCalls;
+
+    // The picker is shown (admin, not impersonating).
+    fireEvent.change(screen.getByTestId("impersonation-user"), { target: { value: "owner@x" } });
+    fireEvent.click(screen.getByTestId("impersonation-begin"));
+
+    await waitFor(() => expect(beginCalls).toEqual([{ user: "owner@x", reason: undefined }]));
+    // begin refetched BOTH whoami and the sheet.
+    await waitFor(() => expect(whoamiCalls).toBeGreaterThan(whoamiBefore));
+    await waitFor(() => expect(snapshotCalls.length).toBeGreaterThan(snapsBefore));
+  });
+
+  it("impersonating whoami shows the banner + Stop calls endImpersonation", async () => {
+    const { client, snapshotCalls } = mockClient({ snapshot: loginAs("B") });
+    let end = 0;
+    const impersonated: ArborClient = {
+      ...client,
+      whoami: async (): Promise<Whoami> => ({
+        user: "owner",
+        real_user: "admin",
+        impersonating: true,
+        authenticated: true,
+      }),
+      endImpersonation: async () => {
+        end += 1;
+        return { kind: "executed" };
+      },
+    };
+    render(<App client={impersonated} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    // The banner is visible naming both identities.
+    const banner = await screen.findByTestId("impersonation-banner");
+    expect(banner).toHaveTextContent("owner");
+    expect(banner).toHaveTextContent("admin");
+    const snapsBefore = snapshotCalls.length;
+    fireEvent.click(screen.getByTestId("impersonation-stop"));
+    await waitFor(() => expect(end).toBe(1));
+    await waitFor(() => expect(snapshotCalls.length).toBeGreaterThan(snapsBefore));
+  });
+
+  it("a non-admin (not impersonating) sees no impersonation bar", async () => {
+    const { client } = mockClient({ snapshot: loginAs("A") });
+    const nonAdmin: ArborClient = {
+      ...client,
+      whoami: async (): Promise<Whoami> => ({ user: "A", authenticated: true }),
+    };
+    render(<App client={nonAdmin} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.queryByTestId("impersonation-bar")).toBeNull();
+  });
+});
+
+describe("App — CommentDrawer wiring (Feature: comments)", () => {
+  // Seed a comment summary on X's notes cell so the glyph renders.
+  function snapWithComment(): Snapshot {
+    const snap = loginAs("B");
+    snap.nodes = snap.nodes.map((n) =>
+      n.name === "X" ? { ...n, comments: { "col:notes": { open: 1, resolved: 0, unread: 0 } } } : n,
+    );
+    return snap;
+  }
+  function commentClient(snapshot: Snapshot) {
+    const { client } = mockClient({ snapshot });
+    const listCalls: { node: string; column: string }[] = [];
+    const addCalls: { body: string; parent?: string }[] = [];
+    const c: ArborClient = {
+      ...client,
+      listCellComments: async (_s, node, column) => {
+        listCalls.push({ node, column });
+        return thread();
+      },
+      addCellComment: async (_s, _n, _c, body, opts) => {
+        addCalls.push({ body, parent: opts?.parent_comment });
+        return { name: "CMT-2", thread_root: "CMT-1", mentions: [] };
+      },
+      resolveCellComment: async () => ({ ok: true }),
+    };
+    return { client: c, listCalls, addCalls };
+  }
+
+  it("clicking a cell's comment glyph opens the drawer with the loaded thread", async () => {
+    const { client, listCalls } = commentClient(snapWithComment());
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"]')!;
+    fireEvent.click(within(notesCell as HTMLElement).getByTestId("comment-glyph"));
+
+    // The drawer opens and loads the cell's thread.
+    const drawer = await screen.findByTestId("comment-drawer");
+    await waitFor(() =>
+      expect(listCalls).toContainEqual({ node: "X", column: "col:notes" }),
+    );
+    expect(within(drawer).getByText("Is this figure final?")).toBeInTheDocument();
+  });
+
+  it("posting a comment calls addCellComment", async () => {
+    const { client, addCalls } = commentClient(snapWithComment());
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"]')!;
+    fireEvent.click(within(notesCell as HTMLElement).getByTestId("comment-glyph"));
+    await screen.findByTestId("comment-drawer");
+
+    fireEvent.change(screen.getByTestId("comment-composer"), { target: { value: "Confirmed." } });
+    fireEvent.click(screen.getByTestId("comment-post"));
+    await waitFor(() => expect(addCalls).toEqual([{ body: "Confirmed.", parent: undefined }]));
+  });
+
+  it("the drawer is inert in Proposed preview (no glyph, no composer)", async () => {
+    const { client } = commentClient(snapWithComment());
+    render(<App client={client} sheetName="S" initialViewMode="proposed" />);
+    await screen.findByTestId("tree-table");
+    // In preview the Cell withholds the glyph, so the drawer is unreachable.
+    expect(screen.queryByTestId("comment-glyph")).toBeNull();
+    expect(screen.queryByTestId("comment-drawer")).toBeNull();
+  });
+
+  it("the drawer sits below the agent popup (z-order: agent dock present alongside)", async () => {
+    const { client } = commentClient(snapWithComment());
+    const { container } = render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    const notesCell = screen.getByTestId("row-X").querySelector('[data-column="col:notes"]')!;
+    fireEvent.click(within(notesCell as HTMLElement).getByTestId("comment-glyph"));
+    await screen.findByTestId("comment-drawer");
+    // Both surfaces are mounted; the drawer coexists with the agent dock.
+    expect(container.querySelector(".arbor-agent-dock")).toBeInTheDocument();
+    expect(container.querySelector(".arbor-comment-drawer")).toBeInTheDocument();
+  });
+});
+
+describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
+  function processClient(opts?: { def?: ProcessDef | null }) {
+    // A owns sheet S (structural_owner == "A"), so A may configure the process.
+    const { client } = mockClient({ snapshot: loginAs("A") });
+    const defineCalls: { stages: unknown }[] = [];
+    let enableCalls = 0;
+    const c: ArborClient = {
+      ...client,
+      getProcess: async (): Promise<ProcessDef> =>
+        opts?.def ?? {
+          sheet: "S",
+          title: null,
+          enabled: false,
+          row_scope: "root-children",
+          start_trigger: "node-created",
+          stages: [],
+        },
+      defineProcess: async (_s, stages) => {
+        defineCalls.push({ stages });
+        return { kind: "executed" };
+      },
+      enableProcess: async () => {
+        enableCalls += 1;
+        return { kind: "executed" };
+      },
+    };
+    return { client: c, defineCalls, getEnable: () => enableCalls };
+  }
+
+  it("structural owner sees the Process button; opening seeds the panel from getProcess", async () => {
+    const { client } = processClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    fireEvent.click(screen.getByTestId("process-config-button"));
+    // The modal opens with the (empty) process editor seeded from getProcess.
+    expect(await screen.findByTestId("process-config-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("process-config")).toBeInTheDocument();
+  });
+
+  it("adding a stage + Save process fires defineProcess", async () => {
+    const { client, defineCalls } = processClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    fireEvent.click(screen.getByTestId("process-config-button"));
+    await screen.findByTestId("process-config");
+
+    // Pick a column stage then add it.
+    fireEvent.change(screen.getByTestId("pc-add-column"), { target: { value: "col:status" } });
+    fireEvent.click(screen.getByTestId("pc-add-stage"));
+    fireEvent.click(screen.getByTestId("pc-define"));
+    await waitFor(() => expect(defineCalls).toHaveLength(1));
+  });
+
+  it("Enable fires enableProcess when a process already exists", async () => {
+    const { client, getEnable } = processClient({
+      def: {
+        sheet: "S",
+        title: "Flow",
+        enabled: false,
+        row_scope: "root-children",
+        start_trigger: "node-created",
+        stages: [{ idx: 0, column: "col:status", label: "Status", sla_seconds: 0 }],
+      },
+    });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    fireEvent.click(screen.getByTestId("process-config-button"));
+    await screen.findByTestId("process-config");
+    fireEvent.click(await screen.findByTestId("pc-enable"));
+    await waitFor(() => expect(getEnable()).toBe(1));
+  });
+
+  it("a non-structural-owner / non-admin sees NO Process button", async () => {
+    // B is not the structural owner (A is) and not admin.
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.queryByTestId("process-config-button")).toBeNull();
+  });
+
+  it("renders the header nav (Inbox + Dashboard) links", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.getByTestId("nav-inbox").getAttribute("href")).toBe("?inbox=1");
+    expect(screen.getByTestId("nav-dashboard").getAttribute("href")).toContain("dashboard=1");
   });
 });
