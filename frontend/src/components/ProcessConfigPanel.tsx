@@ -24,16 +24,28 @@ import { buildGraph, validate } from "./process/graph";
 // owners) are dropped; the stable rule_key is kept so an edit re-uses it.
 function seed(process: ProcessDef | null): ProcessRuleInput[] {
   if (!process) return [];
-  return process.rules.map((r) => ({
-    rule_key: r.rule_key,
-    trigger_kind: r.trigger_kind,
-    trigger_column: r.trigger_column,
-    trigger_op: r.trigger_op,
-    expected_columns: [...r.expected_columns],
-    within_seconds: r.within_seconds,
-    notify_on_expect: r.notify_on_expect,
-    ...(r.label ? { label: r.label } : {}),
-  }));
+  return process.rules.map((r) => {
+    // Filter redacted/null trigger columns the viewer cannot read.
+    const triggers = (r.trigger_columns ?? []).filter((c): c is string => c != null);
+    const isAndJoin = r.trigger_join === "all" || triggers.length > 1;
+    const base: ProcessRuleInput = {
+      rule_key: r.rule_key,
+      trigger_kind: r.trigger_kind,
+      trigger_column: r.trigger_column,
+      trigger_op: r.trigger_op,
+      expected_columns: [...r.expected_columns],
+      within_seconds: r.within_seconds,
+      notify_on_expect: r.notify_on_expect,
+      ...(r.label ? { label: r.label } : {}),
+    };
+    // Only surface the full trigger SET + join for a genuine AND-join, so a legacy
+    // single/row rule keeps its minimal back-compat shape (trigger_column only).
+    if (isAndJoin) {
+      base.trigger_columns = triggers;
+      base.trigger_join = "all";
+    }
+    return base;
+  });
 }
 
 export function ProcessConfigPanel({
@@ -107,7 +119,8 @@ export function ProcessConfigPanel({
         Draw the flow: on a trigger (row created, or a column filled), expect the
         connected columns to be filled within their window. A column counts as
         filled when it gets a value (a default counts), which can trigger the next
-        step.
+        step. A column can wait for several columns — set its join to ALL to fire
+        only once every incoming column is filled (an AND-join).
       </p>
 
       <ProcessCanvas columns={canvasColumns} rules={rules} onChange={setRules} />

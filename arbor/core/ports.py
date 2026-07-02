@@ -105,7 +105,14 @@ class ProcessRuleView(Protocol):
     rule_key: str
     idx: int
     trigger_kind: str  # 'row' | 'column'
-    trigger_column: Optional[str]  # set iff trigger_kind == 'column'
+    # The trigger SET for a column trigger (1+ columns). A single-column rule has
+    # one entry. ``trigger_column`` is a back-compat alias == ``trigger_columns[0]``.
+    trigger_columns: list[str]
+    # 'any' (or a single trigger) fires when ANY named trigger column is updated
+    # (today's behavior); 'all' (an AND-join / fan-in) fires ONCE when EVERY
+    # trigger column is filled (the update that completes the set is the trigger).
+    trigger_join: str  # 'any' | 'all' (default 'any')
+    trigger_column: Optional[str]  # back-compat alias == trigger_columns[0]
     trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
     expected_columns: list[str]
     within_seconds: int  # 0 => no SLA

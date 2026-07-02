@@ -78,9 +78,27 @@ def _rule_key(rule: dict[str, Any], idx: int) -> str:
     return key if key else f"r{idx}"
 
 
+def trigger_columns_of(rule: Any) -> list[str]:
+    """The trigger SET of a rule, normalizing the back-compat single
+    ``trigger_column`` alias to ``[x]``. Works on both mapping payloads and view
+    objects (attribute access). Empty when neither is set."""
+    if isinstance(rule, dict):
+        cols = rule.get("trigger_columns")
+        single = rule.get("trigger_column")
+    else:
+        cols = getattr(rule, "trigger_columns", None)
+        single = getattr(rule, "trigger_column", None)
+    if cols:
+        return [c for c in cols if c is not None]
+    if single is not None:
+        return [single]
+    return []
+
+
 def build_edges(rules: Iterable[dict[str, Any]]) -> list[Edge]:
     """Derive the ordered edge set from ``rules`` (pure). A 'row' rule fans out
-    from START; a 'column' rule fans out from its ``trigger_column``. Each
+    from START; a 'column' rule fans out from EACH of its trigger columns (an
+    AND-join contributes one edge per (trigger_column -> expected_column)). Each
     expected column is one edge (so an 'and' rule of N expected columns is N
     edges sharing a ``rule_key``)."""
     edges: list[Edge] = []
@@ -88,13 +106,14 @@ def build_edges(rules: Iterable[dict[str, Any]]) -> list[Edge]:
         kind = rule.get("trigger_kind")
         rk = _rule_key(rule, i)
         if kind == "row":
-            src = START
-            from_kind = "row"
+            for col in rule.get("expected_columns") or []:
+                edges.append(Edge(rule_key=rk, from_kind="row", from_node=START, to=col))
         else:
-            src = rule.get("trigger_column")
-            from_kind = "column"
-        for col in rule.get("expected_columns") or []:
-            edges.append(Edge(rule_key=rk, from_kind=from_kind, from_node=src, to=col))
+            for src in trigger_columns_of(rule):
+                for col in rule.get("expected_columns") or []:
+                    edges.append(
+                        Edge(rule_key=rk, from_kind="column", from_node=src, to=col)
+                    )
     return edges
 
 
@@ -206,33 +225,41 @@ def validate_rules(rules: list[dict[str, Any]]) -> GraphValidation:
         rk = _rule_key(rule, i)
         kind = rule.get("trigger_kind")
         expected = list(rule.get("expected_columns") or [])
+        triggers = trigger_columns_of(rule)
+        join = rule.get("trigger_join") or "any"
         if kind not in ("row", "column"):
             result.errors.append(
                 {"code": "bad-trigger-kind", "rule_key": rk,
                  "message": f"rule {rk!r} has invalid trigger_kind {kind!r}"}
             )
-        if kind == "column" and not rule.get("trigger_column"):
+        if kind == "column" and join not in ("any", "all"):
+            result.errors.append(
+                {"code": "bad-trigger-join", "rule_key": rk,
+                 "message": f"rule {rk!r} has invalid trigger_join {join!r}"}
+            )
+        if kind == "column" and not triggers:
             result.errors.append(
                 {"code": "missing-trigger-column", "rule_key": rk,
-                 "message": f"column-trigger rule {rk!r} has no trigger_column"}
+                 "message": f"column-trigger rule {rk!r} has no trigger columns"}
             )
-        if kind == "row" and rule.get("trigger_column"):
+        if kind == "row" and (rule.get("trigger_column") or rule.get("trigger_columns")):
             result.errors.append(
                 {"code": "row-trigger-has-column", "rule_key": rk,
-                 "message": f"row-trigger rule {rk!r} must not set trigger_column"}
+                 "message": f"row-trigger rule {rk!r} must not set trigger columns"}
             )
         if not expected:
             result.errors.append(
                 {"code": "no-expected-columns", "rule_key": rk,
                  "message": f"rule {rk!r} expects no columns"}
             )
-        # self-loop: a column that triggers itself.
-        tcol = rule.get("trigger_column")
-        if kind == "column" and tcol is not None and tcol in expected:
-            result.errors.append(
-                {"code": "self-loop", "rule_key": rk, "column": tcol,
-                 "message": f"rule {rk!r}: column {tcol!r} triggers itself"}
-            )
+        # self-loop: a trigger column that is also one of its own expected columns.
+        if kind == "column":
+            for tcol in triggers:
+                if tcol in expected:
+                    result.errors.append(
+                        {"code": "self-loop", "rule_key": rk, "column": tcol,
+                         "message": f"rule {rk!r}: column {tcol!r} triggers itself"}
+                    )
         # a rule expecting the same column twice is a degenerate duplicate.
         if len(expected) != len(set(expected)):
             dup = next(c for c in expected if expected.count(c) > 1)

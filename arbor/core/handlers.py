@@ -204,12 +204,20 @@ def define_process_handler(params: dict[str, Any], actor: Actor, repo: Repositor
     rules = []
     for i, r in enumerate(params.get("rules") or []):
         kind = r["trigger_kind"]
+        # normalize the trigger SET: prefer trigger_columns, else the single
+        # trigger_column alias. Persist both (trigger_column == the first entry)
+        # so back-compat readers keep working.
+        tcols = [c for c in (r.get("trigger_columns") or []) if c is not None]
+        if not tcols and r.get("trigger_column"):
+            tcols = [r["trigger_column"]]
         rules.append(
             {
                 "rule_key": r.get("rule_key") or f"r{i}",
                 "idx": i,
                 "trigger_kind": kind,
-                "trigger_column": r.get("trigger_column"),
+                "trigger_columns": tcols,
+                "trigger_join": r.get("trigger_join") or "any",
+                "trigger_column": tcols[0] if tcols else None,
                 "trigger_op": r.get("trigger_op") or ("created" if kind == "row" else "updated"),
                 "expected_columns": list(r.get("expected_columns") or []),
                 "within_seconds": int(r.get("within_seconds") or 0),

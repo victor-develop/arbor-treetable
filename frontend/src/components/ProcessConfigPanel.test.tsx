@@ -40,6 +40,9 @@ function rule(over: Partial<ProcessDef["rules"][number]>): ProcessDef["rules"][n
     trigger_kind: "row",
     trigger_column: null,
     trigger_column_label: null,
+    trigger_columns: [],
+    trigger_labels: [],
+    trigger_join: "any",
     trigger_op: "created-or-updated",
     expected_columns: ["owner_c"],
     expected_labels: ["OWNER_C"],
@@ -105,6 +108,36 @@ describe("ProcessConfigPanel — chrome + canvas mount", () => {
     const hint = screen.getByTestId("pc-hint");
     expect(hint).toHaveTextContent(/trigger/i);
     expect(hint).toHaveTextContent(/a default counts/i);
+  });
+
+  it("explains the AND-join in the hint (set join to ALL)", () => {
+    renderPanel();
+    const hint = screen.getByTestId("pc-hint");
+    expect(hint).toHaveTextContent(/all/i);
+    expect(hint).toHaveTextContent(/wait for several columns/i);
+  });
+
+  it("hydrates an AND-join def as one merged, ALL-marked join", () => {
+    renderPanel({
+      process: def({
+        rules: [
+          rule({ rule_key: "r0", trigger_kind: "row", trigger_column: null, expected_columns: ["owner_c", "budget"] }),
+          rule({
+            rule_key: "j",
+            trigger_kind: "column",
+            trigger_column: "owner_c",
+            trigger_columns: ["owner_c", "budget"],
+            trigger_labels: ["OWNER_C", "BUDGET"],
+            trigger_join: "all",
+            expected_columns: ["approval"],
+          }),
+        ],
+      }),
+    });
+    // Both legs converge into approval with the ∧ marker and the ALL toggle.
+    expect(screen.getByTestId("canvas-edge-join-owner_c-approval")).toBeInTheDocument();
+    expect(screen.getByTestId("canvas-edge-join-budget-approval")).toBeInTheDocument();
+    expect(screen.getByTestId("canvas-join-toggle-approval")).toHaveTextContent(/all/i);
   });
 
   it("excludes the sheet's label/title column from the canvas picker", () => {

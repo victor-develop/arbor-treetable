@@ -652,6 +652,230 @@ def test_define_process_handler_rejects_cycle():
     assert repo.get_process("S") is None
 
 
+# ---------------------------------------------------------------------------
+# AND-join (fan-in trigger): trigger_columns + trigger_join='all'
+# ---------------------------------------------------------------------------
+def _seed_all_join(within=0, op="created-or-updated", enabled=True):
+    """row -> (colA and colB); on (colA AND colB) BOTH filled -> expect colC.
+    The AND-join fires ONCE, when the LAST of colA/colB becomes filled."""
+    repo = _base_repo()
+    name = repo.upsert_process(
+        {
+            "sheet": "S",
+            "rules": [
+                {"rule_key": "start", "trigger_kind": "row", "trigger_op": "created",
+                 "expected_columns": ["colA", "colB"]},
+                {"rule_key": "join", "trigger_kind": "column",
+                 "trigger_columns": ["colA", "colB"], "trigger_join": "all",
+                 "trigger_op": op, "expected_columns": ["colC"],
+                 "within_seconds": within},
+            ],
+        }
+    )
+    repo.set_process_enabled(name, enabled)
+    return repo, repo.get_process("S")
+
+
+def test_all_join_does_not_fire_on_partial_set():
+    repo, proc = _seed_all_join()
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    # fill only colA -> the join must NOT fire (colB still empty).
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    run = _run(repo, proc)
+    assert _exp(run, "join", "colC") is None
+    assert run["status"] == "active"
+
+
+def test_all_join_fires_when_last_column_filled():
+    repo, proc = _seed_all_join()
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    assert _exp(_run(repo, proc), "join", "colC") is None  # still partial
+    # fill colB -> the LAST column -> join fires, opens colC, notifies C.
+    repo.seed_value("S", "P1", "colB", "b")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colB"}, now=3)
+    run = _run(repo, proc)
+    e = _exp(run, "join", "colC")
+    assert e is not None and e["opened_at"] == 3
+    assert OWNER_C in _recipients(repo)
+
+
+def test_all_join_fires_once_idempotent_on_reupdate():
+    repo, proc = _seed_all_join()
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    repo.seed_value("S", "P1", "colB", "b")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colB"}, now=3)
+    run = _run(repo, proc)
+    assert len([e for e in run["expectations"] if e["rule_key"] == "join"]) == 1
+    opened_at = _exp(run, "join", "colC")["opened_at"]
+    # re-update colA (already filled) -> join must NOT re-open.
+    repo.seed_value("S", "P1", "colA", "a2")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=9)
+    run = _run(repo, proc)
+    assert len([e for e in run["expectations"] if e["rule_key"] == "join"]) == 1
+    assert _exp(run, "join", "colC")["opened_at"] == opened_at
+
+
+def test_all_join_prefilled_fires_at_creation_and_cascades():
+    """colA + colB + colC all defaulted at creation -> start opens+satisfies
+    colA/colB, the AND-join fires at creation (all triggers filled), opens colC
+    which is also prefilled -> satisfied. The whole run completes at creation."""
+    repo, proc = _seed_all_join()
+    repo.seed_value("S", "P1", "colA", "a")
+    repo.seed_value("S", "P1", "colB", "b")
+    repo.seed_value("S", "P1", "colC", "c")
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=5)
+    run = _run(repo, proc)
+    assert _exp(run, "join", "colC")["satisfied_at"] == 5
+    assert run["status"] == "completed"
+    assert len(repo.notifications) == 0
+    assert any(t["kind"] == "completed" for t in trans)
+
+
+def test_all_join_prefilled_partial_does_not_fire_at_creation():
+    """Only colA prefilled at creation -> the AND-join must NOT fire (colB empty).
+    colB's expectation (from start) stays open; join/colC not opened."""
+    repo, proc = _seed_all_join()
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = _run(repo, proc)
+    assert _exp(run, "join", "colC") is None
+    assert _exp(run, "start", "colB")["satisfied_at"] is None
+    assert run["status"] == "active"
+
+
+def test_all_join_completes_when_downstream_filled():
+    repo, proc = _seed_all_join()
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    repo.seed_value("S", "P1", "colB", "b")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colB"}, now=3)
+    assert _run(repo, proc)["status"] == "active"
+    repo.seed_value("S", "P1", "colC", "c")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colC"}, now=4)
+    assert _run(repo, proc)["status"] == "completed"
+
+
+def test_all_join_op_updated_does_not_fire_at_creation():
+    """An 'all' rule with op='updated' does NOT fire at NODE_CREATED even when
+    every trigger column is prefilled (nothing was 'updated')."""
+    repo, proc = _seed_all_join(op="updated")
+    repo.seed_value("S", "P1", "colA", "a")
+    repo.seed_value("S", "P1", "colB", "b")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    assert _exp(_run(repo, proc), "join", "colC") is None
+
+
+def test_mixed_any_and_all_rules_coexist():
+    """One any-join rule (colA -> colB) + one all-join rule ((colA AND colC) ->
+    colD). Filling colA fires the any rule immediately; the all rule waits for
+    colC too."""
+    repo = _base_repo()
+    repo.add_column("colD", "S", "d", column_owner="owner-d")
+    name = repo.upsert_process(
+        {
+            "sheet": "S",
+            "rules": [
+                {"rule_key": "start", "trigger_kind": "row", "trigger_op": "created",
+                 "expected_columns": ["colA", "colC"]},
+                {"rule_key": "any", "trigger_kind": "column", "trigger_column": "colA",
+                 "trigger_op": "created-or-updated", "expected_columns": ["colB"]},
+                {"rule_key": "all", "trigger_kind": "column",
+                 "trigger_columns": ["colA", "colC"], "trigger_join": "all",
+                 "trigger_op": "created-or-updated", "expected_columns": ["colD"]},
+            ],
+        }
+    )
+    repo.set_process_enabled(name, True)
+    proc = repo.get_process("S")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    run = _run(repo, proc)
+    assert _exp(run, "any", "colB") is not None      # any fired
+    assert _exp(run, "all", "colD") is None           # all waits for colC
+    repo.seed_value("S", "P1", "colC", "c")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colC"}, now=3)
+    assert _exp(_run(repo, proc), "all", "colD") is not None  # now all fired
+
+
+def test_back_compat_single_trigger_column_still_works():
+    """A rule defined with only trigger_column (no trigger_columns/trigger_join)
+    behaves exactly as before (any-join on that single column)."""
+    repo, proc = _seed_chain()
+    # the chain rules use trigger_column singular; confirm the view normalized.
+    ab = next(r for r in proc.rules if r.rule_key == "ab")
+    assert ab.trigger_columns == ["colA"]
+    assert ab.trigger_join == "any"
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    repo.seed_value("S", "P1", "colA", "a")
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colA"}, now=2)
+    assert _exp(_run(repo, proc), "ab", "colB") is not None
+
+
+def test_define_process_handler_rejects_all_join_self_trigger():
+    import pytest
+
+    from arbor.core import handlers
+    from arbor.core.process_graph import ValidationError
+    from arbor.core.types import Actor
+
+    repo = _base_repo()
+    params = {
+        "sheet": "S",
+        "rules": [
+            {"rule_key": "bad", "trigger_kind": "column",
+             "trigger_columns": ["colA", "colB"], "trigger_join": "all",
+             "expected_columns": ["colB"]},
+        ],
+    }
+    with pytest.raises(ValidationError):
+        handlers.define_process_handler(params, Actor("root-owner"), repo)
+    assert repo.get_process("S") is None
+
+
+def test_define_process_handler_persists_all_join_shape():
+    from arbor.core import handlers
+    from arbor.core.types import Actor
+
+    repo = _base_repo()
+    params = {
+        "sheet": "S",
+        "rules": [
+            {"rule_key": "start", "trigger_kind": "row", "trigger_op": "created",
+             "expected_columns": ["colA", "colB"]},
+            {"rule_key": "join", "trigger_kind": "column",
+             "trigger_columns": ["colA", "colB"], "trigger_join": "all",
+             "trigger_op": "created-or-updated", "expected_columns": ["colC"]},
+        ],
+    }
+    handlers.define_process_handler(params, Actor("root-owner"), repo)
+    proc = repo.get_process("S")
+    join = next(r for r in proc.rules if r.rule_key == "join")
+    assert join.trigger_columns == ["colA", "colB"]
+    assert join.trigger_join == "all"
+    # back-compat alias: trigger_column defaults to the first trigger.
+    assert join.trigger_column == "colA"
+
+
+def test_all_join_dashboard_edges_tagged_and_grouped():
+    repo, proc = _seed_all_join()
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    agg = P.dashboard_aggregate(proc, repo.list_process_runs("S"))
+    join_edges = [e for e in agg["edges"] if e["rule_key"] == "join"]
+    assert {e["from_column"] for e in join_edges} == {"colA", "colB"}
+    assert all(e["to_column"] == "colC" for e in join_edges)
+    assert all(e.get("join") == "all" for e in join_edges)
+    # an any-join edge is tagged 'any'.
+    start_edges = [e for e in agg["edges"] if e["rule_key"] == "start"]
+    assert all(e.get("join") == "any" for e in start_edges)
+
+
 def test_define_process_handler_accepts_valid_dag_and_backfill_on_enable():
     from arbor.core import handlers
     from arbor.core.types import Actor

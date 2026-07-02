@@ -41,7 +41,7 @@ from typing import Any, Callable, Optional
 
 from .acl import resolve_column_approvers
 from .ports import ProcessView, Repository
-from .process_graph import START, build_edges
+from .process_graph import START, build_edges, trigger_columns_of
 
 #: A transition record returned by ``on_event``/``sla_sweep`` — one per side
 #: effect, so callers/tests assert exactly what happened without re-reading.
@@ -120,6 +120,23 @@ def _row_trigger_fires(trigger_op: str, etype: str) -> bool:
     if etype == "NODE_VALUE_UPDATED":
         return trigger_op in ("updated", "created-or-updated")
     return False
+
+
+def _trigger_columns(rule: Any) -> list[str]:
+    """The rule's trigger SET (normalizes the single ``trigger_column`` alias)."""
+    return trigger_columns_of(rule)
+
+
+def _trigger_join(rule: Any) -> str:
+    """A column rule's join mode: 'all' (AND-join / fan-in) or 'any' (default)."""
+    return getattr(rule, "trigger_join", None) or "any"
+
+
+def _all_triggers_filled(repo: Repository, node: str, rule: Any) -> bool:
+    """Whether EVERY trigger column of ``rule`` is currently filled (the AND-join
+    completion predicate)."""
+    cols = _trigger_columns(rule)
+    return bool(cols) and all(is_filled(repo.get_value(node, c)) for c in cols)
 
 
 # ---------------------------------------------------------------------------
@@ -238,10 +255,15 @@ def _on_node_created(
             continue
         if getattr(rule, "trigger_op", "updated") not in ("created", "created-or-updated"):
             continue
-        tcol = getattr(rule, "trigger_column", None)
-        if tcol is None:
+        cols = _trigger_columns(rule)
+        if not cols:
             continue
-        if is_filled(repo.get_value(node, tcol)):
+        if _trigger_join(rule) == "all":
+            # AND-join fires at creation only when ALL trigger columns are filled.
+            if _all_triggers_filled(repo, node, rule):
+                _fire_rule(exps, rule, i, now=now)
+                fired.add(rk)
+        elif any(is_filled(repo.get_value(node, c)) for c in cols):
             _fire_rule(exps, rule, i, now=now)
             fired.add(rk)
 
@@ -269,19 +291,30 @@ def _on_value_updated(
     exps = [dict(e) for e in run.get("expectations") or []]
     fired: set[str] = set()
 
-    # fire COLUMN(column) rules (op 'updated' / 'created-or-updated' always;
-    # op 'created' fires only if this rule has not fired for the run yet — the
-    # first time the column becomes filled).
+    # fire COLUMN rules whose trigger SET contains ``column`` (op 'updated' /
+    # 'created-or-updated' always; op 'created' fires only if this rule has not
+    # fired for the run yet — the first time the column becomes filled).
+    #
+    # join='any' (or a single trigger): fire when ANY named trigger column is
+    # updated (today's behavior). join='all' (AND-join / fan-in): fire ONCE only
+    # when EVERY trigger column is filled — the update that completes the set is
+    # the trigger moment. Idempotency is per (run, rule): once fired (its
+    # expectation exists) it never re-opens.
     for i, rule in enumerate(_ordered_rules(process)):
         if getattr(rule, "trigger_kind", None) != "column":
             continue
-        if getattr(rule, "trigger_column", None) != column:
+        if column not in _trigger_columns(rule):
             continue
         rk = _rule_key(rule, i)
         op = getattr(rule, "trigger_op", "updated")
         already = any(e.get("rule_key") == rk for e in exps)
         if op == "created" and already:
             continue  # 'created' fires once (first fill only)
+        if _trigger_join(rule) == "all":
+            if already:
+                continue  # AND-join fires ONCE per run+rule
+            if not _all_triggers_filled(repo, node, rule):
+                continue  # the set is not complete yet -> do not fire
         if _fire_rule(exps, rule, i, now=now):
             fired.add(rk)
 
@@ -371,16 +404,24 @@ def _satisfy_and_cascade(
         for i, rule in enumerate(ordered):
             if getattr(rule, "trigger_kind", None) != "column":
                 continue
-            if getattr(rule, "trigger_column", None) != col:
+            if col not in _trigger_columns(rule):
                 continue
             rk = _rule_key(rule, i)
             if rk in fired:
+                continue
+            # a rule already opened for this run must not re-open (AND-join fires
+            # once; the per-(rule_key, column) guard covers any-join too).
+            if any(e.get("rule_key") == rk for e in exps):
+                fired.add(rk)
                 continue
             if getattr(rule, "trigger_op", "updated") not in ("created", "created-or-updated"):
                 fired.add(rk)  # not eligible on a cascade observation; mark seen
                 continue
             # a downstream column rule fires once its trigger column is filled.
             if not is_filled(repo.get_value(node, col)):
+                continue
+            # AND-join: cascade-fire only when EVERY trigger column is filled.
+            if _trigger_join(rule) == "all" and not _all_triggers_filled(repo, node, rule):
                 continue
             if _fire_rule(exps, rule, i, now=now):
                 # its expected columns may be pre-filled -> re-check them.
@@ -465,8 +506,16 @@ def _maybe_complete(
         if rk in fired_keys:
             continue
         if getattr(rule, "trigger_kind", None) == "column":
-            tcol = getattr(rule, "trigger_column", None)
-            if tcol is not None and is_filled(repo.get_value(node, tcol)):
+            cols = _trigger_columns(rule)
+            if not cols:
+                continue
+            if _trigger_join(rule) == "all":
+                # an AND-join is triggerable only when ALL columns are filled; a
+                # partial set can never fire, so it never blocks quiescence.
+                triggerable = _all_triggers_filled(repo, node, rule)
+            else:
+                triggerable = any(is_filled(repo.get_value(node, c)) for c in cols)
+            if triggerable:
                 return []  # a triggerable rule has not fired -> not quiescent
     run = repo.get_process_run(process.name, node)
     if run is not None and run.get("status") == "completed":
@@ -571,7 +620,7 @@ def dashboard_aggregate(
             {
                 "rule_key": _rule_key(r, i),
                 "trigger_kind": getattr(r, "trigger_kind", None),
-                "trigger_column": getattr(r, "trigger_column", None),
+                "trigger_columns": _trigger_columns(r),
                 "expected_columns": list(getattr(r, "expected_columns", None) or []),
             }
             for i, r in enumerate(ordered)
@@ -579,6 +628,9 @@ def dashboard_aggregate(
     )
     within_by_rule = {_rule_key(r, i): int(getattr(r, "within_seconds", 0) or 0)
                       for i, r in enumerate(ordered)}
+    # rule_key -> join mode ('all' | 'any') so the FE can group AND-join edges.
+    join_by_rule = {_rule_key(r, i): _trigger_join(r) if getattr(r, "trigger_kind", None) == "column" else "any"
+                    for i, r in enumerate(ordered)}
 
     total_active = sum(1 for r in runs if r.get("status") == "active")
     total_completed = sum(1 for r in runs if r.get("status") == "completed")
@@ -607,6 +659,7 @@ def dashboard_aggregate(
                 "from_kind": edge.from_kind,
                 "from_column": None if edge.from_node == START else edge.from_node,
                 "to_column": edge.to,
+                "join": join_by_rule.get(edge.rule_key, "any"),
                 "within_seconds": within_by_rule.get(edge.rule_key, 0),
                 "pending_count": pending,
                 "satisfied_count": satisfied,

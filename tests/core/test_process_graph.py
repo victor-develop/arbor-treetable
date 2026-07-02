@@ -170,3 +170,75 @@ def test_would_create_cycle_true_when_edge_closes_loop():
 def test_would_create_cycle_false_for_acyclic_addition():
     existing = [_col("ab", "colA", ["colB"])]
     assert would_create_cycle(existing, _col("bc", "colB", ["colC"])) is False
+
+
+# ---------------------------------------------------------------------------
+# AND-join (fan-in trigger): trigger_columns + trigger_join
+# ---------------------------------------------------------------------------
+def _all(rk, triggers, cols):
+    return {"rule_key": rk, "trigger_kind": "column",
+            "trigger_columns": list(triggers), "trigger_join": "all",
+            "trigger_op": "created-or-updated", "expected_columns": list(cols)}
+
+
+def test_all_join_contributes_edge_from_each_trigger_column():
+    # colA AND colB both filled -> expect colC. TWO edges share the rule_key.
+    edges = build_edges([_all("join", ["colA", "colB"], ["colC"])])
+    assert {(e.from_node, e.to) for e in edges} == {("colA", "colC"), ("colB", "colC")}
+    assert all(e.rule_key == "join" for e in edges)
+
+
+def test_all_join_fanout_edge_product():
+    # (colA AND colB) -> (colC AND colD): 2 triggers x 2 expected = 4 edges.
+    edges = build_edges([_all("j", ["colA", "colB"], ["colC", "colD"])])
+    assert {(e.from_node, e.to) for e in edges} == {
+        ("colA", "colC"), ("colA", "colD"), ("colB", "colC"), ("colB", "colD"),
+    }
+
+
+def test_all_join_valid_dag_passes():
+    rules = [_row("s", ["colA", "colB"]), _all("j", ["colA", "colB"], ["colC"])]
+    v = validate_rules(rules)
+    assert v.ok and v.warnings == []
+
+
+def test_all_join_self_trigger_rejected():
+    # a trigger column that is also its own expected column.
+    v = validate_rules([_all("bad", ["colA", "colB"], ["colB"])])
+    assert not v.ok
+    assert "self-loop" in _codes(v)
+
+
+def test_all_join_unreachable_trigger_warns():
+    # colB is never produced by any upstream edge -> the join can never complete.
+    rules = [_row("s", ["colA"]), _all("j", ["colA", "colB"], ["colC"])]
+    v = validate_rules(rules)
+    assert v.ok  # acyclic
+    unreachable = {w["column"] for w in v.warnings if w["code"] == "unreachable"}
+    assert "colB" in unreachable
+
+
+def test_all_join_cycle_over_trigger_edges_rejected():
+    # colC expects colA back -> colA -> ... -> colC -> colA cycle.
+    rules = [_all("j", ["colA", "colB"], ["colC"]), _col("ca", "colC", ["colA"])]
+    v = validate_rules(rules)
+    assert not v.ok
+    assert "cycle" in _codes(v)
+
+
+def test_single_trigger_column_normalizes_to_trigger_columns():
+    # back-compat: a rule with only trigger_column still yields one edge.
+    edges = build_edges([_col("ab", "colA", ["colB"])])
+    assert edges == [Edge("ab", "column", "colA", "colB")]
+
+
+def test_all_join_missing_trigger_columns_rejected():
+    v = validate_rules([{"trigger_kind": "column", "trigger_join": "all",
+                         "trigger_columns": [], "expected_columns": ["colC"]}])
+    assert "missing-trigger-column" in _codes(v)
+
+
+def test_bad_trigger_join_rejected():
+    v = validate_rules([{"trigger_kind": "column", "trigger_column": "colA",
+                         "trigger_join": "either", "expected_columns": ["colB"]}])
+    assert "bad-trigger-join" in _codes(v)

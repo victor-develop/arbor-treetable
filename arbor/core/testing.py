@@ -92,6 +92,9 @@ class _ProcessRule:
     trigger_kind: str  # 'row' | 'column'
     trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
     expected_columns: list[str] = field(default_factory=list)
+    # The trigger SET (1+); ``trigger_column`` is a back-compat alias == [0].
+    trigger_columns: list[str] = field(default_factory=list)
+    trigger_join: str = "any"  # 'any' | 'all'
     trigger_column: Optional[str] = None
     within_seconds: int = 0
     notify_on_expect: bool = True
@@ -515,6 +518,11 @@ class InMemoryRepository:
         enabled = existing.enabled if existing else False
         rules: list[_ProcessRule] = []
         for i, r in enumerate(data.get("rules") or []):
+            # normalize the trigger SET: prefer trigger_columns, else the single
+            # trigger_column alias. Keep trigger_column == the first entry.
+            tcols = [c for c in (r.get("trigger_columns") or []) if c is not None]
+            if not tcols and r.get("trigger_column"):
+                tcols = [r["trigger_column"]]
             rules.append(
                 _ProcessRule(
                     rule_key=r.get("rule_key") or f"r{i}",
@@ -522,7 +530,9 @@ class InMemoryRepository:
                     trigger_kind=r["trigger_kind"],
                     trigger_op=r.get("trigger_op", "created" if r["trigger_kind"] == "row" else "updated"),
                     expected_columns=list(r.get("expected_columns") or []),
-                    trigger_column=r.get("trigger_column"),
+                    trigger_columns=tcols,
+                    trigger_join=r.get("trigger_join") or "any",
+                    trigger_column=tcols[0] if tcols else None,
                     within_seconds=int(r.get("within_seconds") or 0),
                     notify_on_expect=r.get("notify_on_expect", True),
                     label=r.get("label"),

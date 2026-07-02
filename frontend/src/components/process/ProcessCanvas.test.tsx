@@ -238,6 +238,83 @@ describe("ProcessCanvas — edge editing", () => {
   });
 });
 
+describe("ProcessCanvas — AND-join (fan-in)", () => {
+  // Seed two independent triggers into c: a->c and b->c (both plain 'any').
+  const twoInto = (): ProcessRuleInput[] => [
+    { trigger_kind: "row", trigger_column: null, trigger_op: "created-or-updated", expected_columns: ["a", "b"] },
+    { trigger_kind: "column", trigger_column: "a", trigger_op: "created-or-updated", expected_columns: ["c"] },
+    { trigger_kind: "column", trigger_column: "b", trigger_op: "created-or-updated", expected_columns: ["c"] },
+  ];
+
+  it("shows an ANY/ALL join toggle only on a target with >1 incoming trigger", () => {
+    render(<Harness initial={twoInto()} />);
+    // c has two incoming (a->c, b->c) => toggle present, defaults to ANY.
+    const toggle = screen.getByTestId("canvas-join-toggle-c");
+    expect(toggle).toHaveTextContent(/any/i);
+    expect(toggle).toHaveAttribute("data-join", "any");
+    // a and b each have a single incoming (START) => no toggle.
+    expect(screen.queryByTestId("canvas-join-toggle-a")).toBeNull();
+    expect(screen.queryByTestId("canvas-join-toggle-b")).toBeNull();
+  });
+
+  it("toggling ALL merges the two triggers into ONE rule (trigger_columns=[a,b], join=all)", async () => {
+    const spy = vi.fn();
+    render(<Harness initial={twoInto()} onChangeSpy={spy} />);
+    await click("canvas-join-toggle-c");
+    const last = spy.mock.calls[spy.mock.calls.length - 1][0] as ProcessRuleInput[];
+    // The two a->c / b->c rules collapse to one AND-join; START->a,b rule remains.
+    const join = last.find((r) => r.expected_columns.includes("c"));
+    expect(join).toBeDefined();
+    expect(join!.trigger_join).toBe("all");
+    expect(join!.trigger_columns).toEqual(["a", "b"]);
+    expect(join!.expected_columns).toEqual(["c"]);
+    // exactly one rule targets c.
+    expect(last.filter((r) => r.expected_columns.includes("c"))).toHaveLength(1);
+  });
+
+  it("renders the ∧ AND marker on both converging legs once ALL is set", async () => {
+    render(<Harness initial={twoInto()} />);
+    await click("canvas-join-toggle-c");
+    expect(screen.getByTestId("canvas-edge-join-a-c")).toBeInTheDocument();
+    expect(screen.getByTestId("canvas-edge-join-b-c")).toBeInTheDocument();
+    // the toggle now reads ALL.
+    expect(screen.getByTestId("canvas-join-toggle-c")).toHaveTextContent(/all/i);
+  });
+
+  it("toggling back to ANY splits the AND-join into two separate rules", async () => {
+    const spy = vi.fn();
+    render(<Harness initial={twoInto()} onChangeSpy={spy} />);
+    await click("canvas-join-toggle-c"); // -> ALL
+    await click("canvas-join-toggle-c"); // -> ANY again
+    const last = spy.mock.calls[spy.mock.calls.length - 1][0] as ProcessRuleInput[];
+    const toC = last.filter((r) => r.expected_columns.includes("c"));
+    expect(toC).toHaveLength(2);
+    expect(toC.every((r) => r.trigger_join === undefined || r.trigger_join === "any")).toBe(true);
+    // sources restored to the two independent single-column triggers.
+    expect(toC.map((r) => r.trigger_column).sort()).toEqual(["a", "b"]);
+  });
+
+  it("hydrates an existing ALL-join def as one merged, ALL-marked join", () => {
+    render(
+      <Harness
+        initial={[
+          { trigger_kind: "row", trigger_column: null, trigger_op: "created-or-updated", expected_columns: ["a", "b"] },
+          {
+            trigger_kind: "column",
+            trigger_columns: ["a", "b"],
+            trigger_join: "all",
+            trigger_op: "created-or-updated",
+            expected_columns: ["c"],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("canvas-join-toggle-c")).toHaveTextContent(/all/i);
+    expect(screen.getByTestId("canvas-edge-join-a-c")).toBeInTheDocument();
+    expect(screen.getByTestId("canvas-edge-join-b-c")).toBeInTheDocument();
+  });
+});
+
 describe("ProcessCanvas — validation surfacing", () => {
   it("renders an unreachable-from-START warning for an orphan chain", () => {
     // START->a is reachable; b->c is an orphan chain (nothing feeds b).

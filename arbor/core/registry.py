@@ -302,6 +302,11 @@ _S_DEFINE_PROCESS = {
                     "label": {"type": "string"},
                     "trigger_kind": {"enum": ["row", "column"]},
                     "trigger_column": {"type": ["string", "null"]},
+                    "trigger_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "trigger_join": {"enum": ["any", "all"]},
                     "trigger_op": {"enum": ["created", "updated", "created-or-updated"]},
                     "expected_columns": {
                         "type": "array",
