@@ -23,6 +23,24 @@ type EditStage = {
   sla_seconds: number;
 };
 
+// Compact seconds -> "2d 4h" / "3h" / "45m" / "30s" rendering for the per-stage
+// SLA hint, so an owner reads a real duration instead of a raw seconds count
+// (172800 → "2d"). 0 (or unset) means no SLA — the caller decides whether to show.
+function formatSla(seconds: number): string {
+  if (!seconds || seconds <= 0) return "";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const parts: string[] = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  if (s && !d && !h) parts.push(`${s}s`); // only show seconds for sub-hour SLAs
+  // Keep it to the two most-significant units so the hint stays a glance.
+  return parts.slice(0, 2).join(" ");
+}
+
 // Seed the editor from an existing definition (hydrate) or start empty.
 function seed(process: ProcessDef | null, columns: SnapshotColumn[]): EditStage[] {
   if (!process) return [];
@@ -59,9 +77,12 @@ export function ProcessConfigPanel({
   const [pick, setPick] = useState("");
 
   // Columns not yet used as a stage — the only ones the picker offers (a column
-  // fills exactly one stage).
+  // fills exactly one stage). The sheet's LABEL/title column is excluded: it is
+  // set by the row creator and is always filled, so a label stage would
+  // auto-complete instantly (a no-op stage). Filter it the same way we filter
+  // already-staged columns.
   const staged = new Set(stages.map((s) => s.column));
-  const available = columns.filter((c) => !staged.has(c.name));
+  const available = columns.filter((c) => !staged.has(c.name) && !c.is_label);
 
   const addStage = () => {
     if (!pick) return;
@@ -110,38 +131,56 @@ export function ProcessConfigPanel({
 
   return (
     <section className="arbor-process-config" data-testid="process-config" data-sheet={sheet}>
+      {/* The modal chrome already renders a "Process" title bar + ✕, so this
+          header carries only the status pill (not a duplicate <h2>). */}
       <header className="arbor-pc-header">
-        <h2>Process</h2>
+        <span className="arbor-pc-header-label">Stages</span>
         {process?.enabled ? (
           <span className="arbor-pc-state is-enabled" data-testid="pc-state">
-            enabled
+            Enabled
           </span>
         ) : process ? (
           <span className="arbor-pc-state is-disabled" data-testid="pc-state">
-            disabled
+            Disabled
           </span>
         ) : null}
       </header>
 
+      {/* One-line mental-model explainer: order IS fill order, and a stage
+          completes when its column receives a value (a default counts), which
+          notifies the next stage's owner. Both a UX and a correctness fix. */}
+      <p className="arbor-pc-hint" data-testid="pc-hint">
+        Stages fill left to right. A stage completes when its column gets a value
+        (a default counts), which notifies the next stage's owner.
+      </p>
+
       {stages.length === 0 ? (
         <p className="arbor-pc-empty" data-testid="pc-empty">
-          No stages yet — add columns in fill order.
+          No stages yet. Add columns below in the order they should be filled.
         </p>
       ) : (
         <ol className="arbor-pc-stages" data-testid="pc-stages">
           {stages.map((s, i) => (
             <li key={s.column} className="arbor-pc-stage" data-testid={`pc-stage-${i}`} data-column={s.column}>
-              <span className="arbor-pc-stage-idx">{i + 1}</span>
+              <span className="arbor-pc-stage-idx" aria-hidden="true">
+                {i + 1}
+              </span>
               <span className="arbor-pc-stage-label">{s.label}</span>
               <label className="arbor-pc-stage-sla">
                 <span className="arbor-field-label">SLA (s)</span>
                 <input
                   type="number"
                   min={0}
+                  className="arbor-field-narrow"
                   data-testid={`pc-stage-sla-${i}`}
                   value={s.sla_seconds}
                   onChange={(e) => setSla(i, Math.max(0, Number(e.target.value) || 0))}
                 />
+                {/* Friendly duration echo so a raw seconds SLA reads as a real
+                    due window (e.g. 172800 → "2d"). Hidden when there's no SLA. */}
+                <span className="arbor-pc-stage-sla-hint" data-testid={`pc-stage-sla-hint-${i}`}>
+                  {s.sla_seconds > 0 ? formatSla(s.sla_seconds) : "no SLA"}
+                </span>
               </label>
               <span className="arbor-pc-stage-move">
                 {i > 0 && (
@@ -198,19 +237,35 @@ export function ProcessConfigPanel({
       </div>
 
       <footer className="arbor-pc-footer">
-        <button type="button" data-testid="pc-define" disabled={stages.length === 0} onClick={define}>
-          Save process
-        </button>
         {process &&
           (process.enabled ? (
-            <button type="button" data-testid="pc-disable" onClick={onDisable}>
+            <button
+              type="button"
+              className="arbor-pc-toggle"
+              data-testid="pc-disable"
+              onClick={onDisable}
+            >
               Disable
             </button>
           ) : (
-            <button type="button" data-testid="pc-enable" onClick={onEnable}>
+            <button
+              type="button"
+              className="arbor-pc-toggle"
+              data-testid="pc-enable"
+              onClick={onEnable}
+            >
               Enable
             </button>
           ))}
+        <button
+          type="button"
+          className="arbor-pc-save"
+          data-testid="pc-define"
+          disabled={stages.length === 0}
+          onClick={define}
+        >
+          Save process
+        </button>
       </footer>
     </section>
   );

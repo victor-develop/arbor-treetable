@@ -1,7 +1,7 @@
 // URL-driven routing (no router dependency — matches the minimalist ?sheet= /
-// SheetList pattern). Pure + side-effect-free so BOTH entrypoints (the public
-// index.tsx and the SSO build's index.aftership.tsx) share ONE route resolver
-// without importing a module that mounts React.
+// SheetList pattern). Pure + side-effect-free so the open-source entry AND any
+// downstream build variant can share ONE route resolver without importing a
+// module that mounts React.
 //   * ?inbox (or ?page=inbox)  → the per-user cross-sheet InboxPage
 //   * ?sheet=X&dashboard=1      → that sheet's process ProcessDashboard
 //   * ?sheet=X                  → the connected App (Proposed entry view)

@@ -46,8 +46,233 @@ def _seed(row_scope: str = "root-children", slas=(0, 0, 0), enabled: bool = True
     return repo, repo.get_process("S")
 
 
+def _seed_one(column_owner=OWNER_A, is_label=False):
+    """A 1-stage process (colA) on a sheet with one row P1 (root-child)."""
+    repo = InMemoryRepository()
+    repo.add_sheet("S", structural_owner="root-owner")
+    repo.add_column("colA", "S", "a", column_owner=column_owner, is_label=is_label)
+    repo.add_node("R", "S", parent=None)
+    repo.add_node("P1", "S", parent="R")
+    name = repo.upsert_process({"sheet": "S", "stages": [{"column": "colA"}]})
+    repo.set_process_enabled(name, True)
+    return repo, repo.get_process("S")
+
+
 # ---------------------------------------------------------------------------
-# Start (NODE_CREATED)
+# is_filled predicate — matches the frontend renderStatic empty-check.
+# ---------------------------------------------------------------------------
+def test_is_filled_predicate_matches_frontend_empty_check():
+    # NOT filled: None / "" / [] (and empty tuple).
+    assert P.is_filled(None) is False
+    assert P.is_filled("") is False
+    assert P.is_filled([]) is False
+    assert P.is_filled(()) is False
+    # filled: any non-empty string / list / scalar.
+    assert P.is_filled("x") is True
+    assert P.is_filled(["a"]) is True
+    assert P.is_filled(("a",)) is True
+    # numeric 0 / bool False render to non-empty strings on the grid -> filled.
+    assert P.is_filled(0) is True
+    assert P.is_filled(False) is True
+    assert P.is_filled(0.0) is True
+    # whitespace is a non-empty string -> filled (matches String(value)).
+    assert P.is_filled(" ") is True
+
+
+# ---------------------------------------------------------------------------
+# Start (NODE_CREATED) — FILL-SEMANTICS: auto-advance past leading filled stages
+# ---------------------------------------------------------------------------
+def test_fully_empty_row_starts_at_stage_0():
+    """Baseline: no values at creation -> run starts PENDING at stage 0."""
+    repo, proc = _seed()
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=100)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["status"] == "active"
+    assert run["current_stage_idx"] == 0
+    assert run["stages"][0]["entered_at"] == 100
+    assert run["stages"][0]["filled_at"] is None
+    # only stage-0 owner (A) notified.
+    recips = [n["recipient"] for n in repo.notifications.values()]
+    assert recips == [OWNER_A]
+    assert any(t["kind"] == "started" and t["stage_idx"] == 0 for t in trans)
+
+
+def test_head_label_prefilled_starts_at_first_empty_data_stage():
+    """The head/label cell (stage 0's column) is auto-filled at creation ->
+    the run must NOT get stuck on the label; it starts at the first EMPTY
+    DATA stage and notifies THAT owner (owner B), not owner A."""
+    repo, proc = _seed()
+    # colA is the label/head, populated at row-creation.
+    repo.seed_value("S", "P1", "colA", "Row Title")
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=100)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["status"] == "active"
+    # current stage points at colB (idx 1), the first EMPTY stage — NOT stuck on colA.
+    assert run["current_stage_idx"] == 1
+    # stage 0 was auto-advanced: entered AND filled at creation.
+    assert run["stages"][0]["entered_at"] == 100
+    assert run["stages"][0]["filled_at"] == 100
+    # stage 1 is the active/pending one.
+    assert run["stages"][1]["entered_at"] == 100
+    assert run["stages"][1]["filled_at"] is None
+    # notification targets owner B (first-empty owner), NOT owner A.
+    recips = {n["recipient"] for n in repo.notifications.values()}
+    assert recips == {OWNER_B}
+    assert OWNER_A not in recips
+    assert any(t["kind"] == "started" and t["stage_idx"] == 1 for t in trans)
+    assert any(t["kind"] == "notified" and t["stage_idx"] == 1 for t in trans)
+
+
+def test_data_column_with_nonempty_default_is_skipped_as_filled():
+    """A data column carrying a non-empty DEFAULT at creation is treated as
+    filled and skipped; the run starts at the next empty stage."""
+    repo, proc = _seed()
+    # colA + colB both defaulted at creation; colC empty.
+    repo.seed_value("S", "P1", "colA", "default-a")
+    repo.seed_value("S", "P1", "colB", "default-b")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=50)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["current_stage_idx"] == 2  # colC, the first empty stage
+    assert run["stages"][0]["filled_at"] == 50
+    assert run["stages"][1]["filled_at"] == 50
+    assert run["stages"][2]["filled_at"] is None
+    recips = {n["recipient"] for n in repo.notifications.values()}
+    assert recips == {OWNER_C}
+
+
+def test_partially_prefilled_row_starts_at_first_empty():
+    """Only stage 0 pre-filled -> starts at stage 1 (first empty)."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "x")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=7)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["current_stage_idx"] == 1
+    assert run["status"] == "active"
+
+
+def test_all_stages_prefilled_completes_run_at_creation_notifying_no_one():
+    """Every stage column filled at creation -> the run COMPLETES immediately,
+    notifying nobody."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "a")
+    repo.seed_value("S", "P1", "colB", "b")
+    repo.seed_value("S", "P1", "colC", "c")
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=9)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["status"] == "completed"
+    assert run["completed_at"] == 9
+    # every stage entered+filled at creation.
+    assert all(s["filled_at"] == 9 for s in run["stages"])
+    # NO notifications — nobody is waiting on an empty cell.
+    assert len(repo.notifications) == 0
+    kinds = {t["kind"] for t in trans}
+    assert "completed" in kinds
+    assert "notified" not in kinds
+
+
+def test_empty_string_value_is_not_filled_starts_at_that_stage():
+    """A cell set to "" (explicitly empty) is NOT filled -> run starts there."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "")  # explicitly empty
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["current_stage_idx"] == 0  # colA empty -> starts at stage 0
+    recips = {n["recipient"] for n in repo.notifications.values()}
+    assert recips == {OWNER_A}
+
+
+def test_empty_list_value_is_not_filled():
+    """A multiselect cell set to [] is NOT filled -> run starts there."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", [])
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    assert repo.get_process_run(proc.name, "P1")["current_stage_idx"] == 0
+
+
+def test_numeric_zero_default_counts_as_filled():
+    """A numeric 0 default renders to "0" on the grid -> filled -> stage skipped."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", 0)
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["current_stage_idx"] == 1  # colA (=0) filled -> starts at colB
+    assert run["stages"][0]["filled_at"] == 1
+
+
+def test_single_stage_label_prefilled_completes_immediately():
+    """A 1-stage process whose only column is a pre-filled label completes at
+    creation (all stages filled)."""
+    repo, proc = _seed_one(is_label=True)
+    repo.seed_value("S", "P1", "colA", "The Label")
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["status"] == "completed"
+    assert len(repo.notifications) == 0
+    assert any(t["kind"] == "completed" for t in trans)
+
+
+def test_prefilled_start_then_fill_current_stage_advances():
+    """After a leading auto-advance, filling the ACTUAL current stage still
+    advances via the normal advance-on-fill path (later stages unchanged)."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "head")  # start lands on colB
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    assert repo.get_process_run(proc.name, "P1")["current_stage_idx"] == 1
+    # fill colB (the current stage) -> advance to colC.
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colB"}, now=2)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["current_stage_idx"] == 2
+    assert run["stages"][1]["filled_at"] == 2
+    # fill colC (terminal) -> complete.
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colC"}, now=3)
+    assert repo.get_process_run(proc.name, "P1")["status"] == "completed"
+
+
+def test_prefilled_start_replay_node_created_is_idempotent():
+    """Replaying NODE_CREATED after a prefilled-start does not create a 2nd run
+    or re-notify."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "head")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    n_after = len(repo.notifications)
+    trans = P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=2)
+    assert trans == []
+    runs = [r for r in repo.process_runs.values() if r["node"] == "P1"]
+    assert len(runs) == 1
+    assert len(repo.notifications) == n_after
+
+
+def test_prefilled_all_but_last_starts_at_terminal_stage():
+    """Leading stages filled, only the terminal stage empty -> starts pending at
+    the terminal stage; filling it completes."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colA", "a")
+    repo.seed_value("S", "P1", "colB", "b")
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = repo.get_process_run(proc.name, "P1")
+    assert run["status"] == "active"
+    assert run["current_stage_idx"] == 2
+    recips = {n["recipient"] for n in repo.notifications.values()}
+    assert recips == {OWNER_C}
+    P.on_event(repo, proc, {"type": "NODE_VALUE_UPDATED", "node": "P1", "column": "colC"}, now=2)
+    assert repo.get_process_run(proc.name, "P1")["status"] == "completed"
+
+
+def test_prefilled_middle_stage_still_starts_at_first_empty_not_middle():
+    """If stage 0 empty but stage 1 pre-filled, the LEADING-stage rule only skips
+    a CONTIGUOUS filled prefix — an empty stage 0 stops the scan there."""
+    repo, proc = _seed()
+    repo.seed_value("S", "P1", "colB", "b")  # stage 1 filled, stage 0 empty
+    P.on_event(repo, proc, {"type": "NODE_CREATED", "node": "P1"}, now=1)
+    run = repo.get_process_run(proc.name, "P1")
+    # first empty is stage 0 -> start there (do not jump the empty leading stage).
+    assert run["current_stage_idx"] == 0
+    recips = {n["recipient"] for n in repo.notifications.values()}
+    assert recips == {OWNER_A}
+
+
+# ---------------------------------------------------------------------------
+# Start (NODE_CREATED) — original stage-0 case retained
 # ---------------------------------------------------------------------------
 def test_node_created_starts_run_at_stage_0_and_notifies_owner_a():
     repo, proc = _seed()
