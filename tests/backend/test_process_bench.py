@@ -206,26 +206,40 @@ def test_fill_dag_in_order_completes_and_dashboard_edges(fx):
     assert exps[("stageB", fx["columns"]["notes"])].satisfied_at is None
     assert len(_process_notifs("B")) == 1
 
+    # Dashboard edges: ``enable_process`` BACKFILLS a run for every already-existing
+    # in-scope root-child (P1, P2), so sheet-wide totals are NOT 1/0 — assert on the
+    # SPECIFIC edges' STRUCTURE + on THIS node's run/expectations, not the aggregate
+    # counts (which fold in the backfilled runs).
     dash = api.process_dashboard(sheet=fx["sheet"])
-    assert dash["total_active"] == 1 and dash["total_completed"] == 0
-    # edge stageB (budget -> notes) has one pending expectation.
+    # edge stageB (budget -> notes) exists ONLY for this node's cascade so far, and
+    # its structure (from budget -> notes) is stable regardless of backfill.
     edgeB = next(
         e for e in dash["edges"]
         if e["rule_key"] == "stageB" and e["to_column"] == fx["columns"]["notes"]
     )
     assert edgeB["from_column"] == fx["columns"]["budget"]
-    assert edgeB["pending_count"] == 1 and edgeB["satisfied_count"] == 0
-    # edge stageA (START -> budget) is satisfied.
+    # edge stageA (START -> budget) is a row trigger (structure is backfill-stable).
     edgeA = next(e for e in dash["edges"] if e["rule_key"] == "stageA")
     assert edgeA["from_kind"] == "row" and edgeA["from_column"] is None
-    assert edgeA["satisfied_count"] == 1
+    # THIS node's run is the one under test: stageA satisfied + stageB pending; and
+    # it is the run the stageB edge drill-down surfaces as pending on notes.
+    exps_now = _run_expectations(run["name"])
+    assert exps_now[("stageA", fx["columns"]["budget"])].satisfied_at is not None
+    assert exps_now[("stageB", fx["columns"]["notes"])].satisfied_at is None
+    drill = api.list_process_runs(sheet=fx["sheet"], rule_key="stageB", status="active")
+    assert node in {r["node"] for r in drill}
 
-    # B fills notes (stageB) -> terminal completion (no further notify).
+    # B fills notes (stageB) -> terminal completion of THIS run (no further notify).
+    total_completed_before = dash["total_completed"]
     h.login_as("B")
     api.update_cell(sheet=fx["sheet"], node=node, column=fx["columns"]["notes"], value="done")
     assert _run(process["name"], node, "status")["status"] == "completed"
+    # This node's run flipped active -> completed: the completed tally grew by
+    # exactly one (relative), and this run is gone from the active drill-down.
     dash2 = api.process_dashboard(sheet=fx["sheet"])
-    assert dash2["total_completed"] == 1 and dash2["throughput"] == 1
+    assert dash2["total_completed"] == total_completed_before + 1
+    still_active = api.list_process_runs(sheet=fx["sheet"], rule_key="stageB", status="active")
+    assert node not in {r["node"] for r in still_active}
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +323,140 @@ def test_inbox_shows_process_notification_to_expected_owner(fx):
     assert proc_items
     assert any(i["sheet"] == fx["sheet"] and i["node"] == node for i in proc_items)
     assert proc_items[0]["event_type"] == "PROCESS_STAGE_ASSIGNED"
+
+
+# ---------------------------------------------------------------------------
+# "AND" fan-out DAG on the FULLY WIRED site: row -> expect budget (stageA, owner
+# C) within T; on budget -> expect notes AND status (stageBC, an 'and' set sharing
+# ONE window, owners B + C) within T2. The column EXPECTED by rule 1 (budget) is
+# the TRIGGER of rule 2 — and rule 2 opens TWO expectations at once.
+# ---------------------------------------------------------------------------
+def _and_rules(fx, within=(0, 0)):
+    """row -> budget (stageA) within within[0];
+    on budget -> {notes, status} (stageBC, an 'and' set) within within[1]."""
+    return [
+        {
+            "rule_key": "stageA",
+            "trigger_kind": "row",
+            "trigger_op": "created",
+            "expected_columns": [fx["columns"]["budget"]],
+            "within_seconds": within[0],
+        },
+        {
+            "rule_key": "stageBC",
+            "trigger_kind": "column",
+            "trigger_column": fx["columns"]["budget"],
+            "trigger_op": "created-or-updated",
+            # two expected columns sharing ONE window => an 'and' rule.
+            "expected_columns": [fx["columns"]["notes"], fx["columns"]["status"]],
+            "within_seconds": within[1],
+        },
+    ]
+
+
+def _define_enable_and(fx, within=(0, 0)):
+    h.login_as("A")
+    api.define_process(sheet=fx["sheet"], rules=_and_rules(fx, within), title="Fill+review")
+    api.enable_process(sheet=fx["sheet"])
+
+
+def test_and_rule_prefilled_budget_opens_both_expectations_and_notifies_both_owners(fx):
+    """Adding a node WITH budget prefilled satisfies stageA at creation and cascades
+    the budget trigger, opening BOTH stageBC expectations (notes AND status) at once
+    — each expected column's owner notified once (B for notes, C for status)."""
+    _define_enable_and(fx)
+    process = api.get_process(sheet=fx["sheet"])
+
+    h.login_as("A")
+    node = api.add_node(
+        sheet=fx["sheet"], parent=fx["nodes"]["R"], values={"budget": 500}
+    )["data"]["node"]
+
+    run = _run(process["name"], node, "status")
+    assert run is not None and run["status"] == "active"
+    exps = _run_expectations(run["name"])
+    # stageA satisfied at creation (prefilled budget counts as filled) ...
+    assert exps[("stageA", fx["columns"]["budget"])].satisfied_at is not None
+    # ... and the 'and' rule opened BOTH expectations, still open.
+    notes_exp = exps[("stageBC", fx["columns"]["notes"])]
+    status_exp = exps[("stageBC", fx["columns"]["status"])]
+    assert notes_exp.satisfied_at is None and notes_exp.breached == 0
+    assert status_exp.satisfied_at is None and status_exp.breached == 0
+    # both expected owners were notified: B owns notes, C owns status.
+    assert len(_process_notifs("B")) == 1  # notes owner
+    # C owns budget too, but budget was satisfied-at-creation (no notify); C's ONE
+    # process notification is the OPEN status expectation.
+    assert len(_process_notifs("C")) == 1
+
+
+def test_and_rule_partial_then_full_fill_completes_run(fx):
+    """Filling ONE leg of the 'and' set (notes) leaves the run active with the other
+    leg (status) still pending; filling the second leg completes the run."""
+    _define_enable_and(fx)
+    process = api.get_process(sheet=fx["sheet"])
+
+    h.login_as("A")
+    node = api.add_node(sheet=fx["sheet"], parent=fx["nodes"]["R"])["data"]["node"]
+
+    # C fills budget (stageA) -> satisfy stageA, open BOTH stageBC legs.
+    h.login_as("C")
+    api.update_cell(sheet=fx["sheet"], node=node, column=fx["columns"]["budget"], value=9)
+    exps = _run_expectations(run_name := _run(process["name"], node, "name")["name"])
+    assert exps[("stageBC", fx["columns"]["notes"])].satisfied_at is None
+    assert exps[("stageBC", fx["columns"]["status"])].satisfied_at is None
+
+    # B fills notes (one 'and' leg) -> run still active (status leg unmet).
+    h.login_as("B")
+    api.update_cell(sheet=fx["sheet"], node=node, column=fx["columns"]["notes"], value="ok")
+    assert _run(process["name"], node, "status")["status"] == "active"
+    exps = _run_expectations(run_name)
+    assert exps[("stageBC", fx["columns"]["notes"])].satisfied_at is not None
+    assert exps[("stageBC", fx["columns"]["status"])].satisfied_at is None
+
+    # C fills status (the last leg) -> both legs satisfied -> run completed.
+    h.login_as("C")
+    api.update_cell(sheet=fx["sheet"], node=node, column=fx["columns"]["status"], value="done")
+    assert _run(process["name"], node, "status")["status"] == "completed"
+    exps = _run_expectations(run_name)
+    assert exps[("stageBC", fx["columns"]["status"])].satisfied_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Server-side DAG authority: a cyclic / self-looping defineProcess is REJECTED
+# by the pure ``process_graph.validate_rules`` BEFORE any write (risk #2). The
+# executor funnel does not translate this into a 4xx wrapper (it is not a
+# SchemaValidationError), so the pure ``ValidationError`` propagates — the point
+# is the write is blocked and nothing persists.
+# ---------------------------------------------------------------------------
+def test_cyclic_define_process_rejected_and_persists_nothing(fx):
+    from arbor.core.process_graph import ValidationError
+
+    h.login_as("A")
+    cyclic = [
+        {"rule_key": "ab", "trigger_kind": "column",
+         "trigger_column": fx["columns"]["budget"], "trigger_op": "created-or-updated",
+         "expected_columns": [fx["columns"]["notes"]]},
+        {"rule_key": "ba", "trigger_kind": "column",
+         "trigger_column": fx["columns"]["notes"], "trigger_op": "created-or-updated",
+         "expected_columns": [fx["columns"]["budget"]]},
+    ]
+    with pytest.raises(ValidationError):
+        api.define_process(sheet=fx["sheet"], rules=cyclic, title="Loop")
+    # the cyclic set never became a process definition.
+    assert api.get_process(sheet=fx["sheet"]) is None
+
+
+def test_self_loop_define_process_rejected(fx):
+    """A rule whose trigger column is also one of its own expected columns is a
+    self-loop — rejected by the server DAG authority."""
+    from arbor.core.process_graph import ValidationError
+
+    h.login_as("A")
+    self_loop = [
+        {"rule_key": "loop", "trigger_kind": "column",
+         "trigger_column": fx["columns"]["budget"], "trigger_op": "created-or-updated",
+         "expected_columns": [fx["columns"]["budget"]]},
+    ]
+    with pytest.raises(ValidationError):
+        api.define_process(sheet=fx["sheet"], rules=self_loop, title="Self")
+    assert api.get_process(sheet=fx["sheet"]) is None
