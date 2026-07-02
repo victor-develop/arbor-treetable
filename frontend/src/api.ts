@@ -594,6 +594,33 @@ export type ArborClient = {
   // The viewer's cross-sheet in-app notifications (the Inbox page). Self-scoped
   // server-side to the actor.
   inbox?: () => Promise<InboxItem[]>;
+  // Notification webhooks (Feature: webhooks) — a sheet-admin/structural-owner
+  // surface. register returns the endpoint view + the signing `secret` ONCE (it is
+  // never echoed by list); update never rotates the secret; test fires a signed
+  // ping through the real delivery engine. All optional so mocked clients
+  // implement only what they exercise; the server SSRF-validates + admin-gates.
+  registerWebhook?: (params: {
+    url: string;
+    sheet?: string | null;
+    label?: string;
+    notification_sources?: string[];
+    event_types?: string[];
+    scope?: "sheet" | "branch" | "column";
+    target?: string | null;
+  }) => Promise<WebhookEndpointView>;
+  listWebhooks?: (sheet?: string) => Promise<WebhookEndpointView[]>;
+  updateWebhook?: (
+    endpoint: string,
+    patch: {
+      url?: string;
+      label?: string;
+      active?: boolean;
+      notification_sources?: string[];
+      event_types?: string[];
+    },
+  ) => Promise<WebhookEndpointView>;
+  deleteWebhook?: (endpoint: string) => Promise<{ ok: boolean }>;
+  testWebhook?: (endpoint: string) => Promise<{ delivery: string | null; status: string | null }>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   agentChat: (
@@ -826,6 +853,23 @@ export const api: ArborClient = {
     if (!res.ok) throw new Error(`inbox failed: ${res.status}`);
     return unwrap<InboxItem[]>(await res.json());
   },
+
+  // Webhook registration surface — register/update/test/delete funnel through
+  // post(); list is a GET (mirrors listNotifications' header + ?qs pattern). The
+  // server admin-gates + SSRF-validates; a 4xx surfaces as a thrown Error.
+  registerWebhook: (params) => post<WebhookEndpointView>("arbor.register_webhook", params),
+  listWebhooks: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = sheet ? `?${new URLSearchParams({ sheet }).toString()}` : "";
+    const res = await fetchImpl(`/api/method/arbor.list_webhooks${qs}`, { headers });
+    if (!res.ok) throw new Error(`list_webhooks failed: ${res.status}`);
+    return unwrap<WebhookEndpointView[]>(await res.json());
+  },
+  updateWebhook: (endpoint, patch) =>
+    post<WebhookEndpointView>("arbor.update_webhook", { endpoint, ...patch }),
+  deleteWebhook: (endpoint) => post<{ ok: boolean }>("arbor.delete_webhook", { endpoint }),
+  testWebhook: (endpoint) =>
+    post<{ delivery: string | null; status: string | null }>("arbor.test_webhook", { endpoint }),
 
   agentChat: async (sheet, message, onFrame) => {
     const headers = {

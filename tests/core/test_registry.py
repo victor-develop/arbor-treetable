@@ -182,6 +182,25 @@ def test_process_caps_are_meta_llm_exposed_emit_column_config():
     )
 
 
+# --- webhook registration shims (Area 3, WS-A3c) ---------------------------
+def test_webhook_registration_methods_are_not_registry_capabilities():
+    """The webhook registration surface (register/list/update/delete/test_webhook)
+    is a plain whitelisted admin surface — NOT registry capabilities and NOT LLM
+    tools (like the comment / draft shims). So the capability count + LLM-tool set
+    are unchanged, and the agent can never reach them."""
+    ids = {c.id for c in all_capabilities()}
+    for shim in ("registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"):
+        assert shim not in ids  # not a capability
+        assert not has_capability(shim)
+    tool_names = {t["function"]["name"] for t in get_llm_tools()}
+    assert tool_names.isdisjoint(
+        {"registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"}
+    )
+    # count is unchanged: the shims added no capability.
+    assert len(all_capabilities()) == 38
+    assert ids == EXPECTED_IDS
+
+
 def test_event_types_closed_set_unchanged():
     """No workstream may extend the closed 11-EventType set."""
     from arbor.core.types import EVENT_TYPES

@@ -27,8 +27,12 @@ Error contracts (api.md):
 from __future__ import annotations
 
 import base64
+import ipaddress
 import re
+import secrets as _secrets
+import socket
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import frappe
 from frappe import _
@@ -725,10 +729,18 @@ def suggest_changes(sheet, changes):
 # process capabilities so the registry→REST reachability contract holds; the
 # dashboard/inbox read shims + the dispatch consumer land in the process wave.
 @frappe.whitelist()
-def define_process(sheet, stages, title=None):
-    return _dispatch(
-        "defineProcess", {"sheet": sheet, "stages": _coerce(stages) or [], "title": title}
-    )
+def define_process(sheet, rules, title=None, row_scope=None):
+    """Upsert the sheet's process DAG from a rule set (process DAG).
+
+    ``rules`` = [{rule_key?, trigger_kind, trigger_column?, trigger_op,
+    expected_columns:[...], within_seconds?, notify_on_expect?, label?}]. Funnels
+    into the ONE executor (registry capability ``defineProcess``); a cyclic /
+    self-looping / structurally-invalid set raises a 400 via the pure
+    ``process_graph.validate_rules``."""
+    params: dict[str, Any] = {"sheet": sheet, "rules": _coerce(rules) or [], "title": title}
+    if row_scope is not None:
+        params["row_scope"] = row_scope
+    return _dispatch("defineProcess", params)
 
 
 @frappe.whitelist()
@@ -756,10 +768,11 @@ def get_process(sheet):
     """The sheet's Arbor Process definition (enabled or not), or ``None``.
 
     ``GET /api/method/arbor.get_process?sheet=…`` →
-    ``{name, sheet, title, enabled, row_scope, start_trigger, sla_breach_notify,
-    stages:[{idx, column, label, sla_seconds, notify_on_enter, owners}]}`` where
-    ``owners`` are the LIVE resolved stage responsibles and ``label`` is redacted
-    (null) when the viewer cannot read that stage's column."""
+    ``{name, sheet, title, enabled, row_scope, sla_breach_notify,
+    rules:[ProcessRuleView]}`` where each rule carries its trigger + expected
+    LABELS (redacted null for a column the viewer cannot read; never the field key),
+    the LIVE-resolved ``expected_owners`` per expected column, and the raw
+    ``expected_columns`` (redacted to ``None`` per element when unreadable)."""
     actor = _actor()
     repo = _repo()
     process = repo.get_process(sheet)
@@ -769,17 +782,40 @@ def get_process(sheet):
 
 
 def _process_view_dict(repo, actor, process):
-    stages = []
-    for st in sorted(process.stages, key=lambda s: s.idx):
-        label, readable = _readable_column_label(repo, process.sheet, actor, st.column)
-        stages.append(
+    rules = []
+    for r in sorted(process.rules, key=lambda x: x.idx):
+        trig_label, trig_readable = _readable_column_label(
+            repo, process.sheet, actor, r.trigger_column
+        )
+        expected_columns: list = []
+        expected_labels: list = []
+        expected_owners: dict[str, Any] = {}
+        for col in r.expected_columns:
+            label, readable = _readable_column_label(repo, process.sheet, actor, col)
+            expected_labels.append(label)
+            if readable:
+                expected_columns.append(col)
+                expected_owners[col] = ", ".join(
+                    sorted(resolve_column_approvers(repo, process.sheet, col))
+                ) or None
+            else:
+                # redact the field key for a column the viewer cannot read.
+                expected_columns.append(None)
+                expected_owners[col] = None
+        rules.append(
             {
-                "idx": st.idx,
-                "column": st.column if readable else None,
-                "label": label,
-                "sla_seconds": st.sla_seconds,
-                "notify_on_enter": st.notify_on_enter,
-                "owners": sorted(resolve_column_approvers(repo, process.sheet, st.column)),
+                "rule_key": r.rule_key,
+                "idx": r.idx,
+                "trigger_kind": r.trigger_kind,
+                "trigger_column": r.trigger_column if trig_readable else None,
+                "trigger_column_label": trig_label,
+                "trigger_op": r.trigger_op,
+                "expected_columns": expected_columns,
+                "expected_labels": expected_labels,
+                "within_seconds": r.within_seconds,
+                "notify_on_expect": bool(r.notify_on_expect),
+                "label": r.label,
+                "expected_owners": expected_owners,
             }
         )
     return {
@@ -788,22 +824,24 @@ def _process_view_dict(repo, actor, process):
         "title": process.title,
         "enabled": bool(process.enabled),
         "row_scope": process.row_scope,
-        "start_trigger": process.start_trigger,
         "sla_breach_notify": bool(process.sla_breach_notify),
-        "stages": stages,
+        "rules": rules,
     }
 
 
 @frappe.whitelist()
 def process_dashboard(sheet):
-    """The kanban/flow metrics for the sheet's process (Area 3).
+    """The flow metrics for the sheet's process DAG (process DAG).
 
     ``GET /api/method/arbor.process_dashboard?sheet=…`` →
-    ``{stages:[{idx, column, label, pending_count, breached_count,
-    avg_enter_to_fill_seconds}], total_active, total_completed, throughput}`` —
+    ``{edges:[{rule_key, from_kind, from_column, from_label, to_column, to_label,
+    within_seconds, pending_count, breached_count, satisfied_count,
+    avg_open_to_satisfy_seconds}], total_active, total_completed, throughput}`` —
     the pure ``arbor.core.process.dashboard_aggregate`` over every run of the
-    sheet. Returns ``None`` when no process is defined. A stage column the viewer
-    cannot read has its LABEL redacted; the structural counts are always safe."""
+    sheet. Returns ``None`` when no process is defined. Each edge's trigger/expected
+    column LABELS are redacted (null) when the viewer cannot read the column (and
+    the column key is nulled with it); the structural counts are always safe. A row
+    (START) trigger carries ``from_column=None`` and ``from_label=None``."""
     from arbor.core import process as _process
     actor = _actor()
     repo = _repo()
@@ -812,53 +850,74 @@ def process_dashboard(sheet):
         return None
     runs = repo.list_process_runs(sheet)
     agg = _process.dashboard_aggregate(process, runs)
-    for st in agg.get("stages", []):
-        label, readable = _readable_column_label(repo, sheet, actor, st.get("column"))
-        st["label"] = label
-        if not readable:
-            st["column"] = None
+    for edge in agg.get("edges", []):
+        # from_column is None for a row (START) trigger — its label stays None.
+        if edge.get("from_column"):
+            from_label, from_readable = _readable_column_label(
+                repo, sheet, actor, edge.get("from_column")
+            )
+            edge["from_label"] = from_label
+            if not from_readable:
+                edge["from_column"] = None
+        else:
+            edge["from_label"] = None
+        to_label, to_readable = _readable_column_label(
+            repo, sheet, actor, edge.get("to_column")
+        )
+        edge["to_label"] = to_label
+        if not to_readable:
+            edge["to_column"] = None
     return agg
 
 
 @frappe.whitelist()
-def list_process_runs(sheet, status=None):
-    """The sheet's process runs (optionally filtered by ``status``) — the kanban
-    column drill-down.
+def list_process_runs(sheet, rule_key=None, column=None, status=None):
+    """The sheet's process runs (optionally filtered) — the flow/edge drill-down.
 
     ``GET /api/method/arbor.list_process_runs?sheet=…&status=active`` →
-    ``[{name, node, node_label, status, current_stage_idx, started_at,
-    completed_at, stages:[{stage_idx, column, entered_at, filled_at, due_at,
-    breached}]}]``. Carries node/column LABELS (redacted when unreadable), NEVER
-    a cell VALUE."""
+    ``[{name, process, sheet, node, node_label, status, started_at, completed_at,
+    expectations:[{rule_key, expected_column, to_label, opened_at, satisfied_at,
+    due_at, breached}]}]``. Optional ``rule_key`` / ``column`` narrow to runs that
+    carry an expectation on that rule / expected column (the edge drill-down).
+    Carries node/column LABELS (redacted when unreadable), NEVER a cell VALUE."""
     actor = _actor()
     repo = _repo()
     label_col = next((c.name for c in repo.list_columns(sheet) if c.is_label), None)
     out = []
     for run in repo.list_process_runs(sheet, status=status):
-        stages = []
-        for s in run.get("stages") or []:
-            label, readable = _readable_column_label(repo, sheet, actor, s.get("column"))
-            stages.append(
+        exps = run.get("expectations") or []
+        # Edge drill-down filters: keep the run iff it carries a matching expectation.
+        if rule_key is not None and not any(e.get("rule_key") == rule_key for e in exps):
+            continue
+        if column is not None and not any(e.get("expected_column") == column for e in exps):
+            continue
+        expectations = []
+        for e in exps:
+            label, readable = _readable_column_label(
+                repo, sheet, actor, e.get("expected_column")
+            )
+            expectations.append(
                 {
-                    "stage_idx": s.get("stage_idx"),
-                    "column": s.get("column") if readable else None,
-                    "column_label": label,
-                    "entered_at": s.get("entered_at"),
-                    "filled_at": s.get("filled_at"),
-                    "due_at": s.get("due_at"),
-                    "breached": bool(s.get("breached")),
+                    "rule_key": e.get("rule_key"),
+                    "expected_column": e.get("expected_column") if readable else None,
+                    "to_label": label,
+                    "opened_at": e.get("opened_at"),
+                    "satisfied_at": e.get("satisfied_at"),
+                    "due_at": e.get("due_at"),
+                    "breached": bool(e.get("breached")),
                 }
             )
         out.append(
             {
                 "name": run.get("name"),
+                "process": run.get("process"),
+                "sheet": run.get("sheet"),
                 "node": run.get("node"),
                 "node_label": _node_label(repo, sheet, label_col, run.get("node")),
                 "status": run.get("status"),
-                "current_stage_idx": run.get("current_stage_idx"),
                 "started_at": run.get("started_at"),
                 "completed_at": run.get("completed_at"),
-                "stages": stages,
+                "expectations": expectations,
             }
         )
     return out
@@ -985,16 +1044,17 @@ def _inbox_process_row(r, source, ctx, actor):
 
 def _inbox_process_context(repo, actor):
     """The viewer's process work across all sheets: for every run (active OR
-    completed) that NOTIFIED the viewer as a stage owner, a ``{sheet, node,
-    stage_idx}`` deep-link context. Newest run first (mirrors the notification
-    ordering) so successive process notifications map to distinct runs.
+    completed) that NOTIFIED the viewer as an expected-column owner, a
+    ``{sheet, node, rule_key, column}`` deep-link context. Newest run first
+    (mirrors the notification ordering) so successive process notifications map to
+    distinct runs.
 
     Derived from the runs (not a Notification link) because the Notification
-    schema carries no process reference. A recipient is matched via the run
-    stage's ``notified_owner`` ledger (who was notified at enter time) UNION the
-    LIVE ``resolve_column_approvers`` of the run's current stage — so both a live
-    stage assignment and an already-completed run whose stage notified the viewer
-    resolve to a deep link."""
+    schema carries no process reference. A recipient is matched via an expectation's
+    ``notified_owner`` ledger (who was notified at open time) UNION the LIVE
+    ``resolve_column_approvers`` of any OPEN (unsatisfied, un-breached) expectation's
+    expected column — so both a live assignment and an already-completed run whose
+    expectation notified the viewer resolve to a deep link."""
     ctx = []
     run_names = frappe.get_all(
         "Arbor Process Run",
@@ -1003,21 +1063,21 @@ def _inbox_process_context(repo, actor):
     )
     for rn in run_names:
         run = frappe.get_doc("Arbor Process Run", rn["name"])
-        cur = run.current_stage_idx
-        matched_stage_idx = None
-        for s in run.get("run_stages") or []:
-            notified = (s.get("notified_owner") or "").split(",") if s.get("notified_owner") else []
+        matched = None
+        for e in run.get("expectations") or []:
+            notified = (e.get("notified_owner") or "").split(",") if e.get("notified_owner") else []
             live_owner = (
-                s.stage_idx == cur
-                and run.status == "active"
-                and actor.user in resolve_column_approvers(repo, run.sheet, s.column)
+                run.status == "active"
+                and not e.get("satisfied_at")
+                and not e.get("breached")
+                and actor.user in resolve_column_approvers(repo, run.sheet, e.expected_column)
             )
             if actor.user in notified or live_owner:
-                matched_stage_idx = s.stage_idx
+                matched = {"rule_key": e.rule_key, "column": e.expected_column}
                 break
-        if matched_stage_idx is not None:
+        if matched is not None:
             ctx.append(
-                {"sheet": run.sheet, "node": run.node, "stage_idx": matched_stage_idx}
+                {"sheet": run.sheet, "node": run.node, **matched}
             )
     return ctx
 
@@ -2147,3 +2207,353 @@ def delete_cell_comment(comment):
         frappe.delete_doc("Notification", n, ignore_permissions=True, force=True)
     frappe.delete_doc("Arbor Cell Comment", doc.name, ignore_permissions=True)
     return {"ok": True, "tombstoned": False}
+
+
+# ---------------------------------------------------------------------------
+# Notification WEBHOOK registration surface (Feature: webhooks, Area 3, WS-A3c).
+# A sheet-admin-gated management surface over the EXISTING Webhook Endpoint
+# doctype + the ONE delivery engine — NOT registry capabilities and NOT Tree
+# Events (like the comment / draft shims). These shims:
+#   * gate every write on structural-owner-of-the-sheet OR platform admin (403
+#     otherwise) — the SAME structural gate the process meta-caps use, so a
+#     sheet's owner manages its own webhooks and an admin manages any;
+#   * validate the URL + block SSRF to loopback / link-local / private / metadata
+#     ranges (deny-by-default; only public http(s)) on register AND update;
+#   * store the signing ``secret`` WRITE-ONCE — generated server-side at register,
+#     returned ONCE in the register response, and NEVER echoed by a list/read (the
+#     Password field is not selected). Update never rotates it (no secret in the
+#     patch surface); rotation is a deliberate future op.
+# The agent NEVER reaches these (they are not in getLLMTools + not capabilities).
+# ---------------------------------------------------------------------------
+
+#: The NON-tree-event notification sources an endpoint may subscribe to — mirrors
+#: the Webhook Endpoint controller's closed set (``tree_event`` rides event_types).
+_WEBHOOK_NOTIFICATION_SOURCES = ("comment", "process", "sla", "change_request")
+
+#: Extra hostnames that resolve to a cloud metadata / link-local service and MUST
+#: be refused even if DNS would map them to a routable-looking address.
+_SSRF_DENY_HOSTNAMES = frozenset({"metadata", "metadata.google.internal"})
+
+
+class WebhookURLError(Exception):
+    """A webhook URL failed validation (bad scheme, unparseable, or resolves to a
+    blocked SSRF target). Surfaced by the shims as a 400."""
+
+
+def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
+    """Deny-by-default SSRF classifier: block loopback, link-local (incl. the
+    169.254.169.254 metadata address), private, reserved, multicast, and
+    unspecified ranges; also block the IPv4-mapped/compat and 6to4/Teredo IPv6
+    embeddings whose embedded v4 is itself blocked. Only a genuinely public,
+    globally-routable address passes."""
+    if (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_private
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        return True
+    # Unwrap IPv6 forms that embed a v4 address (::ffff:169.254.169.254, 6to4,
+    # Teredo) so an attacker can't smuggle a blocked v4 through a v6 literal.
+    embedded = getattr(ip, "ipv4_mapped", None) or getattr(ip, "sixtofour", None)
+    if embedded is not None and _ip_is_blocked(embedded):
+        return True
+    return False
+
+
+def _validate_webhook_url(url: str) -> str:
+    """Return ``url`` if it is a public http(s) endpoint; else raise
+    :class:`WebhookURLError`.
+
+    Rejects: a non-http(s) scheme (``file:``/``gopher:``/…); a missing host; an IP
+    literal in a blocked range; a hostname on the metadata deny-list; and a
+    hostname whose DNS resolution yields ANY blocked address (all A/AAAA records
+    are checked so a split-horizon name with one private record is refused). DNS
+    that fails to resolve is refused too (can't prove it's public)."""
+    if not isinstance(url, str) or not url.strip():
+        raise WebhookURLError(_("Webhook URL is required"))
+    parts = urlsplit(url.strip())
+    if parts.scheme not in ("http", "https"):
+        raise WebhookURLError(_("Webhook URL must be http(s), not {0}").format(parts.scheme or "(none)"))
+    host = parts.hostname
+    if not host:
+        raise WebhookURLError(_("Webhook URL has no host"))
+    if host.lower() in _SSRF_DENY_HOSTNAMES:
+        raise WebhookURLError(_("Webhook URL host {0} is not allowed").format(host))
+
+    # An IP literal is checked directly (no DNS); a hostname is resolved and EVERY
+    # returned address must be public.
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _ip_is_blocked(literal):
+            raise WebhookURLError(_("Webhook URL resolves to a blocked address {0}").format(host))
+        return url.strip()
+
+    try:
+        infos = socket.getaddrinfo(host, parts.port or None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise WebhookURLError(_("Webhook URL host {0} does not resolve").format(host)) from exc
+    if not infos:
+        raise WebhookURLError(_("Webhook URL host {0} does not resolve").format(host))
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if _ip_is_blocked(ip):
+            raise WebhookURLError(
+                _("Webhook URL host {0} resolves to a blocked address {1}").format(host, addr)
+            )
+    return url.strip()
+
+
+def _coerce_sources(sources: Any) -> list[str]:
+    """Normalize the ``notification_sources`` argument (JSON string / list / None)
+    into a validated list; a source outside the closed set is a 400 (matches the
+    controller's guard so the surface fails fast before insert)."""
+    parsed = _coerce(sources)
+    if parsed is None:
+        return []
+    if not isinstance(parsed, (list, tuple)):
+        frappe.local.response["http_status_code"] = 400
+        frappe.throw(_("notification_sources must be a list"), exc=frappe.ValidationError)
+    out: list[str] = []
+    for s in parsed:
+        if s not in _WEBHOOK_NOTIFICATION_SOURCES:
+            frappe.local.response["http_status_code"] = 400
+            frappe.throw(
+                _("Unknown notification source {0}; the closed set is {1}").format(
+                    s, ", ".join(_WEBHOOK_NOTIFICATION_SOURCES)
+                ),
+                exc=frappe.ValidationError,
+            )
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def _require_webhook_admin(repo, sheet: Optional[str], actor: Actor) -> None:
+    """Assert ``actor`` may manage webhooks for ``sheet`` — the sheet's structural
+    owner OR a platform admin. A non-owner, non-admin caller is a 403 (never a CR:
+    webhook registration is an out-of-band admin surface, not a governed cell
+    mutation). A missing sheet is a 404."""
+    if getattr(actor, "is_admin", False):
+        return
+    if not sheet:
+        # A global (sheet-less) endpoint can only be managed by a platform admin.
+        raise frappe.PermissionError(_("Only an admin may manage global webhooks"))
+    if not frappe.db.exists("Tree Sheet", sheet):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such sheet {0}").format(sheet), exc=frappe.DoesNotExistError)
+    owner = repo.get_sheet(sheet).structural_owner
+    if actor.user != owner:
+        raise frappe.PermissionError(
+            _("Only the sheet's structural owner or an admin may manage its webhooks")
+        )
+
+
+def _endpoint_out(doc) -> dict[str, Any]:
+    """Serialize a Webhook Endpoint to the ``WebhookEndpointView`` shape WITHOUT the
+    secret (the Password field is never echoed by a read/list — WEBHOOKS SSRF §7)."""
+    et = doc.get("event_types")
+    ns = doc.get("notification_sources")
+    return {
+        "name": doc.get("name"),
+        "label": doc.get("label"),
+        "url": doc.get("url"),
+        "active": bool(doc.get("active")),
+        "sheet": doc.get("sheet"),
+        "owner_user": doc.get("owner_user"),
+        "scope": doc.get("scope"),
+        "target": doc.get("target"),
+        "event_types": _coerce(et) or [] if et else [],
+        "notification_sources": _coerce(ns) or [] if ns else [],
+    }
+
+
+@frappe.whitelist()
+def register_webhook(
+    url,
+    sheet=None,
+    label=None,
+    notification_sources=None,
+    event_types=None,
+    scope="sheet",
+    target=None,
+):
+    """Register a Webhook Endpoint (sheet-admin surface). AUTHZ: the sheet's
+    structural owner OR a platform admin (403 otherwise). SSRF-validates the URL
+    (400 on a blocked/loopback/link-local/private/metadata target or a non-http(s)
+    scheme). Generates the signing ``secret`` server-side and returns it ONCE in the
+    response — it is NEVER echoed again. Returns the endpoint view + ``secret``."""
+    actor = _actor()
+    repo = _repo()
+    _require_webhook_admin(repo, sheet, actor)
+
+    try:
+        clean_url = _validate_webhook_url(url)
+    except WebhookURLError as exc:
+        frappe.local.response["http_status_code"] = 400
+        frappe.throw(str(exc), exc=frappe.ValidationError)
+
+    sources = _coerce_sources(notification_sources)
+    types = _coerce(event_types) or []
+    secret = _secrets.token_urlsafe(32)
+
+    doc = frappe.new_doc("Webhook Endpoint")
+    doc.url = clean_url
+    doc.label = label
+    doc.sheet = sheet
+    doc.owner_user = actor.user
+    doc.scope = scope or "sheet"
+    doc.target = target or sheet
+    doc.event_types = frappe.as_json(types)
+    doc.notification_sources = frappe.as_json(sources)
+    doc.secret = secret  # Password field: stored encrypted; write-once here.
+    doc.active = 1
+    doc.insert(ignore_permissions=True)
+
+    out = _endpoint_out(doc.as_dict())
+    out["secret"] = secret  # returned ONCE, never again.
+    return out
+
+
+@frappe.whitelist()
+def list_webhooks(sheet=None):
+    """List Webhook Endpoints the actor may manage. AUTHZ: an admin sees all (or the
+    ``sheet`` filter); a sheet's structural owner sees ONLY that sheet's endpoints
+    (403 if they ask for a sheet they don't own). The signing ``secret`` is NEVER
+    included (write-once). Read-only; emits no Tree Event."""
+    actor = _actor()
+    repo = _repo()
+    is_admin = getattr(actor, "is_admin", False)
+
+    filters: dict[str, Any] = {}
+    if sheet:
+        _require_webhook_admin(repo, sheet, actor)  # 403/404 for a non-owner/unknown sheet
+        filters["sheet"] = sheet
+    elif not is_admin:
+        # A non-admin with no sheet filter sees only the sheets they structurally
+        # own. Cheap: filter to endpoints whose owner_user is them (they registered
+        # them) — a sheet-owner's endpoints all carry owner_user=them by register.
+        filters["owner_user"] = actor.user
+
+    names = frappe.get_all("Webhook Endpoint", filters=filters, pluck="name")
+    out = []
+    for n in names:
+        doc = frappe.get_doc("Webhook Endpoint", n)
+        out.append(_endpoint_out(doc.as_dict()))
+    return out
+
+
+@frappe.whitelist()
+def update_webhook(endpoint, url=None, label=None, active=None, notification_sources=None, event_types=None):
+    """Update a Webhook Endpoint's mutable fields (url / label / active /
+    notification_sources / event_types). AUTHZ: the endpoint's sheet owner OR an
+    admin (403). SSRF-validates a changed URL (400). NEVER rotates the secret — it
+    is write-once (no secret arg). 404 on an unknown endpoint. Returns the view."""
+    actor = _actor()
+    repo = _repo()
+    if not frappe.db.exists("Webhook Endpoint", endpoint):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such webhook endpoint {0}").format(endpoint), exc=frappe.DoesNotExistError)
+
+    doc = frappe.get_doc("Webhook Endpoint", endpoint)
+    _require_webhook_admin(repo, doc.sheet, actor)
+
+    if url is not None:
+        try:
+            doc.url = _validate_webhook_url(url)
+        except WebhookURLError as exc:
+            frappe.local.response["http_status_code"] = 400
+            frappe.throw(str(exc), exc=frappe.ValidationError)
+    if label is not None:
+        doc.label = label
+    if active is not None:
+        doc.active = 1 if frappe.utils.cint(active) == 1 else 0
+    if notification_sources is not None:
+        doc.notification_sources = frappe.as_json(_coerce_sources(notification_sources))
+    if event_types is not None:
+        doc.event_types = frappe.as_json(_coerce(event_types) or [])
+    doc.save(ignore_permissions=True)
+    return _endpoint_out(doc.as_dict())
+
+
+@frappe.whitelist()
+def delete_webhook(endpoint):
+    """Delete a Webhook Endpoint. AUTHZ: the endpoint's sheet owner OR an admin
+    (403). 404 on an unknown endpoint. Any in-flight retries for the endpoint are
+    cancelled by the dispatcher's deleted-endpoint guard on the next attempt
+    (WEBHOOKS-005); we drop the pending Webhook Delivery rows here so the retry
+    runner never re-picks a now-orphaned delivery."""
+    actor = _actor()
+    repo = _repo()
+    if not frappe.db.exists("Webhook Endpoint", endpoint):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such webhook endpoint {0}").format(endpoint), exc=frappe.DoesNotExistError)
+
+    doc = frappe.get_doc("Webhook Endpoint", endpoint)
+    _require_webhook_admin(repo, doc.sheet, actor)
+
+    for d in frappe.get_all("Webhook Delivery", filters={"endpoint": endpoint}, pluck="name"):
+        frappe.delete_doc("Webhook Delivery", d, ignore_permissions=True, force=True)
+    frappe.delete_doc("Webhook Endpoint", endpoint, ignore_permissions=True, force=True)
+    return {"ok": True}
+
+
+@frappe.whitelist()
+def test_webhook(endpoint):
+    """Fire a signed ``type='webhook.test'`` ping at ONE endpoint through the SAME
+    signed delivery engine (a real POST via the retry-capable dispatcher). AUTHZ:
+    the endpoint's sheet owner OR an admin (403). 404 on an unknown endpoint. Uses a
+    unique ``event_id`` per call (``test:<endpoint>:<token>``) so the per-(endpoint,
+    event_id) idempotency guard never suppresses a repeat test. Returns the created
+    delivery id + its terminal status."""
+    actor = _actor()
+    repo = _repo()
+    if not frappe.db.exists("Webhook Endpoint", endpoint):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such webhook endpoint {0}").format(endpoint), exc=frappe.DoesNotExistError)
+
+    doc = frappe.get_doc("Webhook Endpoint", endpoint)
+    _require_webhook_admin(repo, doc.sheet, actor)
+
+    # Reuse the ONE delivery engine + serializer (no reinvented signing). Import
+    # lazily so the module stays import-clean in the bench-free lane.
+    from arbor.arbor.dispatch.frappe_dispatch import _webhook_dispatcher
+    from arbor.arbor.dispatch.serializer import serialize_notification_bytes
+
+    dispatcher = _webhook_dispatcher()
+    ep_view = dispatcher._store.get_endpoint(endpoint)
+    if ep_view is None:  # deleted between the exists() check and now
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such webhook endpoint {0}").format(endpoint), exc=frappe.DoesNotExistError)
+
+    event_id = f"test:{endpoint}:{_secrets.token_hex(8)}"
+    body = serialize_notification_bytes(
+        event_id=event_id,
+        source="test",
+        sheet=doc.sheet,
+        type="webhook.test",
+        payload={"endpoint": endpoint, "ping": True},
+        actor=actor.user,
+        actor_type="human",
+        timestamp=frappe.utils.now(),
+    )
+    delivery_id = dispatcher.deliver(
+        ep_view,
+        event_id=event_id,
+        body=body,
+        source="test",
+        link_fields={"notification": None},
+    )
+    status = None
+    if delivery_id is not None:
+        status = frappe.db.get_value("Webhook Delivery", delivery_id, "status")
+    return {"delivery": delivery_id, "status": status}

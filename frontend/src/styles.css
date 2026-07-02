@@ -3129,6 +3129,85 @@ body {
   padding: 16px;
 }
 
+/* ------------------------------------------------------------------ webhooks */
+/* Notification webhook admin modal (WS-A3c) — reuses the shared .arbor-modal
+   shell (like the roles modal); these rules only size + lay out the panel body. */
+.arbor-webhook-modal {
+  min-width: 460px;
+  max-width: 620px;
+}
+.arbor-webhook-body {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.arbor-webhook-register {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.arbor-webhook-register label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.arbor-webhook-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border: 1px solid var(--arbor-border, #d0d7de);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.arbor-webhook-sources label {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+.arbor-webhook-error {
+  color: var(--arbor-danger, #b42318);
+  font-size: 13px;
+  margin: 0;
+}
+.arbor-webhook-secret {
+  font-size: 13px;
+  background: var(--arbor-warn-bg, #fff8e1);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0;
+  word-break: break-all;
+}
+.arbor-webhook-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arbor-webhook-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--arbor-border, #d0d7de);
+  border-radius: 6px;
+}
+.arbor-webhook-list .arbor-webhook-url {
+  flex: 1;
+  font-weight: 500;
+  word-break: break-all;
+}
+.arbor-webhook-list .arbor-webhook-sources-tags,
+.arbor-webhook-list .arbor-webhook-teststatus {
+  font-size: 12px;
+  color: var(--arbor-muted, #57606a);
+}
+
 /* ------------------------------------------------------------------ comments */
 /* The per-cell comment glyph: a quiet message icon that reveals on cell hover
    (like the edit-pencil), with an open-count badge or an unread dot. It sits in
@@ -3410,6 +3489,40 @@ body {
 .arbor-nav-link:hover {
   color: var(--ink);
   text-decoration: underline;
+}
+/* Process badge on the Dashboard nav link (WS-B2): a live pending count, plus a
+   breached sub-count that only appears (and turns red) when out of SLA. Calm at
+   rest; the breach is the one thing that raises its voice. */
+.arbor-process-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: baseline;
+}
+.arbor-process-badge-pending,
+.arbor-process-badge-breached {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  line-height: 1;
+}
+.arbor-process-badge-pending {
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+}
+.arbor-process-badge-breached {
+  color: #fff;
+  background: var(--red);
+  border: 1px solid var(--red);
 }
 
 /* Process config header button (mirrors the roles-admin button treatment). */
@@ -3860,6 +3973,10 @@ body {
 .arbor-pd-stage-head {
   width: 100%;
   text-align: left;
+  display: flex !important;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   border: none !important;
   background: var(--surface) !important;
   border-bottom: 1px solid var(--outline-subtle) !important;
@@ -3874,6 +3991,35 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+/* Edge endpoints: the source column reads muted, the destination is the ink
+   focus; the arrow between them is subtle. A row (START) trigger has no from. */
+.arbor-pd-stage-from {
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+.arbor-pd-stage-arrow {
+  color: var(--ink-subtle);
+  font-weight: 500;
+}
+.arbor-pd-stage-to {
+  color: var(--ink);
+}
+/* SLA window chip on the edge head — the within-duration budget. */
+.arbor-pd-sla {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--outline-subtle);
+  border-radius: 999px;
+  padding: 1px 7px;
 }
 /* Per-stage metric row: three labeled counts (pending / breached / avg). */
 .arbor-pd-stage-metrics {
@@ -3911,6 +4057,13 @@ body {
 }
 .arbor-pd-count.is-breached::after {
   content: "breached";
+}
+.arbor-pd-count.is-satisfied::after {
+  content: "satisfied";
+}
+/* Satisfied count reads calm/muted — it's the healthy path, not an alert. */
+.arbor-pd-count.is-satisfied {
+  color: var(--ink-muted);
 }
 /* Breach count is neutral at zero; turns red (fill + ink) when out of SLA so it
    is visible at a glance — no longer identical to the pending count. */
@@ -4079,6 +4232,30 @@ body {
 }
 .arbor-inbox-open:hover .arbor-inbox-msg {
   color: var(--accent-ink);
+}
+/* Per-row source chip (WS-B2): the row's origin (SLA / Process / Comment /
+   Activity) as a small chip so a row's source scans without reading the group
+   header. Neutral by default; the SLA chip is the one that raises its voice. */
+.arbor-inbox-chip {
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  border: 1px solid var(--outline-subtle);
+}
+.arbor-inbox-chip[data-source="sla"] {
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+.arbor-inbox-chip[data-source="process"] {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent-ink) 40%, var(--outline-subtle));
 }
 .arbor-inbox-msg {
   font-size: 13px;

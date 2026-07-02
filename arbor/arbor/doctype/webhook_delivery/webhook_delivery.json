@@ -13,6 +13,7 @@
   "status",
   "attempts",
   "signature",
+  "body",
   "next_retry_at",
   "last_response"
  ],
@@ -73,6 +74,12 @@
    "fieldname": "signature",
    "fieldtype": "Data",
    "label": "Signature"
+  },
+  {
+   "description": "The exact byte-stable JSON body signed + transmitted, cached so retries resend byte-identical content without re-serializing/re-signing (WEBHOOKS-028).",
+   "fieldname": "body",
+   "fieldtype": "Code",
+   "label": "Body"
   },
   {
    "description": "Backoff schedule next attempt time.",

@@ -97,6 +97,52 @@ describe("ProcessDashboard — stage columns + counts", () => {
     expect(within(s0).getByTestId("pd-breached")).toHaveAttribute("data-breached", "false");
   });
 
+  it("renders the edge as from_label -> to_label when the trigger has a source column", async () => {
+    const client = makeClient(vi.fn().mockResolvedValue(dash()));
+    render(<ProcessDashboard client={client} sheet="S" />);
+
+    // r1: Owner -> Budget (a column trigger); the head shows both endpoints.
+    const s1 = await screen.findByTestId("pd-edge-1");
+    const head = within(s1).getByTestId("pd-stage-label");
+    expect(head).toHaveTextContent("Owner");
+    expect(head).toHaveTextContent("Budget");
+    // r0 is a row (START) trigger: no from endpoint, just the destination.
+    const s0 = screen.getByTestId("pd-edge-0");
+    expect(within(s0).getByTestId("pd-stage-label")).toHaveTextContent("Owner");
+  });
+
+  it("shows the SLA window when the edge carries within_seconds and omits it when 0", async () => {
+    const client = makeClient(
+      vi.fn().mockResolvedValue(
+        dash({
+          edges: [
+            edge({ rule_key: "r0", to_label: "Owner", within_seconds: 3600 }),
+            edge({ rule_key: "r1", to_column: "budget", to_label: "Budget", within_seconds: 0 }),
+          ],
+        }),
+      ),
+    );
+    render(<ProcessDashboard client={client} sheet="S" />);
+
+    // Edge 0 carries a 1h window -> a visible SLA chip.
+    const s0 = await screen.findByTestId("pd-edge-0");
+    expect(within(s0).getByTestId("pd-sla")).toHaveTextContent(/1\.0h/);
+    // Edge 1 has no SLA (within_seconds=0) -> no chip.
+    const s1 = screen.getByTestId("pd-edge-1");
+    expect(within(s1).queryByTestId("pd-sla")).toBeNull();
+  });
+
+  it("shows the satisfied count per edge", async () => {
+    const client = makeClient(
+      vi.fn().mockResolvedValue(
+        dash({ edges: [edge({ rule_key: "r0", to_label: "Owner", satisfied_count: 7 })] }),
+      ),
+    );
+    render(<ProcessDashboard client={client} sheet="S" />);
+    const s0 = await screen.findByTestId("pd-edge-0");
+    expect(within(s0).getByTestId("pd-satisfied")).toHaveTextContent("7");
+  });
+
   it("renders a generic placeholder when the stage column label is null (read-ACL redacted)", async () => {
     const client = makeClient(vi.fn().mockResolvedValue(dash()));
     render(<ProcessDashboard client={client} sheet="S" />);

@@ -17,9 +17,25 @@ import type {
   ProcessRun,
 } from "../api";
 
-// A readable edge label, else a generic ordinal that leaks nothing.
-function edgeLabel(edge: ProcessDashboardEdge, idx: number): string {
+// The destination endpoint of an edge — a readable column label, else a generic
+// ordinal that leaks nothing (server redacts an unreadable column's label to null).
+function toLabel(edge: ProcessDashboardEdge, idx: number): string {
   return edge.to_label ?? `Step ${idx + 1}`;
+}
+
+// The source endpoint of an edge, or null for a row (START) trigger. A column
+// trigger whose label the viewer can't read arrives redacted -> generic "Step".
+function fromLabel(edge: ProcessDashboardEdge): string | null {
+  if (edge.from_kind === "row" || edge.from_column == null) return null;
+  return edge.from_label ?? "Step";
+}
+
+// Compact SLA-window rendering: seconds -> "45s" / "30m" / "1.0h" (matches the
+// avg formatter); null/0 = no SLA window on this edge.
+function formatSla(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
 }
 
 // A stable per-edge key (rule_key + expected column).
@@ -138,12 +154,29 @@ export function ProcessDashboard({
                 type="button"
                 className="arbor-pd-stage-head"
                 data-testid="pd-stage-drill"
-                aria-label={`Show runs for ${edgeLabel(s, idx)}`}
+                aria-label={`Show runs for ${toLabel(s, idx)}`}
                 onClick={() => void drill(s)}
               >
                 <span className="arbor-pd-stage-label" data-testid="pd-stage-label">
-                  {edgeLabel(s, idx)}
+                  {fromLabel(s) && (
+                    <>
+                      <span className="arbor-pd-stage-from" data-testid="pd-stage-from">
+                        {fromLabel(s)}
+                      </span>
+                      <span className="arbor-pd-stage-arrow" aria-hidden="true">
+                        →
+                      </span>
+                    </>
+                  )}
+                  <span className="arbor-pd-stage-to" data-testid="pd-stage-to">
+                    {toLabel(s, idx)}
+                  </span>
                 </span>
+                {s.within_seconds > 0 && (
+                  <span className="arbor-pd-sla" data-testid="pd-sla" title="SLA window">
+                    ≤ {formatSla(s.within_seconds)}
+                  </span>
+                )}
               </button>
               <div className="arbor-pd-stage-metrics">
                 <span className="arbor-pd-count" data-testid="pd-pending" title="pending">
@@ -156,6 +189,9 @@ export function ProcessDashboard({
                   title="out of SLA"
                 >
                   {s.breached_count}
+                </span>
+                <span className="arbor-pd-count is-satisfied" data-testid="pd-satisfied" title="satisfied">
+                  {s.satisfied_count}
                 </span>
                 <span className="arbor-pd-avg" data-testid="pd-avg" title="avg open to satisfy">
                   {formatAvg(s.avg_open_to_satisfy_seconds)}
