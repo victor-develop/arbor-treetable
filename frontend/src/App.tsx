@@ -8,8 +8,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api as defaultClient,
   type ArborClient,
+  type CellComment,
   type ChangeRequestView,
   type NotificationView,
+  type ProcessDef,
   type RoleApplicationView,
   type RoleGrantView,
   type RoleView,
@@ -18,6 +20,11 @@ import {
   type SnapshotNode,
 } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { LoginScreen } from "./components/LoginScreen";
+import { ImpersonationBar } from "./components/ImpersonationBar";
+import { CommentDrawer, type CommentCell } from "./components/CommentDrawer";
+import { ProcessConfigPanel } from "./components/ProcessConfigPanel";
+import { useWhoami } from "./hooks/useWhoami";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
 import { RolesModal } from "./components/RolesModal";
@@ -109,6 +116,18 @@ function ConnectedShell({
   });
   const sheet = useSheet(client, sheetName, initialView);
   const snap = sheet.snapshot;
+
+  // AUTH GATE (Feature: act-as). whoami is the ONE auth signal: while it resolves
+  // we show a neutral splash; a Guest / unauthenticated session renders the
+  // provider-agnostic <LoginScreen> INSTEAD of the sheet; an authenticated
+  // session renders the app. In the dev SSO build whoami is authenticated, so
+  // this is a passthrough; the public password build gets the gate. A client
+  // without a whoami surface (test/mocked) fails CLOSED to authenticated=true
+  // ONLY when it also lacks the surface — see useWhoami (it fails closed to
+  // false), so mocked clients that DON'T exercise the gate must still render the
+  // app: we treat "no whoami method" as an authenticated passthrough here.
+  const whoami = useWhoami(client);
+  const hasWhoami = typeof client.whoami === "function";
 
   // Change Request review inbox: the sheet's proposed CRs (single- and
   // multi-change), refreshed whenever the snapshot changes.
@@ -350,6 +369,16 @@ function ConnectedShell({
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
+  // Comments (Feature: comments). The open cell {node,column,label} | null and the
+  // loaded thread. The drawer sits below the agent popup (z 40 vs 60) and is inert
+  // in Proposed preview (readOnly). Opening loads the cell's thread; every write
+  // reloads the thread + refetches the sheet (for the per-cell summary glyph).
+  const [commentCell, setCommentCell] = useState<CommentCell | null>(null);
+  const [commentThread, setCommentThread] = useState<CellComment[]>([]);
+  // Process config modal (Feature: process). Gated on the structural-owner/admin
+  // viewer hint; seeded from getProcess(sheet).
+  const [processOpen, setProcessOpen] = useState(false);
+  const [processDef, setProcessDef] = useState<ProcessDef | null>(null);
   // Draft flow — whether the Draft Review modal is open (the bar opens it).
   const [draftReviewOpen, setDraftReviewOpen] = useState(false);
 
@@ -404,6 +433,161 @@ function ConnectedShell({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [sheet.draftCount]);
+  // IMPERSONATION (Feature: act-as). begin/end funnel through the client's
+  // governed capabilities; on success re-run BOTH whoami (the banner + gate) and
+  // the sheet (all affordances re-derive off the new effective identity).
+  const beginImpersonation = useCallback(
+    (user: string, reason?: string) => {
+      if (!client.beginImpersonation) return;
+      void client.beginImpersonation(user, reason).then((o) => {
+        if (!o.error) {
+          void whoami.refetch();
+          void sheet.refetch();
+        }
+      });
+    },
+    [client, whoami, sheet],
+  );
+  const endImpersonation = useCallback(() => {
+    if (!client.endImpersonation) return;
+    void client.endImpersonation().then((o) => {
+      if (!o.error) {
+        void whoami.refetch();
+        void sheet.refetch();
+      }
+    });
+  }, [client, whoami, sheet]);
+
+  // COMMENTS (Feature: comments). Load a cell's thread when the drawer opens; wire
+  // each write to reload the thread + refetch the sheet (so the cell glyph's
+  // summary updates). The drawer is inert (readOnly) in Proposed preview.
+  const loadCommentThread = useCallback(
+    (node: string, column: string) => {
+      if (!client.listCellComments) {
+        setCommentThread([]);
+        return;
+      }
+      void client
+        .listCellComments(sheetName, node, column)
+        .then(setCommentThread)
+        .catch(() => setCommentThread([]));
+    },
+    [client, sheetName],
+  );
+  const openComments = useCallback(
+    (node: string, column: string) => {
+      const col = snap?.columns.find((c) => c.name === column);
+      setCommentCell({ node, column, label: col?.label ?? column });
+      setCommentThread([]);
+      loadCommentThread(node, column);
+    },
+    [snap, loadCommentThread],
+  );
+  const closeComments = useCallback(() => {
+    setCommentCell(null);
+    setCommentThread([]);
+  }, []);
+  // Every comment write reloads the current cell's thread AND refetches the sheet
+  // (the per-cell comment summary is snapshot-sourced). Guarded on commentCell so
+  // a write never fires against a closed drawer.
+  const afterCommentWrite = useCallback(() => {
+    if (commentCell) loadCommentThread(commentCell.node, commentCell.column);
+    void sheet.refetch();
+  }, [commentCell, loadCommentThread, sheet]);
+  const postComment = useCallback(
+    (body: string, parent?: string) => {
+      if (!commentCell || !client.addCellComment) return;
+      void client
+        .addCellComment(sheetName, commentCell.node, commentCell.column, body, {
+          ...(parent ? { parent_comment: parent } : {}),
+        })
+        .then(afterCommentWrite);
+    },
+    [client, sheetName, commentCell, afterCommentWrite],
+  );
+  const resolveComment = useCallback(
+    (comment: string) => {
+      if (!client.resolveCellComment) return;
+      void client.resolveCellComment(comment).then(afterCommentWrite);
+    },
+    [client, afterCommentWrite],
+  );
+  const reopenComment = useCallback(
+    (comment: string) => {
+      if (!client.reopenCellComment) return;
+      void client.reopenCellComment(comment).then(afterCommentWrite);
+    },
+    [client, afterCommentWrite],
+  );
+  const deleteComment = useCallback(
+    (comment: string) => {
+      if (!client.deleteCellComment) return;
+      void client.deleteCellComment(comment).then(afterCommentWrite);
+    },
+    [client, afterCommentWrite],
+  );
+
+  // PROCESS CONFIG (Feature: process). Seed the editor from getProcess(sheet) when
+  // the modal opens; each write funnels through the client's governed capability
+  // then re-seeds the definition (+ closes on a define, which may auto-route to a
+  // CR). Gate the entry on the structural-owner/admin viewer hint.
+  const loadProcess = useCallback(() => {
+    if (!client.getProcess) {
+      setProcessDef(null);
+      return;
+    }
+    void client
+      .getProcess(sheetName)
+      .then(setProcessDef)
+      .catch(() => setProcessDef(null));
+  }, [client, sheetName]);
+  const openProcess = useCallback(() => {
+    setProcessDef(null);
+    loadProcess();
+    setProcessOpen(true);
+  }, [loadProcess]);
+  const defineProcessOp = useCallback(
+    (
+      stages: import("./api").ProcessStageInput[],
+      opts?: { title?: string; row_scope?: string; start_trigger?: string },
+    ) => {
+      if (!client.defineProcess) return;
+      void client.defineProcess(sheetName, stages, opts).then((o) => {
+        if (!o.error) {
+          loadProcess();
+          void sheet.refetch();
+          refreshCRs();
+        }
+      });
+    },
+    [client, sheetName, loadProcess, sheet, refreshCRs],
+  );
+  const enableProcessOp = useCallback(() => {
+    if (!client.enableProcess) return;
+    void client.enableProcess(sheetName).then((o) => {
+      if (!o.error) {
+        loadProcess();
+        void sheet.refetch();
+      }
+    });
+  }, [client, sheetName, loadProcess, sheet]);
+  const disableProcessOp = useCallback(() => {
+    if (!client.disableProcess) return;
+    void client.disableProcess(sheetName).then((o) => {
+      if (!o.error) {
+        loadProcess();
+        void sheet.refetch();
+      }
+    });
+  }, [client, sheetName, loadProcess, sheet]);
+
+  // Structural-owner / admin gate for the Process entry (SPEC: structural-owner
+  // gated; admin bypass). We NEVER re-derive ACL — this is a snapshot viewer hint
+  // (can_add_column mirrors the structural-owner gate the way ProcessConfigPanel
+  // documents) OR the is_admin hint.
+  const canConfigProcess =
+    (snap?.actor != null && snap.actor === snap.sheet.structural_owner) || isAdmin;
+
   const columnOp = (action: string, params: Record<string, unknown>) => {
     // updateColumn/deleteColumn/grantColumn funnel through dispatch like every
     // other mutation. An executed op refetches (label/width/ownership/removal
@@ -587,6 +771,30 @@ function ConnectedShell({
     />
   ) : null;
 
+  // AUTH GATE render branch. Only a client that ACTUALLY exposes whoami is gated
+  // (the public password build); a mocked/test client without the surface is a
+  // passthrough so existing integration tests keep rendering the sheet. While
+  // whoami resolves we show a neutral splash; a Guest gets <LoginScreen>.
+  if (hasWhoami) {
+    if (whoami.loading) {
+      return (
+        <main className="arbor-app arbor-splash" data-testid="auth-splash">
+          <p>Loading…</p>
+        </main>
+      );
+    }
+    if (!whoami.authenticated) {
+      return <LoginScreen onAuthenticated={() => void whoami.refetch()} />;
+    }
+  }
+
+  // Impersonation viewer hints: prefer the live whoami envelope (freshest), then
+  // fall back to the snapshot viewer block. The bar drives its banner/picker off
+  // these; visibility = admin (picker) OR impersonating (banner).
+  const impersonating = whoami.impersonating || (snap?.viewer?.impersonating ?? false);
+  const effectiveUser = whoami.user ?? snap?.actor ?? null;
+  const realUser = whoami.real_user ?? snap?.viewer?.real_user ?? null;
+
   return (
     <main className="arbor-app">
       <header className="arbor-header">
@@ -605,9 +813,36 @@ function ConnectedShell({
             <span data-testid="sheet-name">Sheet: {snap?.sheet.name ?? sheetName}</span>
             {snap && <span data-testid="node-count">{snap.nodes.length} nodes</span>}
           </div>
+          {/* URL-driven nav (matches the back-link pattern; index.tsx routes these):
+              the per-user cross-sheet Inbox (?inbox) and this sheet's process
+              Dashboard (?sheet=<name>&dashboard=1). Anchors, so no router needed. */}
+          <nav className="arbor-nav" data-testid="app-nav">
+            <a className="arbor-nav-link" data-testid="nav-inbox" href="?inbox=1">
+              Inbox
+            </a>
+            <a
+              className="arbor-nav-link"
+              data-testid="nav-dashboard"
+              href={`?sheet=${encodeURIComponent(sheetName)}&dashboard=1`}
+            >
+              Dashboard
+            </a>
+          </nav>
         </div>
         {snap && (
           <div className="arbor-header-controls">
+            {/* Impersonation (Feature: act-as). Renders nothing for a non-admin who
+                isn't impersonating; an "Act as…" picker for an admin; a persistent
+                high-contrast banner (with Stop) while impersonating. Drives off the
+                whoami/snapshot viewer hints; begin/end refetch whoami + the sheet. */}
+            <ImpersonationBar
+              isAdmin={isAdmin}
+              impersonating={impersonating}
+              effectiveUser={effectiveUser}
+              realUser={realUser}
+              onBegin={beginImpersonation}
+              onStop={endImpersonation}
+            />
             {/* Live | Proposed segmented control. "Proposed" overlays every
                 pending change as a READ-ONLY preview (cell suggestions + open
                 move CRs); "Live" restores today's editable view. */}
@@ -635,6 +870,21 @@ function ConnectedShell({
                 roles), available to every user. Renders nothing when there is
                 nothing to request and no roles held. */}
             <RequestRoleControl roles={roles} onApply={(p) => roleOp("applyForRole", p)} />
+            {/* Process config (Feature: process). Structural-owner / admin only —
+                opens the ProcessConfigPanel as a modal (like RolesModal). Seeded
+                from getProcess(sheet) on open. */}
+            {canConfigProcess && (
+              <button
+                type="button"
+                className="arbor-process-config-btn"
+                data-testid="process-config-button"
+                aria-haspopup="dialog"
+                aria-expanded={processOpen}
+                onClick={openProcess}
+              >
+                Process
+              </button>
+            )}
             {/* Global Roles admin (admin-only). Role data is site-wide, so this
                 opens a MODAL rather than living in the per-sheet Governance panel.
                 Badge = pending applications so the admin sees actionable work. */}
@@ -764,6 +1014,11 @@ function ConnectedShell({
                 pendingTitle={pendingTitle}
                 pendingCount={pendingCount}
                 draftCell={draftCell}
+                // Comments: the per-cell summary glyph (from the snapshot) + the
+                // click handler that opens the drawer. In Proposed preview the Cell
+                // itself withholds the glyph, so the drawer never opens there.
+                commentSummary={sheet.commentSummary}
+                onOpenComments={openComments}
                 isPendingMove={isPendingMove}
                 onCommitCell={commitCell}
                 onMove={move}
@@ -884,6 +1139,55 @@ function ConnectedShell({
               )}
             </button>
           </div>
+          {/* Comments (Feature: comments). A right-edge drawer pinned BELOW the
+              agent popup (z 40 vs 60) and above the table. Mounted only when a cell
+              is selected; inert (readOnly) in Proposed preview so the thread reads
+              but no composer/action fires. Every write reloads the thread + the
+              snapshot summary. */}
+          <CommentDrawer
+            open={commentCell !== null}
+            cell={commentCell}
+            comments={commentThread}
+            readOnly={preview}
+            onPost={postComment}
+            onResolve={resolveComment}
+            onReopen={reopenComment}
+            onDelete={deleteComment}
+            onClose={closeComments}
+          />
+          {/* Process config modal (Feature: process). Structural-owner / admin only;
+              seeded from getProcess(sheet). Reuses the shared .arbor-modal shell. */}
+          {canConfigProcess && processOpen && (
+            <div
+              className="arbor-modal-backdrop"
+              data-testid="process-config-modal"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setProcessOpen(false);
+              }}
+            >
+              <div className="arbor-modal">
+                <header className="arbor-modal-head">
+                  <span>Process</span>
+                  <button
+                    type="button"
+                    data-testid="pc-close"
+                    aria-label="Close"
+                    onClick={() => setProcessOpen(false)}
+                  >
+                    ✕
+                  </button>
+                </header>
+                <ProcessConfigPanel
+                  sheet={sheetName}
+                  columns={snap.columns}
+                  process={processDef}
+                  onDefine={defineProcessOp}
+                  onEnable={enableProcessOp}
+                  onDisable={disableProcessOp}
+                />
+              </div>
+            </div>
+          )}
           {/* Global Roles admin modal — admin-only, header-launched. Mounted only
               when open; reuses the .arbor-modal shell (like ColumnSettings). Every
               write funnels through roleOp (refresh roles + snapshot). */}

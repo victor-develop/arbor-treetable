@@ -3376,3 +3376,96 @@ body {
     width: 100vw;
   }
 }
+
+/* ---------------------------------------------------- Wave 4 shell mounts -- */
+
+/* Neutral auth splash while whoami resolves (public password build). */
+.arbor-splash {
+  display: grid;
+  place-items: center;
+  min-height: 40vh;
+  color: var(--ink-muted);
+}
+
+/* Header nav: URL-driven links to the cross-sheet Inbox + this sheet's process
+   Dashboard. Sit inline with the title block (matches the back-link treatment). */
+.arbor-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 8px;
+}
+.arbor-nav-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+.arbor-nav-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* Process config header button (mirrors the roles-admin button treatment). */
+.arbor-process-config-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.arbor-process-config-btn:hover {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--ink-subtle);
+}
+
+/* Impersonation surface. The picker sits inline in the header; the banner is a
+   high-contrast, always-visible strip so Stop is never lost while acting-as. */
+.arbor-impersonation {
+  display: inline-flex;
+  align-items: center;
+}
+.arbor-impersonation-picker {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.arbor-impersonation-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px;
+  border-radius: var(--r);
+  background: var(--warn, #b45309);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.arbor-impersonation-banner strong {
+  font-weight: 700;
+}
+.arbor-impersonation-stop {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn, #b45309);
+  background: #fff;
+  border: none;
+  border-radius: var(--r);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.arbor-impersonation-stop:hover {
+  opacity: 0.9;
+}
+
+/* Standalone dashboard page (index.tsx ?dashboard= route). */
+.arbor-dashboard-page .arbor-process-dashboard {
+  padding: 24px;
+}
