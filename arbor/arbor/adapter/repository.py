@@ -53,6 +53,10 @@ DT_EVENT = "Tree Event"
 DT_ROLE = "Arbor Role"
 DT_ROLE_GRANT = "Arbor Role Grant"
 DT_ROLE_APP = "Arbor Role Application"
+DT_IMPERSONATION = "Arbor Impersonation Session"
+# process / SLA (Area 3)
+DT_PROCESS = "Arbor Process"
+DT_PROCESS_RUN = "Arbor Process Run"
 SYSTEM_MANAGER = "System Manager"
 
 
@@ -187,6 +191,31 @@ class _RoleGrantView:
     active: bool = True
     source: str = "admin-grant"
     granted_via: Optional[str] = None
+
+
+@dataclass
+class _ProcessStageView:
+    """One ordered stage (Area 3). ``idx`` is 0-based (mirrors the pure fixture +
+    the run-stage ledger), derived from the Frappe child-row order — NOT the raw
+    1-based frappe ``idx`` — so ``current_stage_idx`` and run-stage ``stage_idx``
+    line up byte-for-byte with the bench-free machine."""
+
+    idx: int
+    column: str
+    sla_seconds: int = 0
+    notify_on_enter: bool = True
+
+
+@dataclass
+class _ProcessView:
+    name: str
+    sheet: str
+    title: str = ""
+    enabled: bool = False
+    row_scope: str = "root-children"
+    start_trigger: str = "node-created"
+    sla_breach_notify: bool = True
+    stages: list = field(default_factory=list)
 
 
 class FrappeRepository:
@@ -621,6 +650,11 @@ class FrappeRepository:
         doc.operation = data["operation"]
         doc.payload = data.get("payload") or {}
         doc.requester = data["requester"]
+        # Impersonation trace (Area 1): the truly-authenticated admin when the CR
+        # was proposed under an "act as" overlay; None for a normal CR (so the row
+        # is byte-for-byte as before). The core populates this in
+        # change_request.create_change_request / create_batch_change_request.
+        doc.real_requester = data.get("real_requester")
         doc.resolved_approver = data.get("resolved_approver")
         doc.status = data.get("status", "proposed")
         # approvals[] is tracked in the JSON payload-adjacent field for parity
@@ -662,6 +696,12 @@ class FrappeRepository:
             if k == "decided_by" and v:
                 doc.decided_by = v
                 doc.decided_at = frappe.utils.now()
+            elif k == "real_decider":
+                # Impersonation trace (Area 1): the truly-authenticated admin who
+                # decided a CR under an "act as" overlay; None for a normal
+                # decision. Only persisted when the field exists on the schema.
+                if doc.meta.has_field("real_decider"):
+                    doc.real_decider = v
             elif k == "approvals":
                 # core passes a flat list of approver user-ids; materialize the
                 # Change Request Approval child rows ({user}).
@@ -866,6 +906,266 @@ class FrappeRepository:
         )
         return sorted(n for n in names if frappe.db.get_value("User", n, "enabled"))
 
+    # ---- impersonation sessions (Area 1) ----------------------------------
+    def create_impersonation_session(
+        self, real_user: str, impersonated_user: str, reason: Optional[str] = None
+    ) -> str:
+        """Persist (and activate) an "act as" overlay for ``real_user`` acting as
+        ``impersonated_user``. At most one active session per real_user: any prior
+        active one is force-ended first (the handler contract). Returns the new
+        session id. The row is the durable, auditable record of the window (there
+        is NO Tree Event for begin/end — the session doctype IS the audit trail)."""
+        self.end_impersonation(real_user)  # collapse any prior active overlay
+        doc = frappe.new_doc(DT_IMPERSONATION)
+        doc.real_user = real_user
+        doc.impersonated_user = impersonated_user
+        doc.active = 1
+        doc.started_at = frappe.utils.now()
+        doc.reason = reason
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    def get_active_impersonation(self, real_user: str) -> Optional[dict[str, Any]]:
+        """The active overlay row for ``real_user`` (the single source of truth
+        ``_actor()`` reads), or None. If more than one active row somehow exists,
+        the most recent wins."""
+        name = frappe.db.get_value(
+            DT_IMPERSONATION,
+            {"real_user": real_user, "active": 1},
+            "name",
+            order_by="creation desc",
+        )
+        if not name:
+            return None
+        d = frappe.get_doc(DT_IMPERSONATION, name)
+        return {
+            "name": d.name,
+            "real_user": d.real_user,
+            "impersonated_user": d.impersonated_user,
+            "reason": d.get("reason"),
+            "active": bool(d.active),
+        }
+
+    def end_impersonation(self, real_user: str) -> None:
+        """Deactivate every active overlay for ``real_user`` (idempotent: a no-op
+        when none is active). Stamps ``ended_at`` so the window is bounded in the
+        audit trail."""
+        for name in frappe.get_all(
+            DT_IMPERSONATION,
+            filters={"real_user": real_user, "active": 1},
+            pluck="name",
+        ):
+            frappe.db.set_value(
+                DT_IMPERSONATION,
+                name,
+                {"active": 0, "ended_at": frappe.utils.now()},
+            )
+
+    # ---- process / SLA (Area 3) -------------------------------------------
+    def _process_view(self, doc) -> _ProcessView:
+        """Build a ``ProcessView`` from an Arbor Process Document. Stage ``idx`` is
+        0-based (child-row order), so the pure machine + the run-stage ledger agree
+        with the bench-free fixture (which numbers stages 0,1,2…)."""
+        stages = [
+            _ProcessStageView(
+                idx=i,
+                column=row.column,
+                sla_seconds=int(row.get("sla_seconds") or 0),
+                notify_on_enter=bool(
+                    1 if row.get("notify_on_enter") is None else row.get("notify_on_enter")
+                ),
+            )
+            for i, row in enumerate(doc.get("stages") or [])
+        ]
+        return _ProcessView(
+            name=doc.name,
+            sheet=doc.sheet,
+            title=doc.get("title") or "",
+            enabled=bool(doc.enabled),
+            row_scope=doc.get("row_scope") or "root-children",
+            start_trigger=doc.get("start_trigger") or "node-created",
+            sla_breach_notify=bool(doc.get("sla_breach_notify")),
+            stages=stages,
+        )
+
+    def upsert_process(self, data: dict[str, Any]) -> str:
+        """Create or replace the sheet's Arbor Process definition (+ ordered
+        stages). Exactly one process per sheet: an existing one is updated in place
+        (its ``enabled`` flag is preserved across a redefine)."""
+        sheet = data["sheet"]
+        existing = frappe.db.get_value(DT_PROCESS, {"sheet": sheet}, "name")
+        doc = frappe.get_doc(DT_PROCESS, existing) if existing else frappe.new_doc(DT_PROCESS)
+        doc.sheet = sheet
+        if data.get("title") is not None:
+            doc.title = data["title"]
+        if data.get("row_scope"):
+            doc.row_scope = data["row_scope"]
+        if data.get("start_trigger"):
+            doc.start_trigger = data["start_trigger"]
+        if data.get("sla_breach_notify") is not None:
+            doc.sla_breach_notify = 1 if data["sla_breach_notify"] else 0
+        doc.set("stages", [])
+        for st in data.get("stages") or []:
+            doc.append(
+                "stages",
+                {
+                    "column": st["column"],
+                    "sla_seconds": int(st.get("sla_seconds") or 0),
+                    "notify_on_enter": 1 if st.get("notify_on_enter", True) else 0,
+                },
+            )
+        if existing:
+            doc.save(ignore_permissions=True)
+        else:
+            doc.insert(ignore_permissions=True)
+        return doc.name
+
+    def get_process(self, sheet: str) -> Optional[_ProcessView]:
+        name = frappe.db.get_value(DT_PROCESS, {"sheet": sheet}, "name")
+        if not name:
+            return None
+        return self._process_view(frappe.get_doc(DT_PROCESS, name))
+
+    def get_process_by_name(self, process: str) -> Optional[_ProcessView]:
+        """The process by its own docname (the SLA sweep's ``process_of`` resolver
+        maps a run's ``process`` link back to its definition)."""
+        if not frappe.db.exists(DT_PROCESS, process):
+            return None
+        return self._process_view(frappe.get_doc(DT_PROCESS, process))
+
+    def set_process_enabled(self, process: str, enabled: bool) -> None:
+        frappe.db.set_value(DT_PROCESS, process, "enabled", 1 if enabled else 0)
+
+    def list_in_scope_nodes(self, sheet: str, row_scope: str) -> list[str]:
+        """Node ids that count as process 'rows' under ``row_scope``. Mirrors the
+        in-memory double: ``all-nodes`` = every node; ``root-children`` (default) /
+        ``depth`` = the direct children of a root (a node whose own parent is
+        None)."""
+        rows = frappe.get_all(
+            DT_NODE, filters={"sheet": sheet}, fields=["name", "parent_tree_node"]
+        )
+        if row_scope == "all-nodes":
+            return [r["name"] for r in rows]
+        roots = {r["name"] for r in rows if not r.get("parent_tree_node")}
+        return [r["name"] for r in rows if r.get("parent_tree_node") in roots]
+
+    def _run_dict(self, doc) -> dict[str, Any]:
+        return {
+            "name": doc.name,
+            "process": doc.arbor_process,
+            "sheet": doc.sheet,
+            "node": doc.node,
+            "status": doc.status,
+            "current_stage_idx": doc.current_stage_idx,
+            "started_at": str(doc.started_at) if doc.started_at else None,
+            "completed_at": str(doc.completed_at) if doc.completed_at else None,
+            "stages": [
+                {
+                    "stage_idx": rs.stage_idx,
+                    "column": rs.column,
+                    "entered_at": str(rs.entered_at) if rs.entered_at else None,
+                    "filled_at": str(rs.filled_at) if rs.filled_at else None,
+                    "due_at": str(rs.due_at) if rs.due_at else None,
+                    "breached": bool(rs.breached),
+                    "breached_at": str(rs.breached_at) if rs.breached_at else None,
+                    "notified_owner": rs.get("notified_owner") or "",
+                }
+                for rs in (doc.get("run_stages") or [])
+            ],
+        }
+
+    def create_process_run(self, data: dict[str, Any]) -> str:
+        """Create an Arbor Process Run (+ its per-stage ledger). The run's process
+        link FIELD is ``arbor_process`` (NOT ``process``); the per-stage ledger is
+        the ``run_stages`` child table."""
+        doc = frappe.new_doc(DT_PROCESS_RUN)
+        doc.arbor_process = data["process"]
+        doc.sheet = data["sheet"]
+        doc.node = data["node"]
+        doc.status = data.get("status", "active")
+        doc.current_stage_idx = data.get("current_stage_idx", 0)
+        doc.started_at = data.get("started_at")
+        doc.completed_at = data.get("completed_at")
+        for st in data.get("stages") or []:
+            doc.append("run_stages", self._run_stage_row(st))
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    @staticmethod
+    def _resolve_due(due: Any) -> Any:
+        """Resolve the pure machine's ``due_at`` into a real Datetime string.
+
+        ``arbor.core.process.default_due_at`` returns a ``{base, add_seconds}``
+        marker when ``entered_at`` is a (non-numeric) ISO string — because the pure
+        module has no clock. The adapter DOES have one, so it resolves the marker
+        to ``base + add_seconds`` here (Datetime column). A plain string/None passes
+        through unchanged (idempotent on re-persist)."""
+        if isinstance(due, dict) and "base" in due:
+            return frappe.utils.add_to_date(
+                due["base"], seconds=int(due.get("add_seconds") or 0)
+            )
+        return due
+
+    def _run_stage_row(self, st: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "stage_idx": st.get("stage_idx"),
+            "column": st.get("column"),
+            "entered_at": st.get("entered_at"),
+            "filled_at": st.get("filled_at"),
+            "due_at": self._resolve_due(st.get("due_at")),
+            "breached": 1 if st.get("breached") else 0,
+            "breached_at": st.get("breached_at"),
+            "notified_owner": st.get("notified_owner") or "",
+        }
+
+    def get_process_run(self, process: str, node: str) -> Optional[dict[str, Any]]:
+        name = frappe.db.get_value(
+            DT_PROCESS_RUN, {"arbor_process": process, "node": node}, "name"
+        )
+        if not name:
+            return None
+        return self._run_dict(frappe.get_doc(DT_PROCESS_RUN, name))
+
+    def update_process_run(self, run: str, patch: dict[str, Any]) -> None:
+        doc = frappe.get_doc(DT_PROCESS_RUN, run)
+        for k, v in (patch or {}).items():
+            if k == "stages":
+                doc.set("run_stages", [self._run_stage_row(st) for st in (v or [])])
+            else:
+                doc.set(k, v)
+        doc.save(ignore_permissions=True)
+
+    def list_process_runs(
+        self, sheet: str, status: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {"sheet": sheet}
+        if status is not None:
+            filters["status"] = status
+        names = frappe.get_all(DT_PROCESS_RUN, filters=filters, pluck="name")
+        return [self._run_dict(frappe.get_doc(DT_PROCESS_RUN, n)) for n in names]
+
+    def list_active_runs_with_due(self, now: Any) -> list[dict[str, Any]]:
+        """Active runs whose CURRENT stage has a ``due_at <= now`` and is not yet
+        filled — the bounded SLA-sweep candidate set. Filtered in the DB to active
+        runs, then narrowed to the current stage's ledger row (matching the
+        in-memory double's semantics)."""
+        names = frappe.get_all(
+            DT_PROCESS_RUN, filters={"status": "active"}, pluck="name"
+        )
+        out: list[dict[str, Any]] = []
+        for n in names:
+            run = self._run_dict(frappe.get_doc(DT_PROCESS_RUN, n))
+            cur_idx = run.get("current_stage_idx")
+            for s in run.get("stages") or []:
+                if (
+                    s.get("stage_idx") == cur_idx
+                    and s.get("due_at") is not None
+                    and s.get("filled_at") is None
+                ):
+                    out.append(run)
+                    break
+        return out
+
 
 class FrappeEventSink:
     """``EventSink`` that writes ``Tree Event`` rows. ``emit`` is the ONLY place
@@ -888,6 +1188,12 @@ class FrappeEventSink:
         doc.payload = event.payload or {}
         doc.actor = event.actor
         doc.actor_type = actor_type
+        # Impersonation trace (Area 1): both NULL for a normal action, so a
+        # non-impersonated event is byte-for-byte as before. Populated only when
+        # the emitting Actor was under an "act as" overlay (real_user = the
+        # authenticated admin, impersonated_as = the effective identity).
+        doc.real_user = event.real_user
+        doc.impersonated_as = event.impersonated_as
         doc.change_request = event.change_request
         doc.insert(ignore_permissions=True)  # append-only; not user-writable
 

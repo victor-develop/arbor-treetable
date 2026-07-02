@@ -140,6 +140,32 @@ class NotificationStore(Protocol):
         ...
 
 
+class ProcessClock(Protocol):
+    """Wall-clock seam for the process lane (Area 3). The process stage machine is
+    time-based (``entered_at`` / ``due_at`` / breach detection), so the dispatcher
+    binding injects a clock; tests inject a freezable/advanceable one so the SLA
+    sweep is deterministic. Returns an ISO-8601 string (lexically ordered, so the
+    pure ``_past_due`` string comparison is correct)."""
+
+    def now(self) -> Any:
+        """Return the current instant as an ISO-8601 string."""
+        ...
+
+
+class ProcessNotifier(Protocol):
+    """The notify sink the process lane fans out through (Area 3). ``notify`` is
+    called by the pure ``arbor.core.process`` machine with ``(recipients, data)``
+    where ``data`` carries ``{source, op, sheet, node, process, stage_idx,
+    column}``. The Frappe binding persists ONE ``source in {'process','sla'}``
+    in-app Notification per recipient (reusing the SAME Notification DocType as the
+    tree-event + comment inboxes); an in-memory double records the calls for
+    bench-free assertions. FYI only — ``requires_ack`` is always 0 so process rows
+    never pollute the accountability aggregate."""
+
+    def __call__(self, recipients: list[str], data: dict[str, Any]) -> None:
+        ...
+
+
 class WebhookStore(Protocol):
     """Persistence for webhook endpoints + the delivery log (DATA-MODEL §10/§11)."""
 

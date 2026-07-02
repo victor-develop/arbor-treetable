@@ -50,15 +50,46 @@ def oidc_callback(code: Optional[str] = None, state: Optional[str] = None):
 
 
 def whoami():
-    """``GET /api/method/arbor.auth.whoami`` → the authenticated User (or Guest).
+    """``GET /api/method/arbor.auth.whoami`` → the resolved identity (or Guest).
 
-    A trivial parity helper letting every surface confirm the resolved identity
-    that the two-axis ACL will run against.
-    """
+    Provider-agnostic: it reads the authenticated principal from the configured
+    AuthProvider, then overlays any active "act as" impersonation (Area 1) so this
+    ONE endpoint powers BOTH the frontend auth gate (login screen when Guest) and
+    the impersonation banner.
+
+    Returns ``{user (EFFECTIVE identity the ACL runs against), real_user (the
+    authenticated admin when impersonating, else same as user), impersonating,
+    authenticated, redirect_to}``. It reads the resolved Actor overlay, never any
+    provider internals, so password (LocalAuthProvider) and SSO feed it
+    identically."""
     result = get_auth_provider().authenticate(request=None)
+    authenticated = bool(result.success and result.user and result.user != "Guest")
+
+    user = result.user
+    real_user = result.user
+    impersonating = False
+    if authenticated:
+        # Overlay the same impersonation the REST _actor() applies, so the banner
+        # and the grid agree. Best-effort: any lookup failure falls back to the
+        # authenticated user (never leaks a foreign identity).
+        try:
+            try:
+                from arbor.api import _actor
+            except (ModuleNotFoundError, ImportError):  # pragma: no cover
+                from arbor.arbor.api import _actor
+
+            actor = _actor()
+            user = actor.user
+            impersonating = bool(getattr(actor, "is_impersonated", False))
+            real_user = actor.real_user if impersonating else actor.user
+        except Exception:  # pragma: no cover - defensive; whoami must never 500
+            pass
+
     return {
-        "user": result.user,
-        "authenticated": bool(result.success and result.user and result.user != "Guest"),
+        "user": user,
+        "real_user": real_user,
+        "impersonating": impersonating,
+        "authenticated": authenticated,
         "redirect_to": result.redirect_to,
     }
 
