@@ -69,6 +69,22 @@ describe("InboxPage — cross-sheet list + grouping by source", () => {
     expect(within(screen.getByTestId("inbox-group-sla")).getByTestId("inbox-row-N-4")).toBeInTheDocument();
   });
 
+  it("renders a source chip on each row (process / sla rows carry their source)", async () => {
+    const inbox = vi.fn().mockResolvedValue([
+      item({ name: "N-3", event_type: "PROCESS_STAGE_ASSIGNED" }),
+      item({ name: "N-4", event_type: "PROCESS_SLA_BREACHED", requires_ack: true }),
+    ]);
+    render(<InboxPage client={makeClient(inbox)} />);
+
+    await waitFor(() => expect(screen.getAllByTestId(/^inbox-row-/)).toHaveLength(2));
+    const process = screen.getByTestId("inbox-chip-N-3");
+    expect(process).toHaveAttribute("data-source", "process");
+    expect(process).toHaveTextContent("Process");
+    const sla = screen.getByTestId("inbox-chip-N-4");
+    expect(sla).toHaveAttribute("data-source", "sla");
+    expect(sla).toHaveTextContent(/SLA/);
+  });
+
   it("renders an empty state when the inbox is empty", async () => {
     render(<InboxPage client={makeClient(vi.fn().mockResolvedValue([]))} />);
     expect(await screen.findByTestId("inbox-empty")).toBeInTheDocument();

@@ -24,6 +24,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { ImpersonationBar } from "./components/ImpersonationBar";
 import { CommentDrawer, type CommentCell } from "./components/CommentDrawer";
 import { ProcessConfigPanel } from "./components/ProcessConfigPanel";
+import { WebhookPanel } from "./components/WebhookPanel";
 import { useWhoami } from "./hooks/useWhoami";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
@@ -378,7 +379,41 @@ function ConnectedShell({
   // Process config modal (Feature: process). Gated on the structural-owner/admin
   // viewer hint; seeded from getProcess(sheet).
   const [processOpen, setProcessOpen] = useState(false);
+  const [webhookOpen, setWebhookOpen] = useState(false);
   const [processDef, setProcessDef] = useState<ProcessDef | null>(null);
+
+  // Process Dashboard BADGE (WS-B2). The Dashboard nav link carries a live
+  // pending / breached count aggregated off the edge dashboard — replacing the
+  // old per-row current-stage wording. We fetch the aggregate (self-scoped,
+  // server-redacted) whenever the snapshot changes; a sheet with no process
+  // yields zero edges -> no badge. Breached is emphasized when > 0.
+  const [processBadge, setProcessBadge] = useState<{ pending: number; breached: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    const fetchDashboard = client.processDashboard;
+    if (!fetchDashboard) {
+      setProcessBadge(null);
+      return;
+    }
+    let live = true;
+    Promise.resolve()
+      .then(() => fetchDashboard(sheetName))
+      .then((d) => {
+        if (!live || !d) return;
+        const pending = d.edges.reduce((n, e) => n + e.pending_count, 0);
+        const breached = d.edges.reduce((n, e) => n + e.breached_count, 0);
+        setProcessBadge({ pending, breached });
+      })
+      .catch(() => {
+        if (live) setProcessBadge(null);
+      });
+    return () => {
+      live = false;
+    };
+    // Re-aggregate whenever the authoritative snapshot changes (a value edit can
+    // open/satisfy an expectation) — snap identity is the mutation signal here.
+  }, [client, sheetName, snap]);
   // Draft flow — whether the Draft Review modal is open (the bar opens it).
   const [draftReviewOpen, setDraftReviewOpen] = useState(false);
 
@@ -826,6 +861,26 @@ function ConnectedShell({
               href={`?sheet=${encodeURIComponent(sheetName)}&dashboard=1`}
             >
               Dashboard
+              {processBadge && (processBadge.pending > 0 || processBadge.breached > 0) && (
+                <span
+                  className="arbor-process-badge"
+                  data-testid="process-badge"
+                  data-breached={processBadge.breached > 0}
+                  title={`${processBadge.pending} pending · ${processBadge.breached} out of SLA`}
+                >
+                  <span className="arbor-process-badge-pending" data-testid="process-badge-pending">
+                    {processBadge.pending}
+                  </span>
+                  {processBadge.breached > 0 && (
+                    <span
+                      className="arbor-process-badge-breached"
+                      data-testid="process-badge-breached"
+                    >
+                      {processBadge.breached}
+                    </span>
+                  )}
+                </span>
+              )}
             </a>
           </nav>
         </div>
@@ -883,6 +938,20 @@ function ConnectedShell({
                 onClick={openProcess}
               >
                 Process
+              </button>
+            )}
+            {/* Notification webhooks (Feature: webhooks). Same structural-owner /
+                admin gate as Process — opens the WebhookPanel modal. */}
+            {canConfigProcess && (
+              <button
+                type="button"
+                className="arbor-webhook-config-btn"
+                data-testid="webhook-config-button"
+                aria-haspopup="dialog"
+                aria-expanded={webhookOpen}
+                onClick={() => setWebhookOpen(true)}
+              >
+                Webhooks
               </button>
             )}
             {/* Global Roles admin (admin-only). Role data is site-wide, so this
@@ -1187,6 +1256,11 @@ function ConnectedShell({
                 />
               </div>
             </div>
+          )}
+          {/* Notification webhooks modal (Feature: webhooks). Same gate as Process;
+              owns its own list fetch via the client. */}
+          {canConfigProcess && webhookOpen && (
+            <WebhookPanel sheet={sheetName} client={client} onClose={() => setWebhookOpen(false)} />
           )}
           {/* Global Roles admin modal — admin-only, header-launched. Mounted only
               when open; reuses the .arbor-modal shell (like ColumnSettings). Every

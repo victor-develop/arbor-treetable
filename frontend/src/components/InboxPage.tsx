@@ -117,6 +117,13 @@ export function InboxPage({
                     data-testid={`inbox-open-${it.name}`}
                     onClick={() => onOpen?.({ sheet: it.sheet, node: it.node ?? null })}
                   >
+                    <span
+                      className="arbor-inbox-chip"
+                      data-testid={`inbox-chip-${it.name}`}
+                      data-source={source}
+                    >
+                      {SOURCE_LABEL[source]}
+                    </span>
                     <span className="arbor-inbox-msg">{it.message}</span>
                     <span className="arbor-inbox-meta">
                       <span className="arbor-inbox-sheet" data-testid="inbox-sheet">

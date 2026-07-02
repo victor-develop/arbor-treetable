@@ -30,9 +30,14 @@ from arbor.core import process as process_machine
 from arbor.core.backoff import is_exhausted
 
 from .matcher import selector_matches  # re-exported for integration tests
+from .notification_webhook import fan_out as _notification_fan_out
 from .notify import Accountability, NotificationDispatcher
 from .ports import TransportTimeout
-from .serializer import serialize_event_dict
+from .serializer import (
+    TREE_EVENT_SOURCE,
+    serialize_event_dict,
+    serialize_notification_bytes,
+)
 from .webhook import WebhookDispatcher
 
 try:  # pragma: no cover - exercised only on a bench
@@ -113,6 +118,66 @@ class _SubscriptionDoc:
         self.requires_ack = bool(row.get("requires_ack"))
         _c = row.get("creation")
         self.created_at = frappe.utils.get_datetime(_c) if _c else None
+
+
+class _NotificationDoc:
+    """Wrap a just-inserted ``Notification`` Document as a
+    :class:`~arbor.arbor.dispatch.notification_webhook.NotificationView` for the
+    fan-out seam (WS-A3c).
+
+    The Notification DocType has no ``sheet`` column of its own, so the sheet is
+    RESOLVED from the source row: a ``comment`` notification via its Arbor Cell
+    Comment's sheet; a ``change_request`` notification via its Change Request's
+    sheet. ``process`` / ``sla`` notifications carry no source-row FK, so their
+    ``sheet`` is ``None`` — they match only GLOBAL (sheet=None) endpoints, which is
+    the documented fan-out contract (:func:`notification_webhook._endpoint_scoped_to_sheet`).
+
+    ``type`` is a human-facing DISPLAY string derived from the source (NOT a closed
+    EVENT_TYPES member); ``payload`` carries the source-row link so a consumer can
+    fetch context on ONE URL."""
+
+    #: source -> display type shown to a webhook consumer.
+    _DISPLAY_TYPE = {
+        "comment": "COMMENT_ADDED",
+        "process": "PROCESS_NOTIFICATION",
+        "sla": "SLA_BREACHED",
+        "change_request": "CHANGE_REQUEST_NOTIFICATION",
+    }
+
+    def __init__(self, doc: Any) -> None:
+        self._doc = doc
+        self.name = doc.name
+        self.source = doc.source
+        self.actor = getattr(doc, "owner", None)
+        self.actor_type = "system"
+        self.timestamp = (
+            str(doc.get("delivered_at") or getattr(doc, "creation", None)) or None
+        )
+        self.sheet = self._resolve_sheet(doc)
+        self.type = self._DISPLAY_TYPE.get(doc.source, doc.source)
+        self.payload = self._resolve_payload(doc)
+
+    @staticmethod
+    def _resolve_sheet(doc: Any) -> Optional[str]:
+        src = doc.source
+        if src == "comment" and doc.get("comment"):
+            return frappe.db.get_value("Arbor Cell Comment", doc.comment, "sheet")
+        if src == "change_request" and doc.get("change_request"):
+            return frappe.db.get_value("Change Request", doc.change_request, "sheet")
+        # process / sla notifications carry no source-row sheet FK; a global
+        # (sheet=None) endpoint still matches.
+        return None
+
+    @staticmethod
+    def _resolve_payload(doc: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {"recipient": doc.get("recipient")}
+        if doc.get("comment"):
+            payload["comment"] = doc.comment
+        if doc.get("change_request"):
+            # A CR link rides INSIDE payload (the top-level change_request slot is
+            # reserved for tree-event replays — serializer contract).
+            payload["change_request"] = doc.change_request
+        return payload
 
 
 class _EndpointDoc:
@@ -314,14 +379,17 @@ class RequestsTransport:
 
 
 # ---------------------------------------------------------------------------
-# Process lane (Area 3) — a THIRD pure consumer of the SAME Tree Event stream.
+# Process lane (process DAG) — a THIRD pure consumer of the SAME Tree Event
+# stream.
 #
-# ``NODE_CREATED`` in a process's scope STARTS a run at stage 0 + notifies the
-# stage-0 column owner; a ``NODE_VALUE_UPDATED`` on the CURRENT stage column
-# ADVANCES the run + notifies the next owner; the terminal fill completes the run
-# (no notify). Advancement emits NO Tree Event, so feeding this off the SAME
-# after_insert hook cannot recurse. Idempotency is the pure machine's job
-# (current_stage_idx + filled_at + notified_owner guards).
+# ``NODE_CREATED`` in a process's scope STARTS a run, fires the row rules + any
+# already-filled column triggers, opens + maybe-satisfies expectations, and
+# notifies the expected columns' owners; a ``NODE_VALUE_UPDATED(colX)`` satisfies
+# open expectations on colX, fires the column(colX) rules, and cascades; the run
+# completes when quiescent (no notify). Runs emit NO Tree Event, so feeding this
+# off the SAME after_insert hook cannot recurse. Idempotency is the pure machine's
+# job (per-(rule_key, expected_column) existence + satisfied_at + notified_owner
+# guards).
 # ---------------------------------------------------------------------------
 class FrappeProcessClock:
     """Wall clock for the process lane, as an ISO-8601 string (lexically ordered,
@@ -336,8 +404,8 @@ class FrappeProcessNotifier:
     recipient (reusing the SAME Notification DocType as the tree-event + comment
     inboxes). FYI only: ``requires_ack=0`` so process rows never pollute the
     accountability aggregate. Idempotency is upstream (the pure ``notified_owner``
-    guard fires the notify at most once per stage-enter), so no de-dupe here beyond
-    the store's own uniqueness."""
+    guard fires the notify at most once per opened expectation), so no de-dupe here
+    beyond the store's own uniqueness."""
 
     def __call__(self, recipients: list[str], data: dict[str, Any]) -> None:
         source = data.get("source", "process")
@@ -400,8 +468,9 @@ class ProcessDispatcher:
         )
 
     def sla_sweep(self) -> list[dict[str, Any]]:
-        """Mark the current stage of every over-due active run breached + notify
-        the stage owner once (when the owning process has ``sla_breach_notify``)."""
+        """Breach every OPEN expectation whose ``due_at <= now`` across active runs
+        + notify the expected column's owner once (when the owning process has
+        ``sla_breach_notify``)."""
         return process_machine.sla_sweep(
             self.repo,
             self.clock.now(),
@@ -452,14 +521,38 @@ def on_tree_event_insert(doc: Any, method: Optional[str] = None) -> None:
     _process_dispatcher().on_tree_event(event)
 
 
+def on_notification_insert(doc: Any, method: Optional[str] = None) -> None:
+    """``doc_events["Notification"]["after_insert"]`` entrypoint (WS-A3c).
+
+    Bridges the NON-tree-event notification lane to webhooks: builds a
+    :class:`_NotificationDoc` view over the just-inserted Notification (resolving
+    its sheet + display type from the source row) and hands it to the pure
+    :func:`notification_webhook.fan_out` seam (WS-A3b) with a Frappe-backed
+    ``WebhookStore`` + the reused ``deliver_notification`` enqueue. A
+    ``tree_event``-sourced Notification is inert (that lane already delivers it), so
+    there is no double delivery and, since neither lane emits a Tree Event, no
+    recursion. Idempotent per (endpoint, notification-name) via the shared key."""
+    source = getattr(doc, "source", None)
+    if not source or source == TREE_EVENT_SOURCE:
+        return
+    dispatcher = _webhook_dispatcher()
+    _notification_fan_out(
+        _NotificationDoc(doc),
+        store=dispatcher._store,
+        deliver=dispatcher.deliver_notification,
+        serialize=serialize_notification_bytes,
+    )
+
+
 def run_webhook_retries() -> None:
     """``scheduler_events`` entrypoint — drive the backoff retry runner."""
     _webhook_dispatcher().run_retries()
 
 
 def run_process_sla_sweep() -> None:
-    """``scheduler_events`` entrypoint — mark SLA breaches on over-due active runs
-    (+ notify the stage owner once when the process opts in)."""
+    """``scheduler_events`` entrypoint — mark SLA breaches on over-due OPEN
+    expectations (+ notify the expected column's owner once when the process opts
+    in)."""
     _process_dispatcher().sla_sweep()
 
 
@@ -475,6 +568,7 @@ def accountability(
 
 __all__ = [
     "on_tree_event_insert",
+    "on_notification_insert",
     "run_webhook_retries",
     "run_process_sla_sweep",
     "accountability",

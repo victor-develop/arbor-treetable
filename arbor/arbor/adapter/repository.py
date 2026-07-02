@@ -194,16 +194,22 @@ class _RoleGrantView:
 
 
 @dataclass
-class _ProcessStageView:
-    """One ordered stage (Area 3). ``idx`` is 0-based (mirrors the pure fixture +
-    the run-stage ledger), derived from the Frappe child-row order — NOT the raw
-    1-based frappe ``idx`` — so ``current_stage_idx`` and run-stage ``stage_idx``
-    line up byte-for-byte with the bench-free machine."""
+class _ProcessRuleView:
+    """One trigger->expectation rule of the process DAG (process DAG). ``rule_key``
+    is the stable ledger ref an Expectation points back to; ``idx`` is 0-based
+    presentation/canvas order (child-row order), matching the pure fixture + the
+    in-memory double so the bench-free machine and the adapter agree byte-for-byte.
+    ``expected_columns`` is the 'and' set (parsed from the JSON child column)."""
 
+    rule_key: str
     idx: int
-    column: str
-    sla_seconds: int = 0
-    notify_on_enter: bool = True
+    trigger_kind: str  # 'row' | 'column'
+    trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
+    expected_columns: list[str] = field(default_factory=list)
+    trigger_column: Optional[str] = None
+    within_seconds: int = 0
+    notify_on_expect: bool = True
+    label: Optional[str] = None
 
 
 @dataclass
@@ -213,9 +219,8 @@ class _ProcessView:
     title: str = ""
     enabled: bool = False
     row_scope: str = "root-children"
-    start_trigger: str = "node-created"
     sla_breach_notify: bool = True
-    stages: list = field(default_factory=list)
+    rules: list = field(default_factory=list)
 
 
 class FrappeRepository:
@@ -961,21 +966,37 @@ class FrappeRepository:
                 {"active": 0, "ended_at": frappe.utils.now()},
             )
 
-    # ---- process / SLA (Area 3) -------------------------------------------
+    # ---- process / SLA (process DAG) --------------------------------------
+    @staticmethod
+    def _parse_expected_columns(raw: Any) -> list[str]:
+        """The ``expected_columns`` JSON child column → a list[str]. Frappe stores
+        a JSON field as a string on read; a legacy/blank value coalesces to []."""
+        if isinstance(raw, str):
+            raw = frappe.parse_json(raw) if raw else []
+        if isinstance(raw, (list, tuple)):
+            return [str(c) for c in raw]
+        return []
+
     def _process_view(self, doc) -> _ProcessView:
-        """Build a ``ProcessView`` from an Arbor Process Document. Stage ``idx`` is
-        0-based (child-row order), so the pure machine + the run-stage ledger agree
-        with the bench-free fixture (which numbers stages 0,1,2…)."""
-        stages = [
-            _ProcessStageView(
+        """Build a ``ProcessView`` from an Arbor Process Document. Rule ``idx`` is
+        0-based (child-row order), so the pure machine + the expectation ledger
+        agree with the bench-free fixture (which numbers rules 0,1,2…)."""
+        rules = [
+            _ProcessRuleView(
+                rule_key=row.rule_key or f"r{i}",
                 idx=i,
-                column=row.column,
-                sla_seconds=int(row.get("sla_seconds") or 0),
-                notify_on_enter=bool(
-                    1 if row.get("notify_on_enter") is None else row.get("notify_on_enter")
+                trigger_kind=row.trigger_kind,
+                trigger_op=row.trigger_op
+                or ("created" if row.trigger_kind == "row" else "updated"),
+                expected_columns=self._parse_expected_columns(row.get("expected_columns")),
+                trigger_column=row.get("trigger_column") or None,
+                within_seconds=int(row.get("within_seconds") or 0),
+                notify_on_expect=bool(
+                    1 if row.get("notify_on_expect") is None else row.get("notify_on_expect")
                 ),
+                label=row.get("label") or None,
             )
-            for i, row in enumerate(doc.get("stages") or [])
+            for i, row in enumerate(doc.get("rules") or [])
         ]
         return _ProcessView(
             name=doc.name,
@@ -983,15 +1004,19 @@ class FrappeRepository:
             title=doc.get("title") or "",
             enabled=bool(doc.enabled),
             row_scope=doc.get("row_scope") or "root-children",
-            start_trigger=doc.get("start_trigger") or "node-created",
             sla_breach_notify=bool(doc.get("sla_breach_notify")),
-            stages=stages,
+            rules=rules,
         )
 
     def upsert_process(self, data: dict[str, Any]) -> str:
-        """Create or replace the sheet's Arbor Process definition (+ ordered
-        stages). Exactly one process per sheet: an existing one is updated in place
-        (its ``enabled`` flag is preserved across a redefine)."""
+        """Create or replace the sheet's Arbor Process definition (+ its
+        trigger->expectation rules). Exactly one process per sheet: an existing one
+        is updated in place (its ``enabled`` flag is preserved across a redefine).
+
+        ``data`` = {sheet, title?, rules:[{rule_key, trigger_kind, trigger_column?,
+        trigger_op, expected_columns:[...], within_seconds?, notify_on_expect?,
+        label?}], row_scope?, sla_breach_notify?}. Each rule's ``expected_columns``
+        is stored as a JSON array on the Arbor Process Rule child row."""
         sheet = data["sheet"]
         existing = frappe.db.get_value(DT_PROCESS, {"sheet": sheet}, "name")
         doc = frappe.get_doc(DT_PROCESS, existing) if existing else frappe.new_doc(DT_PROCESS)
@@ -1000,18 +1025,23 @@ class FrappeRepository:
             doc.title = data["title"]
         if data.get("row_scope"):
             doc.row_scope = data["row_scope"]
-        if data.get("start_trigger"):
-            doc.start_trigger = data["start_trigger"]
         if data.get("sla_breach_notify") is not None:
             doc.sla_breach_notify = 1 if data["sla_breach_notify"] else 0
-        doc.set("stages", [])
-        for st in data.get("stages") or []:
+        doc.set("rules", [])
+        for i, r in enumerate(data.get("rules") or []):
+            kind = r["trigger_kind"]
             doc.append(
-                "stages",
+                "rules",
                 {
-                    "column": st["column"],
-                    "sla_seconds": int(st.get("sla_seconds") or 0),
-                    "notify_on_enter": 1 if st.get("notify_on_enter", True) else 0,
+                    "rule_key": r.get("rule_key") or f"r{i}",
+                    "label": r.get("label"),
+                    "trigger_kind": kind,
+                    "trigger_column": r.get("trigger_column") or None,
+                    "trigger_op": r.get("trigger_op")
+                    or ("created" if kind == "row" else "updated"),
+                    "expected_columns": frappe.as_json(list(r.get("expected_columns") or [])),
+                    "within_seconds": int(r.get("within_seconds") or 0),
+                    "notify_on_expect": 1 if r.get("notify_on_expect", True) else 0,
                 },
             )
         if existing:
@@ -1056,38 +1086,36 @@ class FrappeRepository:
             "sheet": doc.sheet,
             "node": doc.node,
             "status": doc.status,
-            "current_stage_idx": doc.current_stage_idx,
             "started_at": str(doc.started_at) if doc.started_at else None,
             "completed_at": str(doc.completed_at) if doc.completed_at else None,
-            "stages": [
+            "expectations": [
                 {
-                    "stage_idx": rs.stage_idx,
-                    "column": rs.column,
-                    "entered_at": str(rs.entered_at) if rs.entered_at else None,
-                    "filled_at": str(rs.filled_at) if rs.filled_at else None,
-                    "due_at": str(rs.due_at) if rs.due_at else None,
-                    "breached": bool(rs.breached),
-                    "breached_at": str(rs.breached_at) if rs.breached_at else None,
-                    "notified_owner": rs.get("notified_owner") or "",
+                    "rule_key": e.rule_key,
+                    "expected_column": e.expected_column,
+                    "opened_at": str(e.opened_at) if e.opened_at else None,
+                    "satisfied_at": str(e.satisfied_at) if e.satisfied_at else None,
+                    "due_at": str(e.due_at) if e.due_at else None,
+                    "breached": bool(e.breached),
+                    "breached_at": str(e.breached_at) if e.breached_at else None,
+                    "notified_owner": e.get("notified_owner") or "",
                 }
-                for rs in (doc.get("run_stages") or [])
+                for e in (doc.get("expectations") or [])
             ],
         }
 
     def create_process_run(self, data: dict[str, Any]) -> str:
-        """Create an Arbor Process Run (+ its per-stage ledger). The run's process
-        link FIELD is ``arbor_process`` (NOT ``process``); the per-stage ledger is
-        the ``run_stages`` child table."""
+        """Create an Arbor Process Run (+ its expectation ledger). The run's process
+        link FIELD is ``arbor_process`` (NOT ``process``); the ledger is the
+        ``expectations`` child table (one row per (rule_key, expected_column))."""
         doc = frappe.new_doc(DT_PROCESS_RUN)
         doc.arbor_process = data["process"]
         doc.sheet = data["sheet"]
         doc.node = data["node"]
         doc.status = data.get("status", "active")
-        doc.current_stage_idx = data.get("current_stage_idx", 0)
         doc.started_at = data.get("started_at")
         doc.completed_at = data.get("completed_at")
-        for st in data.get("stages") or []:
-            doc.append("run_stages", self._run_stage_row(st))
+        for e in data.get("expectations") or []:
+            doc.append("expectations", self._run_expectation_row(e))
         doc.insert(ignore_permissions=True)
         return doc.name
 
@@ -1096,7 +1124,7 @@ class FrappeRepository:
         """Resolve the pure machine's ``due_at`` into a real Datetime string.
 
         ``arbor.core.process.default_due_at`` returns a ``{base, add_seconds}``
-        marker when ``entered_at`` is a (non-numeric) ISO string — because the pure
+        marker when ``opened_at`` is a (non-numeric) ISO string — because the pure
         module has no clock. The adapter DOES have one, so it resolves the marker
         to ``base + add_seconds`` here (Datetime column). A plain string/None passes
         through unchanged (idempotent on re-persist)."""
@@ -1106,16 +1134,16 @@ class FrappeRepository:
             )
         return due
 
-    def _run_stage_row(self, st: dict[str, Any]) -> dict[str, Any]:
+    def _run_expectation_row(self, e: dict[str, Any]) -> dict[str, Any]:
         return {
-            "stage_idx": st.get("stage_idx"),
-            "column": st.get("column"),
-            "entered_at": st.get("entered_at"),
-            "filled_at": st.get("filled_at"),
-            "due_at": self._resolve_due(st.get("due_at")),
-            "breached": 1 if st.get("breached") else 0,
-            "breached_at": st.get("breached_at"),
-            "notified_owner": st.get("notified_owner") or "",
+            "rule_key": e.get("rule_key"),
+            "expected_column": e.get("expected_column"),
+            "opened_at": e.get("opened_at"),
+            "satisfied_at": e.get("satisfied_at"),
+            "due_at": self._resolve_due(e.get("due_at")),
+            "breached": 1 if e.get("breached") else 0,
+            "breached_at": e.get("breached_at"),
+            "notified_owner": e.get("notified_owner") or "",
         }
 
     def get_process_run(self, process: str, node: str) -> Optional[dict[str, Any]]:
@@ -1129,8 +1157,10 @@ class FrappeRepository:
     def update_process_run(self, run: str, patch: dict[str, Any]) -> None:
         doc = frappe.get_doc(DT_PROCESS_RUN, run)
         for k, v in (patch or {}).items():
-            if k == "stages":
-                doc.set("run_stages", [self._run_stage_row(st) for st in (v or [])])
+            if k == "expectations":
+                doc.set(
+                    "expectations", [self._run_expectation_row(e) for e in (v or [])]
+                )
             else:
                 doc.set(k, v)
         doc.save(ignore_permissions=True)
@@ -1145,22 +1175,22 @@ class FrappeRepository:
         return [self._run_dict(frappe.get_doc(DT_PROCESS_RUN, n)) for n in names]
 
     def list_active_runs_with_due(self, now: Any) -> list[dict[str, Any]]:
-        """Active runs whose CURRENT stage has a ``due_at <= now`` and is not yet
-        filled — the bounded SLA-sweep candidate set. Filtered in the DB to active
-        runs, then narrowed to the current stage's ledger row (matching the
-        in-memory double's semantics)."""
+        """Active runs with an OPEN (unsatisfied, un-breached) expectation whose
+        ``due_at`` is set — the bounded SLA-sweep candidate set. Filtered in the DB
+        to active runs, then narrowed to those carrying a due-but-open expectation
+        (matching the in-memory double's semantics; the sweep itself compares
+        ``due_at <= now``)."""
         names = frappe.get_all(
             DT_PROCESS_RUN, filters={"status": "active"}, pluck="name"
         )
         out: list[dict[str, Any]] = []
         for n in names:
             run = self._run_dict(frappe.get_doc(DT_PROCESS_RUN, n))
-            cur_idx = run.get("current_stage_idx")
-            for s in run.get("stages") or []:
+            for e in run.get("expectations") or []:
                 if (
-                    s.get("stage_idx") == cur_idx
-                    and s.get("due_at") is not None
-                    and s.get("filled_at") is None
+                    e.get("due_at") is not None
+                    and e.get("satisfied_at") is None
+                    and not e.get("breached")
                 ):
                     out.append(run)
                     break

@@ -36,6 +36,17 @@ doc_events = {
     "Tree Event": {
         "after_insert": "arbor.arbor.dispatch.frappe_dispatch.on_tree_event_insert",
     },
+    # Notification-webhook fan-out (Area 3, WS-A3b/WS-A3c): comment / process / sla
+    # / change_request Notifications never become Tree Events, so the tree-event
+    # webhook lane never sees them. This hook bridges that gap — a just-inserted
+    # Notification fans out to the ACTIVE Webhook Endpoints that subscribe to its
+    # source + are scoped to its sheet, through the SAME signed/backoff/retry
+    # engine (arbor.arbor.dispatch.notification_webhook.fan_out). Tree-event-sourced
+    # Notifications are skipped in the adapter (that lane already delivers them), so
+    # there is no double-delivery and no recursion.
+    "Notification": {
+        "after_insert": "arbor.arbor.dispatch.frappe_dispatch.on_notification_insert",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -146,6 +157,15 @@ override_whitelisted_methods = {
     "arbor.list_cell_comments": "arbor.arbor.api.list_cell_comments",
     "arbor.resolve_cell_comment": "arbor.arbor.api.resolve_cell_comment",
     "arbor.delete_cell_comment": "arbor.arbor.api.delete_cell_comment",
+    # Notification-webhook registration surface (Feature: webhooks, Area 3, WS-A3c)
+    # — a sheet-admin/structural-owner-gated management surface over the existing
+    # Webhook Endpoint doctype. NOT registry capabilities and NOT Tree Events (like
+    # the comment/draft shims); SSRF-guarded, secret write-once, never agent-exposed.
+    "arbor.register_webhook": "arbor.arbor.api.register_webhook",
+    "arbor.list_webhooks": "arbor.arbor.api.list_webhooks",
+    "arbor.update_webhook": "arbor.arbor.api.update_webhook",
+    "arbor.delete_webhook": "arbor.arbor.api.delete_webhook",
+    "arbor.test_webhook": "arbor.arbor.api.test_webhook",
     # Server-side Re-Act agent
     "arbor.agent.chat": "arbor.arbor.agent.chat.chat",
     # Accountability aggregate (N notified / M acked)
