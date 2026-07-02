@@ -345,17 +345,48 @@ export type CellComment = {
   can_delete: boolean;
 };
 
-// ---- process / SLA / inbox (Feature: process) -----------------------------
-// One stage in a process definition (from arbor.get_process). `idx` is the fill
-// order; `column` the column whose owner fills it; `current_owner` is resolved
-// LIVE server-side (re-grants reroute automatically); `label` is the readable
-// column label (null when the viewer can't read that column).
-export type ProcessStage = {
+// ---- process DAG / SLA / inbox (Feature: process) --------------------------
+// The trigger kind of a rule. 'row' = a node create/update (the canvas START
+// node); 'column' = a specific trigger_column create/update.
+export type ProcessTriggerKind = "row" | "column";
+// When a trigger fires: on first fill, on any later change, or either.
+export type ProcessTriggerOp = "created" | "updated" | "created-or-updated";
+
+// One trigger->expectation rule in a process definition (from arbor.get_process).
+// "On <trigger>: expect (expected_columns — an 'and' set) filled within
+// within_seconds". `rule_key` is the stable id an Expectation/edge points back to
+// (NOT the presentation `idx`). `trigger_column` is set iff trigger_kind='column'.
+// `expected_owners` maps expected column -> LIVE-resolved owner (server-side; null
+// when the viewer can't read that column). `*_label` are readable labels (null =>
+// redacted for a column the viewer cannot read; never leak the field key).
+export type ProcessRuleView = {
+  rule_key: string;
   idx: number;
-  column: string;
+  trigger_kind: ProcessTriggerKind;
+  trigger_column: string | null;
+  trigger_column_label: string | null;
+  trigger_op: ProcessTriggerOp;
+  expected_columns: string[];
+  expected_labels: (string | null)[];
+  within_seconds: number;
+  notify_on_expect: boolean;
   label: string | null;
-  sla_seconds: number;
-  current_owner?: string | null;
+  expected_owners?: Record<string, string | null>;
+};
+
+// One trigger->expectation rule in the write payload (defineProcess). Only
+// `trigger_kind`, `trigger_op`, and a non-empty `expected_columns` are required;
+// `trigger_column` is required iff trigger_kind='column'. `rule_key` is optional
+// (the server mints a stable one when omitted). `within_seconds` 0/absent = no SLA.
+export type ProcessRuleInput = {
+  rule_key?: string;
+  trigger_kind: ProcessTriggerKind;
+  trigger_column?: string | null;
+  trigger_op: ProcessTriggerOp;
+  expected_columns: string[];
+  within_seconds?: number;
+  notify_on_expect?: boolean;
+  label?: string;
 };
 
 // A process definition + enabled state for a sheet (arbor.get_process).
@@ -364,47 +395,59 @@ export type ProcessDef = {
   title: string | null;
   enabled: boolean;
   row_scope: string;
-  start_trigger: string;
-  stages: ProcessStage[];
+  rules: ProcessRuleView[];
 };
 
-// One stage column in the process definition write payload (defineProcess). Only
-// `column` is required; `sla_seconds` is optional (0/absent = no SLA).
-export type ProcessStageInput = {
-  column: string;
-  sla_seconds?: number;
-};
-
-// A per-stage aggregate row for the Kanban/flow dashboard (process_dashboard).
-export type ProcessDashboardStage = {
-  idx: number;
-  column: string;
-  label: string | null;
+// One aggregate edge (trigger -> expected column) for the flow dashboard
+// (process_dashboard). Each rule with N expected columns contributes N edges that
+// share `rule_key`. `from_column` is null for a row (START) trigger. `*_label`
+// null => redacted for a column the viewer cannot read.
+export type ProcessDashboardEdge = {
+  rule_key: string;
+  from_kind: ProcessTriggerKind;
+  from_column: string | null;
+  from_label: string | null;
+  to_column: string;
+  to_label: string | null;
+  within_seconds: number;
   pending_count: number;
   breached_count: number;
-  avg_enter_to_fill_seconds: number | null;
+  satisfied_count: number;
+  avg_open_to_satisfy_seconds: number | null;
 };
 
-// The dashboard aggregate over Process Run + Run Stage rows (process_dashboard).
+// The dashboard aggregate over Process Run + Expectation rows (process_dashboard).
 export type ProcessDashboard = {
-  stages: ProcessDashboardStage[];
+  edges: ProcessDashboardEdge[];
   total_active: number;
   total_completed: number;
   throughput: number;
 };
 
+// One open/closed expectation under a run (arbor.list_process_runs) — one per
+// (rule_key, expected_column). Run rows never carry cell VALUES (structural
+// position only). `to_label` null => redacted for an unreadable column.
+export type ProcessRunExpectation = {
+  rule_key: string;
+  expected_column: string;
+  to_label: string | null;
+  opened_at: string | null;
+  satisfied_at: string | null;
+  due_at: string | null;
+  breached: boolean;
+};
+
 // One per-row process run (arbor.list_process_runs) — a node's position in the
-// process. `current_stage_idx` is the active stage; run rows never carry cell
-// VALUES (structural position only).
+// process DAG, carrying its expectation ledger.
 export type ProcessRun = {
   name: string;
   process: string;
   sheet: string;
   node: string;
   status: "active" | "completed" | "abandoned";
-  current_stage_idx: number;
   started_at: string;
   completed_at: string | null;
+  expectations: ProcessRunExpectation[];
 };
 
 // One row in the viewer's cross-sheet Inbox (arbor.inbox) — a superset of a
@@ -419,6 +462,43 @@ export type InboxItem = {
   requires_ack: boolean;
   acked: boolean;
   node?: string | null;
+};
+
+// ---- notification webhooks (Feature: webhooks) -----------------------------
+// A sheet-admin-registered Webhook Endpoint (from the webhook registration
+// surface). The signing `secret` is WRITE-ONLY: it is returned ONCE at register/
+// rotate time and NEVER included in a list read (hence optional here). `scope` +
+// `target` mirror the Tree Event matcher; `notification_sources` subscribes the
+// endpoint to non-tree-event fan-out sources (comment/process/sla/change_request).
+export type WebhookEndpointView = {
+  name: string;
+  label: string | null;
+  url: string;
+  active: boolean;
+  sheet: string | null;
+  owner_user: string | null;
+  scope: "sheet" | "branch" | "column";
+  target: string | null;
+  event_types: string[];
+  notification_sources: string[];
+  secret?: string;
+};
+
+// One Webhook Delivery attempt-log row (from the delivery audit read). `source`
+// discriminates the payload origin; exactly one of `tree_event`/`notification` is
+// set accordingly. `event_id` is the per-(endpoint, event_id) idempotency key.
+export type WebhookDeliveryView = {
+  name: string;
+  endpoint: string;
+  source: "tree_event" | "comment" | "process" | "sla" | "change_request";
+  tree_event: string | null;
+  notification: string | null;
+  event_id: string | null;
+  status: "pending" | "delivered" | "failed" | "exhausted";
+  attempts: number;
+  signature: string | null;
+  next_retry_at: string | null;
+  last_response: string | null;
 };
 
 export type ArborClient = {
@@ -499,8 +579,8 @@ export type ArborClient = {
   // optional so mocked clients implement only what they use.
   defineProcess?: (
     sheet: string,
-    stages: ProcessStageInput[],
-    opts?: { title?: string; row_scope?: string; start_trigger?: string },
+    rules: ProcessRuleInput[],
+    opts?: { title?: string; row_scope?: string },
   ) => Promise<Outcome>;
   enableProcess?: (sheet: string) => Promise<Outcome>;
   disableProcess?: (sheet: string) => Promise<Outcome>;
@@ -509,7 +589,7 @@ export type ArborClient = {
   processDashboard?: (sheet: string) => Promise<ProcessDashboard>;
   listProcessRuns?: (
     sheet: string,
-    opts?: { stage_idx?: number; status?: string },
+    opts?: { rule_key?: string; column?: string; status?: string },
   ) => Promise<ProcessRun[]>;
   // The viewer's cross-sheet in-app notifications (the Inbox page). Self-scoped
   // server-side to the actor.
@@ -690,15 +770,14 @@ export const api: ArborClient = {
 
   // Process — define/enable/disable/start are governed caps via execute_action;
   // the read shims mirror the listActivity/listNotifications GET+qs pattern.
-  defineProcess: (sheet, stages, opts) =>
+  defineProcess: (sheet, rules, opts) =>
     post<Outcome>("arbor.execute_action", {
       action_id: "defineProcess",
       params: {
         sheet,
-        stages,
+        rules,
         ...(opts?.title === undefined ? {} : { title: opts.title }),
         ...(opts?.row_scope === undefined ? {} : { row_scope: opts.row_scope }),
-        ...(opts?.start_trigger === undefined ? {} : { start_trigger: opts.start_trigger }),
       },
     }),
 
@@ -733,7 +812,8 @@ export const api: ArborClient = {
   listProcessRuns: async (sheet, opts) => {
     const headers = await authHeaderProvider();
     const qs = new URLSearchParams({ sheet });
-    if (opts?.stage_idx !== undefined) qs.set("stage_idx", String(opts.stage_idx));
+    if (opts?.rule_key !== undefined) qs.set("rule_key", opts.rule_key);
+    if (opts?.column !== undefined) qs.set("column", opts.column);
     if (opts?.status !== undefined) qs.set("status", opts.status);
     const res = await fetchImpl(`/api/method/arbor.list_process_runs?${qs.toString()}`, { headers });
     if (!res.ok) throw new Error(`list_process_runs failed: ${res.status}`);

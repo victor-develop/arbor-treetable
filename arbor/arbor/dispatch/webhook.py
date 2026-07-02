@@ -32,12 +32,14 @@ from .ports import (
     EventView,
     Transport,
     TransportTimeout,
+    WebhookEndpointView,
     WebhookStore,
 )
-from .serializer import serialize_event_bytes
+from .serializer import TREE_EVENT_SOURCE, serialize_event_bytes
 
 SIGNATURE_HEADER = "X-Arbor-Signature"
 EVENT_ID_HEADER = "X-Arbor-Event-Id"
+SOURCE_HEADER = "X-Arbor-Source"
 
 #: Default per-request timeout (seconds) for an outbound delivery POST.
 DEFAULT_TIMEOUT = 10.0
@@ -105,29 +107,86 @@ class WebhookDispatcher:
         for endpoint in self._store.active_endpoints(event.sheet):
             if not selector_matches(endpoint, event, self._store.get_node_range):
                 continue
-            if self._store.delivery_exists(endpoint.name, event.name):
-                continue  # one delivery per (endpoint, tree_event)
-
-            signature = compute_signature(endpoint.secret, body)
-            delivery_id = self._store.create_delivery(
-                {
-                    "endpoint": endpoint.name,
-                    "tree_event": event.name,
-                    "status": PENDING,
-                    "attempts": 0,
-                    "last_response": None,
-                    "next_retry_at": None,
-                    "signature": signature,
-                    # body cached so retries resend byte-identical content
-                    # without re-serializing/re-signing (WEBHOOKS-028).
-                    "body": body,
-                    "url": endpoint.url,
-                }
+            delivery_id = self.deliver(
+                endpoint,
+                event_id=event.name,
+                body=body,
+                source=TREE_EVENT_SOURCE,
+                link_fields={"tree_event": event.name},
             )
-            created.append(delivery_id)
-            self._attempt(delivery_id)
+            if delivery_id is not None:
+                created.append(delivery_id)
 
         return created
+
+    # -- notification fan-out seam (WS-A3b reuses this) --------------------
+    def deliver_notification(
+        self,
+        endpoint: WebhookEndpointView,
+        *,
+        notification_id: str,
+        body: bytes,
+        source: str,
+    ) -> Optional[str]:
+        """Deliver a NON-tree-event notification payload to ONE endpoint through
+        the SAME signed/backoff/retry engine as :meth:`on_tree_event` (DRY).
+
+        The caller (the fan-out seam, WS-A3b) is responsible for source/scope
+        matching and for building the notification-shaped ``body`` via
+        :func:`arbor.dispatch.serializer.serialize_notification_bytes`. Idempotent
+        per ``(endpoint, notification_id)`` — the SAME per-(endpoint, event_id) key
+        the tree-event lane uses. Returns the created delivery id, or ``None`` if a
+        delivery already existed for the pair."""
+        return self.deliver(
+            endpoint,
+            event_id=notification_id,
+            body=body,
+            source=source,
+            link_fields={"notification": notification_id},
+        )
+
+    # -- ONE reusable enqueue+first-attempt core ---------------------------
+    def deliver(
+        self,
+        endpoint: WebhookEndpointView,
+        *,
+        event_id: str,
+        body: bytes,
+        source: str,
+        link_fields: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Sign ``body`` with the endpoint secret, persist ONE Webhook Delivery,
+        and drive the first attempt — the shared path for BOTH the tree-event
+        stream and the notification fan-out (WS-A3b).
+
+        Idempotent per ``(endpoint, event_id)`` regardless of source (WS-F1); a
+        second call for the same pair is a no-op returning ``None``. ``source`` and
+        ``event_id`` are stored on the delivery (and travel in the ``X-Arbor-Source``
+        / ``X-Arbor-Event-Id`` headers); ``link_fields`` carries the source-specific
+        FK (``tree_event`` or ``notification``). The body + signature are computed
+        ONCE and cached so retries resend byte-identical content (WEBHOOKS-028)."""
+        if self._store.delivery_exists_for_event(endpoint.name, event_id):
+            return None  # one delivery per (endpoint, event_id)
+
+        signature = compute_signature(endpoint.secret, body)
+        data: dict[str, Any] = {
+            "endpoint": endpoint.name,
+            "source": source,
+            "event_id": event_id,
+            "status": PENDING,
+            "attempts": 0,
+            "last_response": None,
+            "next_retry_at": None,
+            "signature": signature,
+            # body cached so retries resend byte-identical content without
+            # re-serializing/re-signing (WEBHOOKS-028).
+            "body": body,
+            "url": endpoint.url,
+        }
+        data.update(link_fields or {})
+        delivery_id = self._store.create_delivery(data)
+        self._attempt(delivery_id)
+        return delivery_id
 
     # -- retry runner -------------------------------------------------------
     def run_retries(self) -> list[str]:
@@ -165,10 +224,14 @@ class WebhookDispatcher:
 
         attempt_no = int(delivery.get("attempts", 0)) + 1
         body: bytes = delivery["body"]
+        # Source-agnostic idempotency id: prefer the stored event_id; fall back to
+        # the tree_event link for the tree-event lane (WEBHOOKS-020).
+        event_id = delivery.get("event_id") or delivery.get("tree_event")
         headers = {
             "Content-Type": "application/json",
             SIGNATURE_HEADER: delivery["signature"],
-            EVENT_ID_HEADER: delivery["tree_event"],
+            EVENT_ID_HEADER: event_id,
+            SOURCE_HEADER: delivery.get("source", TREE_EVENT_SOURCE),
         }
 
         try:

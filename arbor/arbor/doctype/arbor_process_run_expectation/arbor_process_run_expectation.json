@@ -1,0 +1,85 @@
+{
+ "actions": [],
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_key",
+  "expected_column",
+  "opened_at",
+  "satisfied_at",
+  "due_at",
+  "breached",
+  "breached_at",
+  "notified_owner"
+ ],
+ "fields": [
+  {
+   "description": "The Arbor Process Rule (rule_ref) that opened this expectation. One expectation exists per (run, rule_key, expected_column).",
+   "fieldname": "rule_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Rule Key",
+   "reqd": 1
+  },
+  {
+   "description": "The expected Tree Column this expectation tracks (one of the rule's expected_columns).",
+   "fieldname": "expected_column",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Expected Column",
+   "options": "Tree Column",
+   "reqd": 1
+  },
+  {
+   "description": "When the trigger fired and this expectation opened (SLA clock start).",
+   "fieldname": "opened_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Opened At"
+  },
+  {
+   "description": "When the expected column was filled (expectation satisfied); null until satisfied.",
+   "fieldname": "satisfied_at",
+   "fieldtype": "Datetime",
+   "label": "Satisfied At"
+  },
+  {
+   "description": "opened_at + within_seconds; null when the rule has no SLA (within_seconds=0).",
+   "fieldname": "due_at",
+   "fieldtype": "Datetime",
+   "label": "Due At"
+  },
+  {
+   "default": "0",
+   "description": "Set by the SLA sweep when now > due_at and the expectation is not yet satisfied.",
+   "fieldname": "breached",
+   "fieldtype": "Check",
+   "label": "Breached"
+  },
+  {
+   "fieldname": "breached_at",
+   "fieldtype": "Datetime",
+   "label": "Breached At"
+  },
+  {
+   "description": "Idempotency guard for the expect-open notification (records the notified owner marker so a replay does not re-notify).",
+   "fieldname": "notified_owner",
+   "fieldtype": "Data",
+   "label": "Notified Owner"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process Run Expectation",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

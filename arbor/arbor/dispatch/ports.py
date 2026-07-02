@@ -55,7 +55,15 @@ class SubscriptionView(Protocol):
 
 @runtime_checkable
 class WebhookEndpointView(Protocol):
-    """A Webhook Endpoint row (DATA-MODEL §10)."""
+    """A Webhook Endpoint row (DATA-MODEL §10).
+
+    ``event_types`` gates the Tree Event stream (``on_tree_event``);
+    ``notification_sources`` gates the NON-tree-event notification fan-out seam
+    (``deliver_notification`` — WS-A3b) with source discriminators (``comment`` |
+    ``process`` | ``sla`` | ``change_request``). The two are independent filters
+    over the ONE delivery engine. ``label`` / ``sheet`` / ``owner_user`` are the
+    registration-surface metadata (WS-A3c) — inert for matching/delivery, so they
+    are optional on this read-view (a legacy global endpoint has them ``None``)."""
 
     name: str
     url: str
@@ -64,6 +72,11 @@ class WebhookEndpointView(Protocol):
     scope: str  # "sheet" | "branch" | "column"
     target: str
     active: bool
+    # Additive (WS-F1). Optional so pre-existing doubles/adapters need no change.
+    notification_sources: list[str]
+    label: Optional[str]
+    sheet: Optional[str]
+    owner_user: Optional[str]
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +187,14 @@ class WebhookStore(Protocol):
         endpoints are excluded so deactivation stops delivery (WEBHOOKS-003)."""
         ...
 
+    def notification_endpoints(self, source: str) -> list[WebhookEndpointView]:
+        """All ACTIVE endpoints subscribed to a NON-tree-event ``source`` (their
+        ``notification_sources`` contains it) — the fan-out seam's endpoint set
+        (WS-A3b). Inactive endpoints are excluded, mirroring
+        :meth:`active_endpoints`. A store that predates the seam may return an
+        empty list."""
+        ...
+
     def get_endpoint(self, endpoint: str) -> Optional[WebhookEndpointView]:
         """Return the endpoint, or ``None`` if deleted (WEBHOOKS-005)."""
         ...
@@ -183,7 +204,16 @@ class WebhookStore(Protocol):
 
     def delivery_exists(self, endpoint: str, tree_event: str) -> bool:
         """True if a Webhook Delivery already exists for ``(endpoint,
-        tree_event)`` — one delivery per pair (WEBHOOKS-032)."""
+        tree_event)`` — one delivery per pair (WEBHOOKS-032). Retained for the
+        tree-event lane; the source-agnostic path uses
+        :meth:`delivery_exists_for_event`."""
+        ...
+
+    def delivery_exists_for_event(self, endpoint: str, event_id: str) -> bool:
+        """True if a Webhook Delivery already exists for ``(endpoint, event_id)``
+        regardless of source — the ONE idempotency key that spans tree-event and
+        notification deliveries (per-(endpoint, event_id), WS-F1). Keeps replays of
+        either source from double-POSTing."""
         ...
 
     def create_delivery(self, data: dict[str, Any]) -> str:

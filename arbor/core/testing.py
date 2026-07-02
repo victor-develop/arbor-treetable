@@ -83,11 +83,19 @@ class _RoleGrant:
 
 
 @dataclass
-class _ProcessStage:
+class _ProcessRule:
+    """One trigger->expectation rule (process DAG). ``rule_key`` is the stable
+    ledger ref an Expectation points back to; ``idx`` is presentation order."""
+
+    rule_key: str
     idx: int
-    column: str
-    sla_seconds: int = 0
-    notify_on_enter: bool = True
+    trigger_kind: str  # 'row' | 'column'
+    trigger_op: str  # 'created' | 'updated' | 'created-or-updated'
+    expected_columns: list[str] = field(default_factory=list)
+    trigger_column: Optional[str] = None
+    within_seconds: int = 0
+    notify_on_expect: bool = True
+    label: Optional[str] = None
 
 
 @dataclass
@@ -97,9 +105,8 @@ class _Process:
     title: str = ""
     enabled: bool = False
     row_scope: str = "root-children"
-    start_trigger: str = "node-created"
     sla_breach_notify: bool = True
-    stages: list[_ProcessStage] = field(default_factory=list)
+    rules: list[_ProcessRule] = field(default_factory=list)
 
 
 class InMemoryRepository:
@@ -506,25 +513,36 @@ class InMemoryRepository:
         existing = self.get_process(sheet)
         name = existing.name if existing else self._id("proc")
         enabled = existing.enabled if existing else False
+        rules: list[_ProcessRule] = []
+        for i, r in enumerate(data.get("rules") or []):
+            rules.append(
+                _ProcessRule(
+                    rule_key=r.get("rule_key") or f"r{i}",
+                    idx=r.get("idx", i),
+                    trigger_kind=r["trigger_kind"],
+                    trigger_op=r.get("trigger_op", "created" if r["trigger_kind"] == "row" else "updated"),
+                    expected_columns=list(r.get("expected_columns") or []),
+                    trigger_column=r.get("trigger_column"),
+                    within_seconds=int(r.get("within_seconds") or 0),
+                    notify_on_expect=r.get("notify_on_expect", True),
+                    label=r.get("label"),
+                )
+            )
         self.processes[name] = _Process(
             name=name,
             sheet=sheet,
             title=data.get("title", ""),
             enabled=enabled,
             row_scope=data.get("row_scope", "root-children"),
-            start_trigger=data.get("start_trigger", "node-created"),
             sla_breach_notify=data.get("sla_breach_notify", True),
-            stages=[
-                _ProcessStage(
-                    idx=st.get("idx", i),
-                    column=st["column"],
-                    sla_seconds=int(st.get("sla_seconds") or 0),
-                    notify_on_enter=st.get("notify_on_enter", True),
-                )
-                for i, st in enumerate(data.get("stages") or [])
-            ],
+            rules=rules,
         )
         return name
+
+    def get_process_by_name(self, process: str) -> Optional[_Process]:
+        """Resolve a run's ``process`` link back to its definition (the SLA
+        sweep's ``sla_breach_notify`` gate uses this)."""
+        return self.processes.get(process)
 
     def get_process(self, sheet: str) -> Optional[_Process]:
         for p in self.processes.values():
@@ -571,11 +589,12 @@ class InMemoryRepository:
         for r in self.process_runs.values():
             if r.get("status") != "active":
                 continue
-            stages = r.get("stages") or []
-            cur_idx = r.get("current_stage_idx")
-            for s in stages:
-                if s.get("stage_idx") == cur_idx and s.get("due_at") is not None \
-                        and s.get("filled_at") is None:
+            for e in r.get("expectations") or []:
+                if (
+                    e.get("due_at") is not None
+                    and e.get("satisfied_at") is None
+                    and not e.get("breached")
+                ):
                     out.append(r)
                     break
         return out

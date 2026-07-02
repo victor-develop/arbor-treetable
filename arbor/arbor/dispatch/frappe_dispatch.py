@@ -125,9 +125,15 @@ class _EndpointDoc:
         )
         et = doc.event_types
         self.event_types = json.loads(et) if isinstance(et, str) else (et or [])
+        # notification_sources is a Small Text JSON array (the fan-out filter).
+        ns = getattr(doc, "notification_sources", None)
+        self.notification_sources = json.loads(ns) if isinstance(ns, str) and ns else (ns or [])
         self.scope = doc.scope
         self.target = doc.target
         self.active = bool(doc.active)
+        self.label = getattr(doc, "label", None)
+        self.sheet = getattr(doc, "sheet", None)
+        self.owner_user = getattr(doc, "owner_user", None)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +216,23 @@ class FrappeWebhookStore:
         names = frappe.get_all("Webhook Endpoint", filters={"active": 1}, pluck="name")
         return [_EndpointDoc(frappe.get_doc("Webhook Endpoint", n)) for n in names]
 
+    def notification_endpoints(self, source: str):
+        """ACTIVE endpoints whose ``notification_sources`` JSON contains ``source``
+        (the fan-out seam's endpoint set, WS-A3b). The column is a JSON array; a
+        substring LIKE cheaply narrows the candidate rows, then the parsed
+        ``_EndpointDoc.notification_sources`` is the authoritative membership
+        check."""
+        names = frappe.get_all(
+            "Webhook Endpoint",
+            filters={
+                "active": 1,
+                "notification_sources": ["like", f"%{source}%"],
+            },
+            pluck="name",
+        )
+        docs = [_EndpointDoc(frappe.get_doc("Webhook Endpoint", n)) for n in names]
+        return [d for d in docs if source in (d.notification_sources or [])]
+
     def get_endpoint(self, endpoint: str):
         if not frappe.db.exists("Webhook Endpoint", endpoint):
             return None
@@ -225,6 +248,15 @@ class FrappeWebhookStore:
         return bool(
             frappe.db.exists(
                 "Webhook Delivery", {"endpoint": endpoint, "tree_event": tree_event}
+            )
+        )
+
+    def delivery_exists_for_event(self, endpoint: str, event_id: str) -> bool:
+        """Source-agnostic idempotency: one delivery per ``(endpoint, event_id)``
+        across tree-event AND notification sources (WS-F1)."""
+        return bool(
+            frappe.db.exists(
+                "Webhook Delivery", {"endpoint": endpoint, "event_id": event_id}
             )
         )
 

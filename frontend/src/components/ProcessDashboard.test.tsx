@@ -15,12 +15,29 @@ import { describe, expect, it, vi } from "vitest";
 import { ProcessDashboard } from "./ProcessDashboard";
 import type { ArborClient, ProcessDashboard as Dash, ProcessRun } from "../api";
 
+function edge(over: Partial<Dash["edges"][number]>): Dash["edges"][number] {
+  return {
+    rule_key: "r0",
+    from_kind: "row",
+    from_column: null,
+    from_label: null,
+    to_column: "owner_c",
+    to_label: "Owner",
+    within_seconds: 0,
+    pending_count: 3,
+    breached_count: 0,
+    satisfied_count: 0,
+    avg_open_to_satisfy_seconds: 120,
+    ...over,
+  };
+}
+
 function dash(over: Partial<Dash> = {}): Dash {
   return {
-    stages: [
-      { idx: 0, column: "owner_c", label: "Owner", pending_count: 3, breached_count: 0, avg_enter_to_fill_seconds: 120 },
-      { idx: 1, column: "budget", label: "Budget", pending_count: 2, breached_count: 1, avg_enter_to_fill_seconds: 3600 },
-      { idx: 2, column: "approval", label: null, pending_count: 0, breached_count: 0, avg_enter_to_fill_seconds: null },
+    edges: [
+      edge({ rule_key: "r0", to_column: "owner_c", to_label: "Owner", pending_count: 3, breached_count: 0, avg_open_to_satisfy_seconds: 120 }),
+      edge({ rule_key: "r1", from_kind: "column", from_column: "owner_c", from_label: "Owner", to_column: "budget", to_label: "Budget", pending_count: 2, breached_count: 1, avg_open_to_satisfy_seconds: 3600 }),
+      edge({ rule_key: "r2", from_kind: "column", from_column: "budget", from_label: "Budget", to_column: "approval", to_label: null, pending_count: 0, breached_count: 0, avg_open_to_satisfy_seconds: null }),
     ],
     total_active: 5,
     total_completed: 4,
@@ -36,9 +53,9 @@ function run(over: Partial<ProcessRun> = {}): ProcessRun {
     sheet: "S",
     node: "N-1",
     status: "active",
-    current_stage_idx: 1,
     started_at: "2026-06-20T10:00:00",
     completed_at: null,
+    expectations: [],
     ...over,
   };
 }
@@ -61,8 +78,8 @@ describe("ProcessDashboard — stage columns + counts", () => {
     const client = makeClient(vi.fn().mockResolvedValue(dash()));
     render(<ProcessDashboard client={client} sheet="S" />);
 
-    await waitFor(() => expect(screen.getAllByTestId(/^pd-stage-\d+$/)).toHaveLength(3));
-    const s0 = screen.getByTestId("pd-stage-0");
+    await waitFor(() => expect(screen.getAllByTestId(/^pd-edge-\d+$/)).toHaveLength(3));
+    const s0 = screen.getByTestId("pd-edge-0");
     expect(within(s0).getByTestId("pd-stage-label")).toHaveTextContent("Owner");
     expect(within(s0).getByTestId("pd-pending")).toHaveTextContent("3");
     expect(within(s0).getByTestId("pd-breached")).toHaveTextContent("0");
@@ -72,11 +89,11 @@ describe("ProcessDashboard — stage columns + counts", () => {
     const client = makeClient(vi.fn().mockResolvedValue(dash()));
     render(<ProcessDashboard client={client} sheet="S" />);
 
-    const s1 = await screen.findByTestId("pd-stage-1");
+    const s1 = await screen.findByTestId("pd-edge-1");
     expect(within(s1).getByTestId("pd-breached")).toHaveTextContent("1");
     expect(within(s1).getByTestId("pd-breached")).toHaveAttribute("data-breached", "true");
     // A stage with no breaches is not emphasized.
-    const s0 = screen.getByTestId("pd-stage-0");
+    const s0 = screen.getByTestId("pd-edge-0");
     expect(within(s0).getByTestId("pd-breached")).toHaveAttribute("data-breached", "false");
   });
 
@@ -84,10 +101,10 @@ describe("ProcessDashboard — stage columns + counts", () => {
     const client = makeClient(vi.fn().mockResolvedValue(dash()));
     render(<ProcessDashboard client={client} sheet="S" />);
 
-    const s2 = await screen.findByTestId("pd-stage-2");
+    const s2 = await screen.findByTestId("pd-edge-2");
     // Never leak the raw column field key when the viewer can't read it.
     expect(within(s2).getByTestId("pd-stage-label")).not.toHaveTextContent("approval");
-    expect(within(s2).getByTestId("pd-stage-label")).toHaveTextContent(/stage 3/i);
+    expect(within(s2).getByTestId("pd-stage-label")).toHaveTextContent(/step 3/i);
   });
 
   it("shows the top summary (active / completed / throughput)", async () => {
@@ -101,7 +118,7 @@ describe("ProcessDashboard — stage columns + counts", () => {
   });
 
   it("renders an empty state when there are no stages", async () => {
-    const client = makeClient(vi.fn().mockResolvedValue(dash({ stages: [], total_active: 0, total_completed: 0, throughput: 0 })));
+    const client = makeClient(vi.fn().mockResolvedValue(dash({ edges: [], total_active: 0, total_completed: 0, throughput: 0 })));
     render(<ProcessDashboard client={client} sheet="S" />);
     expect(await screen.findByTestId("pd-empty")).toBeInTheDocument();
   });
@@ -113,12 +130,12 @@ describe("ProcessDashboard — drill-down to runs", () => {
     const client = makeClient(vi.fn().mockResolvedValue(dash()), listRuns);
     render(<ProcessDashboard client={client} sheet="S" />);
 
-    const s1 = await screen.findByTestId("pd-stage-1");
+    const s1 = await screen.findByTestId("pd-edge-1");
     await act(async () => {
       within(s1).getByTestId("pd-stage-drill").click();
     });
 
-    await waitFor(() => expect(listRuns).toHaveBeenCalledWith("S", expect.objectContaining({ stage_idx: 1 })));
+    await waitFor(() => expect(listRuns).toHaveBeenCalledWith("S", expect.objectContaining({ rule_key: "r1", column: "budget" })));
     await waitFor(() => expect(screen.getAllByTestId(/^pd-run-/)).toHaveLength(2));
     expect(screen.getByTestId("pd-run-R-1")).toHaveTextContent("N-1");
   });

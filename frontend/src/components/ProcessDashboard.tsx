@@ -1,20 +1,30 @@
-// Per-process kanban / flow dashboard (Feature: process). One column per stage
-// showing the pending count, the out-of-SLA (breached) count, and the avg time in
-// stage (enter -> fill); a top summary of active / completed / throughput.
-// Clicking a stage drills into that stage's runs via client.listProcessRuns.
+// Per-process flow dashboard (Feature: process DAG). One card per EDGE (trigger ->
+// expected column) showing the pending count, the out-of-SLA (breached) count, and
+// the avg open->satisfy time; a top summary of active / completed / throughput.
+// Clicking an edge drills into that edge's runs via client.listProcessRuns.
 //
-// SELF-CONTAINED: it fetches the dashboard aggregate on mount / sheet change /
-// refreshKey change against client.processDashboard, and fetches the drill-down
-// runs lazily on a stage click. It re-derives no ACL — the server redacts an
-// unreadable stage column's LABEL to null (we render a generic "Stage N"
-// placeholder, never the raw field key), and run rows never carry cell values.
+// NOTE (WS-F1 bridge): this is a minimal projection over the new edge aggregate;
+// the richer edge-metric view is WS-B2. SELF-CONTAINED: it fetches the aggregate
+// on mount / sheet change / refreshKey change, and drills lazily. It re-derives no
+// ACL — the server redacts an unreadable column's LABEL to null (we render a
+// generic placeholder, never the raw field key); run rows carry no cell values.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArborClient, ProcessDashboard as Dash, ProcessRun } from "../api";
+import type {
+  ArborClient,
+  ProcessDashboard as Dash,
+  ProcessDashboardEdge,
+  ProcessRun,
+} from "../api";
 
-// A stage label the viewer can read, else a generic ordinal that leaks nothing.
-function stageLabel(label: string | null, idx: number): string {
-  return label ?? `Stage ${idx + 1}`;
+// A readable edge label, else a generic ordinal that leaks nothing.
+function edgeLabel(edge: ProcessDashboardEdge, idx: number): string {
+  return edge.to_label ?? `Step ${idx + 1}`;
+}
+
+// A stable per-edge key (rule_key + expected column).
+function edgeKey(edge: ProcessDashboardEdge): string {
+  return `${edge.rule_key}:${edge.to_column}`;
 }
 
 // Compact avg-duration rendering: seconds -> "2m" / "1.0h" / "—" when unknown.
@@ -37,8 +47,8 @@ export function ProcessDashboard({
 }): JSX.Element {
   const [dashboard, setDashboard] = useState<Dash | null>(null);
   const [loading, setLoading] = useState(false);
-  // The stage currently drilled into (its idx), plus that stage's runs.
-  const [openStage, setOpenStage] = useState<number | null>(null);
+  // The edge currently drilled into (its key), plus that edge's runs.
+  const [openEdge, setOpenEdge] = useState<string | null>(null);
   const [runs, setRuns] = useState<ProcessRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   // Guards a stale dashboard fetch from clobbering a newer one.
@@ -62,17 +72,20 @@ export function ProcessDashboard({
   useEffect(() => {
     void fetchDashboard();
     // A dashboard refetch invalidates any open drill-down.
-    setOpenStage(null);
+    setOpenEdge(null);
     setRuns([]);
   }, [fetchDashboard, refreshKey]);
 
   const drill = useCallback(
-    async (stageIdx: number) => {
+    async (edge: ProcessDashboardEdge) => {
       if (!client.listProcessRuns) return;
-      setOpenStage(stageIdx);
+      setOpenEdge(edgeKey(edge));
       setRunsLoading(true);
       try {
-        const res = await client.listProcessRuns(sheet, { stage_idx: stageIdx });
+        const res = await client.listProcessRuns(sheet, {
+          rule_key: edge.rule_key,
+          column: edge.to_column,
+        });
         setRuns(res);
       } catch {
         setRuns([]);
@@ -83,7 +96,7 @@ export function ProcessDashboard({
     [client, sheet],
   );
 
-  const stages = dashboard?.stages ?? [];
+  const edges = dashboard?.edges ?? [];
 
   return (
     <section className="arbor-process-dashboard" data-testid="process-dashboard" data-sheet={sheet}>
@@ -108,28 +121,28 @@ export function ProcessDashboard({
         </span>
       </header>
 
-      {stages.length === 0 ? (
+      {edges.length === 0 ? (
         <p className="arbor-pd-empty" data-testid="pd-empty">
-          {loading ? "Loading…" : "No process stages."}
+          {loading ? "Loading…" : "No process rules."}
         </p>
       ) : (
         <div className="arbor-pd-board" data-testid="pd-board">
-          {stages.map((s) => (
+          {edges.map((s, idx) => (
             <div
-              key={s.idx}
+              key={edgeKey(s)}
               className="arbor-pd-stage"
-              data-testid={`pd-stage-${s.idx}`}
+              data-testid={`pd-edge-${idx}`}
               data-breached={s.breached_count > 0}
             >
               <button
                 type="button"
                 className="arbor-pd-stage-head"
                 data-testid="pd-stage-drill"
-                aria-label={`Show runs in ${stageLabel(s.label, s.idx)}`}
-                onClick={() => void drill(s.idx)}
+                aria-label={`Show runs for ${edgeLabel(s, idx)}`}
+                onClick={() => void drill(s)}
               >
                 <span className="arbor-pd-stage-label" data-testid="pd-stage-label">
-                  {stageLabel(s.label, s.idx)}
+                  {edgeLabel(s, idx)}
                 </span>
               </button>
               <div className="arbor-pd-stage-metrics">
@@ -144,12 +157,12 @@ export function ProcessDashboard({
                 >
                   {s.breached_count}
                 </span>
-                <span className="arbor-pd-avg" data-testid="pd-avg" title="avg time in stage">
-                  {formatAvg(s.avg_enter_to_fill_seconds)}
+                <span className="arbor-pd-avg" data-testid="pd-avg" title="avg open to satisfy">
+                  {formatAvg(s.avg_open_to_satisfy_seconds)}
                 </span>
               </div>
 
-              {openStage === s.idx && (
+              {openEdge === edgeKey(s) && (
                 <ul className="arbor-pd-runs" data-testid="pd-runs">
                   {runsLoading ? (
                     <li className="arbor-pd-runs-loading">Loading…</li>

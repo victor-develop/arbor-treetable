@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "creation": "2026-07-02 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_key",
+  "label",
+  "trigger_kind",
+  "trigger_column",
+  "trigger_op",
+  "expected_columns",
+  "within_seconds",
+  "notify_on_expect"
+ ],
+ "fields": [
+  {
+   "description": "Stable identifier for this rule within the process (the 'rule_ref' an Arbor Process Run Expectation points back to). Survives reordering; the child-table idx is presentation order only.",
+   "fieldname": "rule_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Rule Key",
+   "reqd": 1
+  },
+  {
+   "description": "Optional human label for the rule (canvas edge / dashboard). Never leaks a column key; redacted to a placeholder for viewers who cannot read a referenced column.",
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Label"
+  },
+  {
+   "default": "column",
+   "description": "What kind of Tree Event fires this rule. 'row' = a node (row) was created/updated (maps to the canvas START node). 'column' = a specific trigger_column was created/updated.",
+   "fieldname": "trigger_kind",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Trigger Kind",
+   "options": "row\ncolumn",
+   "reqd": 1
+  },
+  {
+   "description": "The Tree Column whose create/update fires this rule. Required when trigger_kind='column'; empty for a 'row' trigger.",
+   "fieldname": "trigger_column",
+   "fieldtype": "Link",
+   "label": "Trigger Column",
+   "options": "Tree Column"
+  },
+  {
+   "default": "updated",
+   "description": "Which fire semantics: on first fill ('created'), on any later change ('updated'), or either ('created-or-updated').",
+   "fieldname": "trigger_op",
+   "fieldtype": "Select",
+   "label": "Trigger Op",
+   "options": "created\nupdated\ncreated-or-updated",
+   "reqd": 1
+  },
+  {
+   "description": "The columns this rule expects filled once triggered (an 'and' set sharing ONE window). Stored as a JSON array of Tree Column names. One Arbor Process Run Expectation is created per expected column.",
+   "fieldname": "expected_columns",
+   "fieldtype": "JSON",
+   "in_list_view": 1,
+   "label": "Expected Columns",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "SLA window in seconds from trigger to expected fill; 0 means no SLA (the expectation never breaches).",
+   "fieldname": "within_seconds",
+   "fieldtype": "Int",
+   "label": "Within Seconds"
+  },
+  {
+   "default": "1",
+   "description": "Notify the expected column's resolved owner when the expectation is opened (the trigger fired).",
+   "fieldname": "notify_on_expect",
+   "fieldtype": "Check",
+   "label": "Notify On Expect"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Process Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -54,6 +54,12 @@ class FakeEndpoint:
     scope: str
     target: str
     active: bool = True
+    # Additive (WS-F1): the notification fan-out source filter + registration
+    # metadata. Default empty/None so existing seeds construct unchanged.
+    notification_sources: list[str] = field(default_factory=list)
+    label: Optional[str] = None
+    sheet: Optional[str] = None
+    owner_user: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +225,13 @@ class InMemoryWebhookStore:
     def active_endpoints(self, sheet: str):
         return [e for e in self.endpoints.values() if e.active]
 
+    def notification_endpoints(self, source: str):
+        return [
+            e
+            for e in self.endpoints.values()
+            if e.active and source in (e.notification_sources or [])
+        ]
+
     def get_endpoint(self, endpoint: str) -> Optional[FakeEndpoint]:
         return self.endpoints.get(endpoint)
 
@@ -227,7 +240,13 @@ class InMemoryWebhookStore:
 
     def delivery_exists(self, endpoint: str, tree_event: str) -> bool:
         return any(
-            d["endpoint"] == endpoint and d["tree_event"] == tree_event
+            d["endpoint"] == endpoint and d.get("tree_event") == tree_event
+            for d in self.deliveries.values()
+        )
+
+    def delivery_exists_for_event(self, endpoint: str, event_id: str) -> bool:
+        return any(
+            d["endpoint"] == endpoint and d.get("event_id") == event_id
             for d in self.deliveries.values()
         )
 

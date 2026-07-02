@@ -9,10 +9,9 @@
   "sheet",
   "node",
   "status",
-  "current_stage_idx",
   "started_at",
   "completed_at",
-  "run_stages"
+  "expectations"
  ],
  "fields": [
   {
@@ -50,13 +49,6 @@
    "options": "active\ncompleted\nabandoned"
   },
   {
-   "default": "0",
-   "description": "Index of the currently-active stage.",
-   "fieldname": "current_stage_idx",
-   "fieldtype": "Int",
-   "label": "Current Stage Idx"
-  },
-  {
    "fieldname": "started_at",
    "fieldtype": "Datetime",
    "label": "Started At"
@@ -67,11 +59,11 @@
    "label": "Completed At"
   },
   {
-   "description": "Per-stage timestamp ledger (entered/filled/due/breached) the dashboard aggregates.",
-   "fieldname": "run_stages",
+   "description": "Per-(rule, expected-column) expectation ledger (opened/satisfied/due/breached) the flow dashboard aggregates per edge.",
+   "fieldname": "expectations",
    "fieldtype": "Table",
-   "label": "Run Stages",
-   "options": "Arbor Process Run Stage"
+   "label": "Expectations",
+   "options": "Arbor Process Run Expectation"
   }
  ],
  "index_web_pages_for_search": 1,
