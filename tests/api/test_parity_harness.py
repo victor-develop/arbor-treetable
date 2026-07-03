@@ -54,6 +54,10 @@ REST_METHODS = {
     "getNode": "get_node",
     "searchNodes": "search_nodes",
     "getCells": "get_cells",
+    # sheet bootstrap (self-service create) — createSheet is now a registry
+    # capability reachable via the named ``arbor.create_sheet`` REST shim (which
+    # dispatches through the ONE executor).
+    "createSheet": "create_sheet",
     "addNode": "add_node",
     "updateCell": "update_cell",
     "moveNode": "move_node",

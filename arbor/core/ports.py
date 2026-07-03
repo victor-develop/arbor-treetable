@@ -170,6 +170,24 @@ class Repository(Protocol):
     def get_column(self, sheet: str, column: str) -> ColumnView: ...
     def list_columns(self, sheet: str) -> list[ColumnView]: ...
 
+    def create_sheet(
+        self,
+        actor: Actor,
+        title: str,
+        name: Optional[str] = None,
+        label_column: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Create a brand-new sheet (the self-service bootstrap capability). The
+        CREATOR (``actor.user``) becomes the sheet's ``structural_owner`` and the
+        owner of the default LABEL column (so their very first snapshot grants
+        can_add_column / can_change_structure). ``name`` is an optional stable id
+        (else the adapter autonames); ``label_column`` is the LABEL text of the
+        default first column (defaults to "Item"). Returns ``{"sheet": <id>}``.
+
+        A duplicate ``name`` is a storage conflict; the adapter raises its
+        ConflictError (surfaced by the API as 409)."""
+        ...
+
     # --- nodes (NestedSet) ---
     def get_node(self, node: str) -> NodeView: ...
     def list_nodes(self, sheet: str) -> list[NodeView]: ...

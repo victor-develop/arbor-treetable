@@ -13,12 +13,20 @@ export function AgentSidebar({
   sheet,
   onCrChip,
   onActionObserved,
+  onSheetCreated,
 }: {
   client: ArborClient;
-  sheet: string;
+  // A string sheet is a sheet-scoped session; null/undefined is a WORKSPACE
+  // session (the sheet-less list-page agent). agentChat treats a falsy sheet as
+  // workspace mode server-side.
+  sheet: string | null;
   onCrChip?: (changeRequest: string) => void;
   // fired per executed/suggested observation so the host can refetch the grid
   onActionObserved?: (frame: Extract<AgentFrame, { type: "observation" }>) => void;
+  // fired with the new sheet id when a workspace turn creates a sheet (the
+  // createSheet observation carries {sheet: <id>} in its data). The host uses it
+  // to refresh the catalog + surface an "open <sheet>" CTA.
+  onSheetCreated?: (sheet: string) => void;
 }): JSX.Element {
   const [input, setInput] = useState("");
   const [transcript, setTranscript] = useState<
@@ -35,12 +43,19 @@ export function AgentSidebar({
   // helpful jumping-off point rather than a void. Clicking one seeds the composer
   // (the user still presses Send) — it never auto-fires a turn.
   const suggestedPrompts = useMemo(
-    () => [
-      "Summarize what changed recently",
-      "Roll up the budget by branch",
-      "What can I edit on this sheet?",
-    ],
-    [],
+    () =>
+      sheet
+        ? [
+            "Summarize what changed recently",
+            "Roll up the budget by branch",
+            "What can I edit on this sheet?",
+          ]
+        : [
+            "Create a sheet for our roadmap with owners",
+            "Make a sheet with columns A (owner Alice) and B (owner Bob)",
+            "Build a sheet where filling A triggers filling B",
+          ],
+    [sheet],
   );
 
   const send = async () => {
@@ -57,7 +72,13 @@ export function AgentSidebar({
       await client.agentChat(sheet, message, (frame) => {
         agentTurn.frames = [...agentTurn.frames, frame];
         setTranscript((t) => [...t.slice(0, -1), { ...agentTurn }]);
-        if (frame.type === "observation") onActionObserved?.(frame);
+        if (frame.type === "observation") {
+          onActionObserved?.(frame);
+          // A workspace createSheet observation carries {sheet: <id>} — let the
+          // host refresh its catalog and offer to open the new sheet.
+          const created = frame.data?.sheet;
+          if (typeof created === "string" && created) onSheetCreated?.(created);
+        }
       });
     } catch (e) {
       // prior frames remain visible; offer retry (WEB_UI-069)
@@ -101,7 +122,9 @@ export function AgentSidebar({
               </svg>
             </span>
             <p className="arbor-agent-empty-lead">
-              Ask the agent to read, summarize, or propose changes to this sheet.
+              {sheet
+                ? "Ask the agent to read, summarize, or propose changes to this sheet."
+                : "Ask the agent to create a sheet — describe the columns, owners, and process in plain language."}
             </p>
             <span className="arbor-agent-empty-label">Try</span>
             <ul className="arbor-agent-suggestions" data-testid="agent-suggestions">

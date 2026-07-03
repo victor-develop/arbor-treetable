@@ -1,8 +1,10 @@
-"""``arbor.create_sheet`` — standalone whitelisted mutation (NOT a capability).
+"""``arbor.create_sheet`` — the createSheet CAPABILITY over its named REST shim.
 
-runnable: NEEDS FRAPPE BENCH (``@pytest.mark.bench``; auto-skips bench-free). A
-sheet has no per-sheet ACL yet, so create_sheet is a plain authenticated mutation
-(not routed through the registry/executor). It must:
+runnable: NEEDS FRAPPE BENCH (``@pytest.mark.bench``; auto-skips bench-free).
+create_sheet is now the registry ``createSheet`` capability dispatched through the
+ONE ``execute_action`` (control-cap path); its named REST shim funnels into
+``_dispatch`` and returns the standard executor envelope plus a back-compat
+top-level ``sheet`` key. It must:
 
 * create the Tree Sheet with the caller as ``structural_owner`` (so the creator
   immediately gets can_add_column / can_change_structure on it),
@@ -46,7 +48,10 @@ def test_create_sheet_makes_owned_sheet_with_label_column(cleanup):
     out = api.create_sheet(name=name, title="A Brand New Sheet", label="Initiative")
     cleanup.append(name)
 
-    assert out == {"sheet": name}
+    # New contract: the standard executor envelope + a back-compat top-level key.
+    assert out["sheet"] == name
+    assert out["kind"] == "executed"
+    assert out["data"]["sheet"] == name
     assert frappe.db.exists("Tree Sheet", name)
     # Caller is the structural owner -> they can add columns/nodes directly.
     assert frappe.db.get_value("Tree Sheet", name, "structural_owner") == me
@@ -110,7 +115,7 @@ def test_fresh_non_admin_caller_can_create_and_owns(cleanup):
     out = api.create_sheet(name=name, label="Thing")
     cleanup.append(name)
 
-    assert out == {"sheet": name}
+    assert out["sheet"] == name
     assert frappe.db.get_value("Tree Sheet", name, "structural_owner") == fresh
     col = frappe.get_all(
         "Tree Column", filters={"sheet": name, "is_label": 1},

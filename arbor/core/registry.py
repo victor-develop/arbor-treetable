@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 41 capabilities are declared here as ``Capability`` records. Four consumers
+All 42 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -129,6 +129,17 @@ _S_DELETE_NODE = {
         "sheet": {"type": "string"},
         "node": {"type": "string"},
         "cascade": {"type": "boolean", "default": True},
+    },
+}
+_S_CREATE_SHEET = {
+    "type": "object",
+    "required": ["title"],
+    "properties": {
+        "title": {"type": "string"},
+        "name": {"type": ["string", "null"]},
+        # aliases for the default LABEL column's text (mirror the create_sheet shim).
+        "label_column": {"type": ["string", "null"]},
+        "first_column": {"type": ["string", "null"]},
     },
 }
 _S_ADD_COLUMN = {
@@ -365,7 +376,7 @@ _S_DELETE_COMMENT = {
 
 
 # ---------------------------------------------------------------------------
-# The 41 capabilities.
+# The 42 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -500,6 +511,25 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="resolve_structural_approver(node)",
         emits=("NODE_DELETED",),
         handler=handlers.delete_node_handler,
+    ),
+    # --- sheet bootstrap (self-service create). A CONTROL cap (Axis.NONE,
+    # target/op NONE) routed through the ONE executor like subscribe/impersonation:
+    # any authenticated non-Guest may create a sheet (a permissive "authenticated"
+    # self-service gate, NOT admin-only), and the CREATOR becomes its
+    # structural_owner. Emits NO Tree Event (emits=() — the closed 11-event set is
+    # preserved; the Tree Sheet row is the record). is_exposed_to_llm=True so the
+    # workspace agent can create a sheet FIRST and thread its id into later tools.
+    Capability(
+        id="createSheet",
+        name="Create a new sheet (self-service bootstrap)",
+        params_schema=_S_CREATE_SHEET,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,
+        acl_rule="authenticated (any non-Guest may create; creator becomes structural_owner)",
+        emits=(),  # no Tree Event — the Tree Sheet row is the record
+        handler=handlers.create_sheet_handler,
     ),
     Capability(
         id="addColumn",

@@ -25,6 +25,8 @@ EXPECTED_IDS = {
     "updateCell",
     "moveNode",
     "deleteNode",
+    # sheet bootstrap (self-service create)
+    "createSheet",
     "addColumn",
     "updateColumn",
     "deleteColumn",
@@ -79,7 +81,7 @@ LLM_HIDDEN = {
 def test_all_capabilities_registered():
     ids = {c.id for c in all_capabilities()}
     assert ids == EXPECTED_IDS
-    assert len(all_capabilities()) == 41
+    assert len(all_capabilities()) == 42
 
 
 def test_unknown_capability_raises():
@@ -201,7 +203,7 @@ def test_webhook_registration_methods_are_not_registry_capabilities():
         {"registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"}
     )
     # count is unchanged: the shims added no capability.
-    assert len(all_capabilities()) == 41
+    assert len(all_capabilities()) == 42
     assert ids == EXPECTED_IDS
 
 

@@ -84,4 +84,32 @@ describe("AgentSidebar (thin shell)", () => {
     await screen.findByTestId("frame-final");
     expect(calls).toHaveLength(0);
   });
+
+  it("workspace mode (no sheet) calls agentChat with a null sheet", async () => {
+    const { client, chatCalls } = mockClient({ frames: [{ type: "final", content: "done" }] });
+    render(<AgentSidebar client={client} sheet={null} />);
+    fireEvent.change(screen.getByTestId("agent-input"), {
+      target: { value: "create a Roadmap sheet" },
+    });
+    fireEvent.click(screen.getByTestId("agent-send"));
+    await waitFor(() => expect(chatCalls).toHaveLength(1));
+    // Falsy sheet → workspace session; the backend treats absent sheet as workspace.
+    expect(chatCalls[0].sheet ?? null).toBeNull();
+    expect(chatCalls[0].message).toBe("create a Roadmap sheet");
+  });
+
+  it("fires onSheetCreated when a createSheet observation carries a new sheet id", async () => {
+    const onSheetCreated = vi.fn();
+    const frames: AgentFrame[] = [
+      { type: "action", tool: "createSheet", arguments: { title: "Roadmap" } },
+      { type: "observation", outcome: "executed", data: { sheet: "roadmap-1" } },
+      { type: "final", content: "Created the Roadmap sheet." },
+    ];
+    const { client } = mockClient({ frames });
+    render(<AgentSidebar client={client} sheet={null} onSheetCreated={onSheetCreated} />);
+    fireEvent.change(screen.getByTestId("agent-input"), { target: { value: "make it" } });
+    fireEvent.click(screen.getByTestId("agent-send"));
+    await screen.findByTestId("frame-final");
+    expect(onSheetCreated).toHaveBeenCalledWith("roadmap-1");
+  });
 });

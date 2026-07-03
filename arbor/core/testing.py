@@ -362,6 +362,35 @@ class InMemoryRepository:
         self._rebuild_nested_set(sheet)
         return to_delete
 
+    def create_sheet(
+        self,
+        actor,
+        title: str,
+        name: Optional[str] = None,
+        label_column: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Self-service sheet bootstrap (createSheet capability). The CREATOR
+        (``actor.user``) becomes ``structural_owner``; a default LABEL column owned
+        by the creator is created so the sheet is immediately usable. A duplicate
+        ``name`` raises (parity with the adapter's 409 conflict)."""
+        sheet = name or self._id("sheet")
+        if sheet in self.sheets:
+            raise ValueError(f"sheet {sheet!r} already exists")
+        self.sheets[sheet] = _Sheet(sheet, structural_owner=actor.user, settings={})
+        label_text = (label_column or "").strip() if isinstance(label_column, str) else ""
+        col = self._id("col")
+        self.columns[col] = _Column(
+            name=col,
+            sheet=sheet,
+            field="title",
+            column_owner=actor.user,
+            is_label=True,
+            label=label_text or "Item",
+            type="text",
+            read_level="public",
+        )
+        return {"sheet": sheet}
+
     def create_column(self, sheet: str, spec: dict[str, Any]) -> str:
         name = self._id("col")
         self.columns[name] = _Column(

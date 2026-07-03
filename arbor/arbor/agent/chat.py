@@ -86,15 +86,19 @@ def chat(
 
     # Bind the active sheet into the system prompt so the agent knows which sheet
     # to pass as the ``sheet`` argument of every tool (otherwise it can't act).
-    from .react import _DEFAULT_SYSTEM
+    # When ``sheet`` is None this is a WORKSPACE session (e.g. from the Sheet List
+    # home page): the agent gets the full tool set incl createSheet and mints the
+    # sheet itself before threading its id into later calls.
+    from .react import _DEFAULT_SYSTEM, _WORKSPACE_SYSTEM
 
-    system = _DEFAULT_SYSTEM
     if sheet:
         system = (
             f"{_DEFAULT_SYSTEM} You are operating on the sheet named '{sheet}'. "
             f"Always pass sheet='{sheet}' as the 'sheet' argument to every tool call, "
             f"and call getSheetSnapshot for '{sheet}' before any mutation."
         )
+    else:
+        system = _WORKSPACE_SYSTEM
 
     session = run_agent_session(
         message=message,
