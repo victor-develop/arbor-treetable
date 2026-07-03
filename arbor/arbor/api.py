@@ -1962,16 +1962,21 @@ def submit_cell_drafts(sheet):
 
 
 # ---------------------------------------------------------------------------
-# Per-cell COMMENTS (Feature: comments drawer, Area 2). Threaded, cell-keyed
-# collaboration metadata — NOT registry capabilities and NOT Tree Events (the
-# closed 11-EventType set is untouched). Governance reuses the ONE ACL resolver:
+# Per-cell COMMENTS (Feature: comments drawer, Area 2). The comment MUTATIONS
+# (add/resolve/delete) are now REGISTRY CAPABILITIES routed through the ONE
+# executor (addComment/resolveComment/deleteComment) — these shims are thin,
+# dispatching through ``execute_action`` exactly like ``update_cell`` instead of
+# doing inline ACL + writes. Governance is enforced UNIFORMLY in the executor via
+# the acl comment authority resolver:
 #   read/post  -> can_read_column         (you may discuss any cell you can read)
 #   resolve    -> resolve_column_approvers (column owner + editors settle threads)
 #   delete     -> author OR column approver (self-moderation + owner moderation)
-# On add we fan out a Notification (source='comment', tree_event=NULL) directly to
-# the column owner/editors + any @mentioned users who can STILL read the column,
-# minus the author. These shims re-enforce authority server-side on every call;
-# the FE ``can_resolve``/``can_delete`` hints are display-only.
+# The comment doctype is a complete AUDIT record (author + real_user/
+# impersonated_as trace) and delete is a SOFT-delete tombstone (row preserved).
+# The Notification fan-out on add (source='comment', tree_event=NULL) to the
+# column owner/editors + read-ACL-filtered @mentions, minus the author, stays in
+# THIS api layer, AFTER a successful dispatch. ``list_cell_comments`` stays a
+# non-capability read shim (like ``list_notifications``) and filters tombstones.
 # ---------------------------------------------------------------------------
 _MENTION_RE = re.compile(r"(?<![\w.])@([A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9._-]+)")
 
@@ -2033,15 +2038,19 @@ def add_cell_comment(sheet, node, column, body, parent_comment=None):
     """Post a comment on the cell ``(sheet, node, column)`` (or a reply when
     ``parent_comment`` is given).
 
-    AUTHZ: ``can_read_column`` — you may discuss any cell you can read (else 403).
-    400 on an empty body; 404 on an unknown sheet/node/column/parent. Derives
-    ``thread_root`` (the parent's root, or self on a new root — via the controller).
-    Parses @mentions, drops any who cannot read the column, then fans out a
+    THIN: dispatches the ``addComment`` capability through ``execute_action`` (the
+    ONE executor authorizes ``can_read_column`` and writes through the adapter,
+    stamping the author + impersonation trace). 400 on an empty body; 404 on an
+    unknown sheet/node/column/parent. Parses @mentions and drops any who cannot
+    read the column, passing the surviving set into the dispatch, then fans out a
     Notification (source='comment', tree_event=NULL) to the column owner/editors +
-    surviving mentions, minus the author. Returns ``{name, thread_root, mentions}``.
+    surviving mentions, minus the author, AFTER the successful dispatch. Returns
+    ``{name, thread_root, mentions}``.
     """
     actor = _actor()
     repo = _repo()
+    # Cheap up-front existence/readability checks so we surface the documented
+    # 400/404 shapes; the executor re-authorizes can_read_column as the hard gate.
     _require_readable_cell(repo, sheet, node, column, actor)
 
     body = (body or "").strip() if isinstance(body, str) else ""
@@ -2065,39 +2074,46 @@ def add_cell_comment(sheet, node, column, body, parent_comment=None):
         if can_read_column(repo, sheet, col, mentioned_actor):
             mentions.append(tok)
 
-    doc = frappe.new_doc("Arbor Cell Comment")
-    doc.sheet = sheet
-    doc.node = node
-    doc.column = column
-    doc.parent_comment = parent_comment or None
-    doc.author = actor.user
-    doc.body = body
-    doc.mentions = frappe.as_json(mentions)
-    doc.insert(ignore_permissions=True)  # controller derives thread_root
+    # Route through the ONE executor: addComment writes + stamps the audit trace.
+    outcome = _dispatch(
+        "addComment",
+        {
+            "sheet": sheet,
+            "node": node,
+            "column": column,
+            "body": body,
+            "parent_comment": parent_comment or None,
+            "mentions": mentions,
+        },
+        actor=actor,
+    )
+    comment_name = (outcome.get("data") or {}).get("comment")
+    thread_root = (outcome.get("data") or {}).get("thread_root")
 
     # Fan out FYI notifications directly (a comment is NOT a Tree Event, so it does
     # NOT go through the Tree-Event→subscription dispatcher). Recipients = column
     # owner + editors + surviving mentions, minus the author. Each is read-gated by
-    # construction (approvers can read; mentions were filtered above).
+    # construction (approvers can read; mentions were filtered above). This is a
+    # frappe write, so it stays in the api layer (never the pure core).
     recipients = set(resolve_column_approvers(repo, sheet, column)) | set(mentions)
     recipients.discard(actor.user)
     for recipient in sorted(recipients):
         # Idempotent per (comment, recipient) — the same comment never double-notifies.
         if frappe.db.exists(
             "Notification",
-            {"comment": doc.name, "recipient": recipient, "channel": "in-app"},
+            {"comment": comment_name, "recipient": recipient, "channel": "in-app"},
         ):
             continue
         n = frappe.new_doc("Notification")
         n.source = "comment"
-        n.comment = doc.name
+        n.comment = comment_name
         n.tree_event = None
         n.recipient = recipient
         n.channel = "in-app"
         n.requires_ack = 0
         n.insert(ignore_permissions=True)
 
-    return {"name": doc.name, "thread_root": doc.thread_root, "mentions": mentions}
+    return {"name": comment_name, "thread_root": thread_root, "mentions": mentions}
 
 
 @frappe.whitelist()
@@ -2114,9 +2130,11 @@ def list_cell_comments(sheet, node, column):
     _require_readable_cell(repo, sheet, node, column, actor)
 
     can_resolve = _can_resolve_comment(repo, sheet, column, actor)
+    # Exclude soft-deleted tombstones (delete is now a SOFT delete: the row is
+    # preserved for audit but never shown in the drawer).
     rows = frappe.get_all(
         "Arbor Cell Comment",
-        filters={"sheet": sheet, "node": node, "column": column},
+        filters={"sheet": sheet, "node": node, "column": column, "deleted": 0},
         fields=[
             "name", "thread_root", "parent_comment", "author", "body", "mentions",
             "resolved", "resolved_by", "resolved_at", "creation",
@@ -2148,75 +2166,33 @@ def list_cell_comments(sheet, node, column):
 def resolve_cell_comment(comment, resolved=True):
     """Mark a thread resolved (or reopen with ``resolved=False``) on its ROOT.
 
-    AUTHZ: ``resolve_column_approvers`` (column owner + editors) else 403.
+    THIN: dispatches ``resolveComment`` through ``execute_action`` (the executor
+    authorizes ``resolve_column_approvers`` against the comment's column — 403 when
+    denied, 404 for an unknown comment — and writes through the adapter).
     Idempotent (re-resolving / re-opening is a no-op success). Resolving a REPLY
-    resolves its whole thread (the root carries the resolved flag)."""
+    resolves its whole thread (the adapter carries the resolved flag on the root)."""
     actor = _actor()
-    repo = _repo()
-    if not frappe.db.exists("Arbor Cell Comment", comment):
-        frappe.local.response["http_status_code"] = 404
-        frappe.throw(_("No such comment {0}").format(comment), exc=frappe.DoesNotExistError)
-
-    doc = frappe.get_doc("Arbor Cell Comment", comment)
-    if not _can_resolve_comment(repo, doc.sheet, doc.column, actor):
-        raise frappe.PermissionError(_("Only the column owner or editors may resolve a thread"))
-
-    root_name = doc.thread_root or doc.name
-    root = frappe.get_doc("Arbor Cell Comment", root_name)
     want = (
         frappe.utils.cint(resolved) == 1
         if isinstance(resolved, (str, int)) else bool(resolved)
     )
-    if want:
-        root.resolved = 1
-        root.resolved_by = actor.user
-        root.resolved_at = frappe.utils.now()
-    else:
-        root.resolved = 0
-        root.resolved_by = None
-        root.resolved_at = None
-    root.save(ignore_permissions=True)
-    return {"name": root.name, "resolved": bool(root.resolved)}
+    outcome = _dispatch("resolveComment", {"comment": comment, "resolved": want}, actor=actor)
+    data = outcome.get("data") or {}
+    return {"name": data.get("comment"), "resolved": bool(data.get("resolved"))}
 
 
 @frappe.whitelist()
 def delete_cell_comment(comment):
-    """Delete a comment. AUTHZ: author OR column approver (else 403).
+    """Delete a comment. THIN: dispatches ``deleteComment`` through
+    ``execute_action`` (the executor authorizes author-OR-column-approver — 403
+    when denied, 404 for an unknown comment).
 
-    Soft-safe threading: deleting a thread ROOT that still has replies TOMBSTONES
-    it (blank body → ``[deleted]``, author cleared) rather than orphaning the
-    replies; a leaf (a reply, or a childless root) is hard-deleted."""
+    Delete is now a SOFT delete (tombstone: ``deleted=1`` + ``deleted_by`` +
+    ``deleted_at``, the row PRESERVED for audit). ``list_cell_comments`` filters
+    tombstones out, so replies never surface an orphaned/deleted parent."""
     actor = _actor()
-    repo = _repo()
-    if not frappe.db.exists("Arbor Cell Comment", comment):
-        frappe.local.response["http_status_code"] = 404
-        frappe.throw(_("No such comment {0}").format(comment), exc=frappe.DoesNotExistError)
-
-    doc = frappe.get_doc("Arbor Cell Comment", comment)
-    is_author = actor.user == doc.author
-    if not (is_author or _can_resolve_comment(repo, doc.sheet, doc.column, actor)):
-        raise frappe.PermissionError(_("Only the author or a column owner/editor may delete"))
-
-    is_root = not doc.thread_root
-    has_replies = bool(
-        frappe.db.exists("Arbor Cell Comment", {"thread_root": doc.name})
-    )
-    if is_root and has_replies:
-        # Tombstone: keep the row so replies stay threaded, but strip the content.
-        doc.body = "[deleted]"
-        doc.author = actor.user  # keep a valid (reqd) author link; body signals deletion
-        doc.mentions = frappe.as_json([])
-        doc.flags.arbor_tombstone = True
-        doc.save(ignore_permissions=True)
-        return {"ok": True, "tombstoned": True}
-    # Hard-delete a leaf: first drop the FYI Notification rows that link to this
-    # comment (source='comment'), else Frappe's link-integrity guard blocks the
-    # delete. These are transient inbox rows, not audit — removing them with the
-    # comment is correct (the discussion they pointed at is gone).
-    for n in frappe.get_all("Notification", filters={"comment": doc.name}, pluck="name"):
-        frappe.delete_doc("Notification", n, ignore_permissions=True, force=True)
-    frappe.delete_doc("Arbor Cell Comment", doc.name, ignore_permissions=True)
-    return {"ok": True, "tombstoned": False}
+    _dispatch("deleteComment", {"comment": comment}, actor=actor)
+    return {"ok": True, "tombstoned": True}
 
 
 # ---------------------------------------------------------------------------

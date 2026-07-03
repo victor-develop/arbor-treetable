@@ -2,18 +2,24 @@
 
 runnable: NEEDS FRAPPE BENCH (``@pytest.mark.bench``; auto-skips bench-free).
 
-Comments are threaded, cell-keyed collaboration metadata — NON-capabilities that
-emit NO Tree Event. Governance reuses the ONE ACL resolver via the whitelisted
-shims in ``arbor.arbor.api``:
+The comment MUTATIONS are now registry CAPABILITIES routed through the ONE
+executor (``addComment`` / ``resolveComment`` / ``deleteComment``); the ``arbor.api``
+shims are THIN wrappers that ``_dispatch`` through ``execute_action`` (like
+``update_cell``). They emit NO Tree Event — the Arbor Cell Comment row is a
+complete AUDIT record (author + real_user/impersonated_as trace) and delete is a
+SOFT delete (tombstone: ``deleted=1`` + deleted_by/deleted_at, row preserved).
+Governance reuses the ONE ACL resolver (now via the executor's comment authority):
 
   read / post  -> can_read_column          (discuss any cell you can read)
   resolve      -> resolve_column_approvers  (column owner + editors settle)
   delete       -> author OR column approver
 
 On add, a Notification (source='comment', tree_event=NULL) fans out to the column
-owner/editors + surviving @mentions, minus the author. This module drives the
-whitelisted ``arbor.api`` funnel end-to-end on a live site and rolls nothing back
-itself (the bench harness rolls the transaction between tests).
+owner/editors + surviving @mentions, minus the author — in the api layer, AFTER a
+successful dispatch. ``list_cell_comments`` STAYS a non-capability read shim and
+filters out soft-deleted tombstones. This module drives the whitelisted
+``arbor.api`` funnel end-to-end on a live site and rolls nothing back itself (the
+bench harness rolls the transaction between tests).
 
 Canonical sheet S personas: C owns col:budget; B owns col:notes; C owns
 col:status with editor B; E is a suggest-only reader (no ownership).
@@ -150,7 +156,8 @@ def test_resolve_reply_resolves_its_thread_root(fx):
 
 
 # ---------------------------------------------------------------------------
-# delete authority: author yes; a stranger 403; root-with-replies tombstones
+# delete authority: author yes; a stranger 403. Delete is a SOFT-delete tombstone
+# (row preserved for audit; list hides it).
 # ---------------------------------------------------------------------------
 def test_delete_by_author_and_stranger_denied(fx):
     node, col = _x(fx), fx["columns"]["budget"]
@@ -162,25 +169,34 @@ def test_delete_by_author_and_stranger_denied(fx):
     with pytest.raises(frappe.PermissionError):
         api.delete_cell_comment(comment=c["name"])
 
-    # E (author) may hard-delete a leaf.
+    # E (author) soft-deletes: the row is PRESERVED (tombstone) for audit …
     h.login_as("E")
     out = api.delete_cell_comment(comment=c["name"])
-    assert out == {"ok": True, "tombstoned": False}
-    assert not frappe.db.exists("Arbor Cell Comment", c["name"])
+    assert out["ok"] is True
+    assert frappe.db.exists("Arbor Cell Comment", c["name"])  # row kept for audit
+    assert frappe.db.get_value("Arbor Cell Comment", c["name"], "deleted") == 1
+    assert frappe.db.get_value("Arbor Cell Comment", c["name"], "deleted_by") == h.user("E")
+    assert frappe.db.get_value("Arbor Cell Comment", c["name"], "deleted_at") is not None
+    # … but list hides the tombstone.
+    assert api.list_cell_comments(sheet=fx["sheet"], node=node, column=col) == []
 
 
-def test_delete_root_with_replies_tombstones(fx):
+def test_delete_root_with_replies_soft_deletes_and_list_hides(fx):
     node, col = _x(fx), fx["columns"]["budget"]
     h.login_as("E")
     root = api.add_cell_comment(sheet=fx["sheet"], node=node, column=col, body="root")
-    api.add_cell_comment(
+    reply = api.add_cell_comment(
         sheet=fx["sheet"], node=node, column=col, body="reply", parent_comment=root["name"]
     )
     out = api.delete_cell_comment(comment=root["name"])
-    assert out == {"ok": True, "tombstoned": True}
-    # Row kept (so the reply stays threaded), body tombstoned.
+    assert out["ok"] is True
+    # Row kept (audit); the original body is PRESERVED (no "[deleted]" rewrite).
     assert frappe.db.exists("Arbor Cell Comment", root["name"])
-    assert frappe.db.get_value("Arbor Cell Comment", root["name"], "body") == "[deleted]"
+    assert frappe.db.get_value("Arbor Cell Comment", root["name"], "deleted") == 1
+    assert frappe.db.get_value("Arbor Cell Comment", root["name"], "body") == "root"
+    # list hides the tombstoned root but keeps the live reply.
+    listed = {c["name"] for c in api.list_cell_comments(sheet=fx["sheet"], node=node, column=col)}
+    assert root["name"] not in listed and reply["name"] in listed
 
 
 def test_delete_by_column_approver(fx):
@@ -190,6 +206,13 @@ def test_delete_by_column_approver(fx):
     h.login_as("C")  # column owner moderates
     out = api.delete_cell_comment(comment=c["name"])
     assert out["ok"] is True
+    assert frappe.db.get_value("Arbor Cell Comment", c["name"], "deleted") == 1
+
+
+def test_delete_unknown_comment_is_404(fx):
+    h.login_as("C")
+    with pytest.raises(frappe.DoesNotExistError):
+        api.delete_cell_comment(comment="does-not-exist")
 
 
 # ---------------------------------------------------------------------------
@@ -270,3 +293,50 @@ def test_snapshot_comment_summary_counts_and_redacts(fx):
     snap2 = api.get_sheet_snapshot(sheet=fx["sheet"])
     xnode2 = [n for n in snap2["nodes"] if n["name"] == node][0]
     assert col not in (xnode2.get("comments") or {})
+
+
+# ---------------------------------------------------------------------------
+# audit record: an impersonated addComment stamps real_user != author (Area 1×2)
+# ---------------------------------------------------------------------------
+def test_impersonated_add_comment_stamps_real_user_trace(fx):
+    """When an admin acts as another user (impersonation overlay), the comment
+    records the effective author AND the real principal — the doctype is now a
+    complete audit record (real_user / impersonated_as), with real_user != author."""
+    node, col = _x(fx), fx["columns"]["budget"]  # public, owner C
+    # Administrator (platform admin) begins acting as C.
+    frappe.set_user("Administrator")
+    api.begin_impersonation(impersonated_user=h.user("C"))
+    try:
+        out = api.add_cell_comment(sheet=fx["sheet"], node=node, column=col, body="as C")
+    finally:
+        api.end_impersonation()
+
+    row = frappe.db.get_value(
+        "Arbor Cell Comment",
+        out["name"],
+        ["author", "real_user", "impersonated_as"],
+        as_dict=True,
+    )
+    assert row.author == h.user("C")          # effective identity is the author
+    assert row.real_user == "Administrator"    # the truly-authenticated principal
+    assert row.impersonated_as == h.user("C")
+    assert row.real_user != row.author          # trace present
+
+
+# ---------------------------------------------------------------------------
+# thin dispatch: the shim funnels through the ONE executor (surface parity) — a
+# named REST comment cap has an execute_action peer with the identical effect.
+# ---------------------------------------------------------------------------
+def test_add_comment_via_generic_execute_action_matches_named_shim(fx):
+    """The comment cap is reachable via generic ``execute_action`` too — proving
+    the shim is a thin funnel, not a bespoke write path."""
+    node, col = _x(fx), fx["columns"]["budget"]
+    h.login_as("C")
+    res = api.execute_action(
+        "addComment",
+        {"sheet": fx["sheet"], "node": node, "column": col, "body": "generic"},
+    )
+    assert res["kind"] == "executed"
+    name = res["data"]["comment"]
+    assert frappe.db.get_value("Arbor Cell Comment", name, "author") == h.user("C")
+    assert frappe.db.get_value("Arbor Cell Comment", name, "body") == "generic"

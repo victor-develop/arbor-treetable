@@ -54,6 +54,7 @@ DT_ROLE = "Arbor Role"
 DT_ROLE_GRANT = "Arbor Role Grant"
 DT_ROLE_APP = "Arbor Role Application"
 DT_IMPERSONATION = "Arbor Impersonation Session"
+DT_COMMENT = "Arbor Cell Comment"
 # process / SLA (Area 3)
 DT_PROCESS = "Arbor Process"
 DT_PROCESS_RUN = "Arbor Process Run"
@@ -224,6 +225,26 @@ class _ProcessView:
     row_scope: str = "root-children"
     sla_breach_notify: bool = True
     rules: list = field(default_factory=list)
+
+
+@dataclass
+class _CommentView:
+    """An Arbor Cell Comment (Area 2). A complete audit record: ``author`` is the
+    EFFECTIVE actor; ``real_user`` / ``impersonated_as`` carry the impersonation
+    trace; ``deleted`` is the soft-delete tombstone."""
+
+    name: str
+    sheet: str
+    node: str
+    column: str
+    author: str
+    body: str
+    thread_root: Optional[str] = None
+    parent_comment: Optional[str] = None
+    resolved: bool = False
+    real_user: Optional[str] = None
+    impersonated_as: Optional[str] = None
+    deleted: bool = False
 
 
 class FrappeRepository:
@@ -968,6 +989,88 @@ class FrappeRepository:
                 name,
                 {"active": 0, "ended_at": frappe.utils.now()},
             )
+
+    # ---- per-cell comments (Area 2, promoted to capabilities) --------------
+    def get_comment(self, comment: str) -> Optional[_CommentView]:
+        """The Arbor Cell Comment by id — INCLUDING soft-deleted tombstones (so the
+        executor can still authorize a delete/resolve against a deleted row), or
+        None if it does not exist."""
+        if not frappe.db.exists(DT_COMMENT, comment):
+            return None
+        d = frappe.get_doc(DT_COMMENT, comment)
+        return _CommentView(
+            name=d.name,
+            sheet=d.sheet,
+            node=d.node,
+            column=d.column,
+            author=d.author,
+            body=d.body,
+            thread_root=d.get("thread_root"),
+            parent_comment=d.get("parent_comment"),
+            resolved=bool(d.get("resolved")),
+            real_user=d.get("real_user"),
+            impersonated_as=d.get("impersonated_as"),
+            deleted=bool(d.get("deleted")),
+        )
+
+    def create_comment(
+        self,
+        actor,
+        sheet: str,
+        node: str,
+        column: str,
+        body: str,
+        parent_comment: Optional[str] = None,
+        mentions: Optional[list[str]] = None,
+    ) -> str:
+        """Insert a comment. Stamps the FULL audit trace from the Actor:
+        ``author`` = the EFFECTIVE identity; ``real_user`` / ``impersonated_as`` =
+        the impersonation trace (both None for a normal action). ``thread_root`` is
+        derived by the controller from ``parent_comment``."""
+        doc = frappe.new_doc(DT_COMMENT)
+        doc.sheet = sheet
+        doc.node = node
+        doc.column = column
+        doc.parent_comment = parent_comment or None
+        doc.author = actor.user
+        doc.body = body
+        doc.mentions = frappe.as_json(list(mentions or []))
+        # Impersonation audit trace: the truly-authenticated principal + the
+        # effective identity acted as (both None for a normal comment).
+        doc.real_user = getattr(actor, "real_user", None)
+        doc.impersonated_as = getattr(actor, "impersonated_as", None)
+        doc.insert(ignore_permissions=True)  # controller derives thread_root
+        return doc.name
+
+    def set_comment_resolved(self, actor, comment: str, resolved: bool) -> str:
+        """Resolve/reopen the comment's THREAD ROOT. Idempotent; returns the root
+        id."""
+        doc = frappe.get_doc(DT_COMMENT, comment)
+        root_name = doc.get("thread_root") or doc.name
+        root = frappe.get_doc(DT_COMMENT, root_name)
+        if resolved:
+            root.resolved = 1
+            root.resolved_by = actor.user
+            root.resolved_at = frappe.utils.now()
+        else:
+            root.resolved = 0
+            root.resolved_by = None
+            root.resolved_at = None
+        root.save(ignore_permissions=True)
+        return root.name
+
+    def soft_delete_comment(self, actor, comment: str) -> None:
+        """Soft-delete (tombstone) a comment: ``deleted=1`` + ``deleted_by`` +
+        ``deleted_at``, row PRESERVED for audit."""
+        frappe.db.set_value(
+            DT_COMMENT,
+            comment,
+            {
+                "deleted": 1,
+                "deleted_by": actor.user,
+                "deleted_at": frappe.utils.now(),
+            },
+        )
 
     # ---- process / SLA (process DAG) --------------------------------------
     @staticmethod

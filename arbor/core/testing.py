@@ -102,6 +102,31 @@ class _ProcessRule:
 
 
 @dataclass
+class _Comment:
+    """An Arbor Cell Comment (Area 2). A complete audit record: ``author`` is the
+    EFFECTIVE actor; ``real_user`` / ``impersonated_as`` carry the impersonation
+    trace; ``deleted`` is the soft-delete tombstone (row preserved)."""
+
+    name: str
+    sheet: str
+    node: str
+    column: str
+    author: str
+    body: str
+    thread_root: Optional[str] = None
+    parent_comment: Optional[str] = None
+    mentions: list[str] = field(default_factory=list)
+    resolved: bool = False
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[str] = None
+    real_user: Optional[str] = None
+    impersonated_as: Optional[str] = None
+    deleted: bool = False
+    deleted_by: Optional[str] = None
+    deleted_at: Optional[str] = None
+
+
+@dataclass
 class _Process:
     name: str
     sheet: str
@@ -133,6 +158,8 @@ class InMemoryRepository:
         self.admins: set[str] = set()
         # impersonation sessions (Area 1)
         self.impersonation_sessions: dict[str, dict[str, Any]] = {}
+        # per-cell comments (Area 2, promoted to capabilities)
+        self.comments: dict[str, _Comment] = {}
         # process / SLA (Area 3)
         self.processes: dict[str, _Process] = {}  # keyed by process name
         self.process_runs: dict[str, dict[str, Any]] = {}  # keyed by run name
@@ -508,6 +535,77 @@ class InMemoryRepository:
         for s in self.impersonation_sessions.values():
             if s["real_user"] == real_user and s["active"]:
                 s["active"] = False
+
+    # --- per-cell comments (Area 2, promoted to capabilities) ---
+    def get_comment(self, comment: str) -> Optional[_Comment]:
+        # Returns tombstones too (the executor authorizes delete/resolve against a
+        # possibly-already-deleted row).
+        return self.comments.get(comment)
+
+    def create_comment(
+        self,
+        actor,
+        sheet: str,
+        node: str,
+        column: str,
+        body: str,
+        parent_comment: Optional[str] = None,
+        mentions: Optional[list[str]] = None,
+    ) -> str:
+        name = self._id("comment")
+        # Derive thread_root the same way the controller does: the parent's root,
+        # or the parent itself if the parent is a root; None for a root comment.
+        thread_root = None
+        if parent_comment:
+            parent = self.comments.get(parent_comment)
+            if parent is not None:
+                thread_root = parent.thread_root or parent.name
+        self.comments[name] = _Comment(
+            name=name,
+            sheet=sheet,
+            node=node,
+            column=column,
+            author=actor.user,
+            body=body,
+            thread_root=thread_root,
+            parent_comment=parent_comment or None,
+            mentions=list(mentions or []),
+            # FULL audit trace: the REAL principal + the effective identity when
+            # posted under an "act as" overlay (both None for a normal action).
+            real_user=getattr(actor, "real_user", None),
+            impersonated_as=getattr(actor, "impersonated_as", None),
+        )
+        return name
+
+    def set_comment_resolved(self, actor, comment: str, resolved: bool) -> str:
+        doc = self.comments[comment]
+        root_name = doc.thread_root or doc.name
+        root = self.comments[root_name]
+        if resolved:
+            root.resolved = True
+            root.resolved_by = actor.user
+            root.resolved_at = "now"
+        else:
+            root.resolved = False
+            root.resolved_by = None
+            root.resolved_at = None
+        return root.name
+
+    def soft_delete_comment(self, actor, comment: str) -> None:
+        doc = self.comments[comment]
+        doc.deleted = True
+        doc.deleted_by = actor.user
+        doc.deleted_at = "now"
+
+    def list_comments(self, sheet: str, node: str, column: str) -> list[_Comment]:
+        """Non-capability read peer of the ``list_cell_comments`` shim: the thread
+        for a cell, oldest-first, EXCLUDING soft-deleted tombstones."""
+        rows = [
+            c
+            for c in self.comments.values()
+            if c.sheet == sheet and c.node == node and c.column == column and not c.deleted
+        ]
+        return sorted(rows, key=lambda c: c.name)
 
     # --- process / SLA (Area 3) ---
     def upsert_process(self, data: dict[str, Any]) -> str:

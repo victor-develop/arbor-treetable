@@ -15,7 +15,12 @@
   "mentions",
   "resolved",
   "resolved_by",
-  "resolved_at"
+  "resolved_at",
+  "real_user",
+  "impersonated_as",
+  "deleted",
+  "deleted_by",
+  "deleted_at"
  ],
  "fields": [
   {
@@ -96,6 +101,38 @@
    "fieldname": "resolved_at",
    "fieldtype": "Datetime",
    "label": "Resolved At"
+  },
+  {
+   "description": "Impersonation audit: the REAL, authenticated principal when this comment was posted under an 'act as' overlay. NULL for a normal (non-impersonated) comment.",
+   "fieldname": "real_user",
+   "fieldtype": "Link",
+   "label": "Real User",
+   "options": "User"
+  },
+  {
+   "description": "Impersonation audit: the effective identity the real user was acting as (== author when impersonating). NULL for a normal comment.",
+   "fieldname": "impersonated_as",
+   "fieldtype": "Link",
+   "label": "Impersonated As",
+   "options": "User"
+  },
+  {
+   "default": "0",
+   "description": "Soft-delete tombstone: the row is preserved for audit; list surfaces exclude it.",
+   "fieldname": "deleted",
+   "fieldtype": "Check",
+   "label": "Deleted"
+  },
+  {
+   "fieldname": "deleted_by",
+   "fieldtype": "Link",
+   "label": "Deleted By",
+   "options": "User"
+  },
+  {
+   "fieldname": "deleted_at",
+   "fieldtype": "Datetime",
+   "label": "Deleted At"
   }
  ],
  "index_web_pages_for_search": 1,

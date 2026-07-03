@@ -307,6 +307,46 @@ def start_process_run_handler(params: dict[str, Any], actor: Actor, repo: Reposi
     )
 
 
+# --- per-cell comments (Area 2, promoted to capabilities) -------------------
+# Framework-free handlers over the new comment Repository ports. They emit NO
+# Tree Event (the Arbor Cell Comment row is the audit record); the executor routes
+# them like the control caps (always execute or deny). The handler passes the FULL
+# Actor so the adapter can stamp author + real_user + impersonated_as (audit +
+# impersonation trace).
+def add_comment_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    name = repo.create_comment(
+        actor,
+        sheet=params["sheet"],
+        node=params["node"],
+        column=params["column"],
+        body=params["body"],
+        parent_comment=params.get("parent_comment"),
+        mentions=params.get("mentions"),
+    )
+    comment = repo.get_comment(name)
+    thread_root = getattr(comment, "thread_root", None) if comment else None
+    return HandlerResult(
+        event_payload={"op": "comment-add", "comment": name, "thread_root": thread_root},
+        data={"comment": name, "thread_root": thread_root},
+    )
+
+
+def resolve_comment_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    root = repo.set_comment_resolved(actor, params["comment"], bool(params["resolved"]))
+    return HandlerResult(
+        event_payload={"op": "comment-resolve", "comment": root, "resolved": bool(params["resolved"])},
+        data={"comment": root, "resolved": bool(params["resolved"])},
+    )
+
+
+def delete_comment_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    repo.soft_delete_comment(actor, params["comment"])
+    return HandlerResult(
+        event_payload={"op": "comment-delete", "comment": params["comment"]},
+        data={"comment": params["comment"], "deleted": True},
+    )
+
+
 def internal_reset_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     # Administrative purge; NOT exposed to LLM and NOT on the Tree Event stream.
     # The handler exists for surface parity but the executor suppresses emission
