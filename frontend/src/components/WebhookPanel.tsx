@@ -22,10 +22,16 @@ export function WebhookPanel({
   sheet,
   client,
   onClose,
+  embedded = false,
 }: {
   sheet: string;
   client: ArborClient;
   onClose: () => void;
+  // When true, render only the body (no backdrop/modal/header chrome) so the
+  // panel can be HOSTED inside the unified Sheet Settings modal's Webhooks tab.
+  // Default false preserves the standalone-modal behavior every existing caller
+  // relies on.
+  embedded?: boolean;
 }): JSX.Element {
   const [endpoints, setEndpoints] = useState<WebhookEndpointView[]>([]);
   const [url, setUrl] = useState("");
@@ -87,22 +93,8 @@ export function WebhookPanel({
     [client],
   );
 
-  return (
-    <div
-      className="arbor-modal-backdrop"
-      data-testid="webhook-modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="arbor-modal arbor-webhook-modal">
-        <header className="arbor-modal-head">
-          <span>Webhooks</span>
-          <button type="button" data-testid="webhook-close" aria-label="Close" onClick={onClose}>
-            ✕
-          </button>
-        </header>
-        <div className="arbor-webhook-body">
+  const body = (
+    <div className="arbor-webhook-body">
           {/* Register form */}
           <form
             className="arbor-webhook-register"
@@ -198,7 +190,29 @@ export function WebhookPanel({
               </li>
             ))}
           </ul>
-        </div>
+    </div>
+  );
+
+  // Embedded (inside Sheet Settings): just the body — the host owns the chrome.
+  if (embedded) return body;
+
+  // Standalone modal (every existing caller): backdrop + modal + header + body.
+  return (
+    <div
+      className="arbor-modal-backdrop"
+      data-testid="webhook-modal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="arbor-modal arbor-webhook-modal">
+        <header className="arbor-modal-head">
+          <span>Webhooks</span>
+          <button type="button" data-testid="webhook-close" aria-label="Close" onClick={onClose}>
+            ✕
+          </button>
+        </header>
+        {body}
       </div>
     </div>
   );

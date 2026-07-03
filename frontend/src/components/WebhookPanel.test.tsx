@@ -9,7 +9,24 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it } from "vitest";
 import App from "../App";
 import { loginAs, mockClient } from "../test/fixture";
-import type { ArborClient, WebhookEndpointView } from "../api";
+import type { ArborClient, SheetDefinition, WebhookEndpointView } from "../api";
+
+// A lean SheetDefinition so the unified Sheet Settings modal (which hosts the
+// Webhooks tab) can seed. Columns/process are irrelevant to the webhook specs.
+const DEF: SheetDefinition = {
+  sheet: { name: "S", title: "S", structural_owner: "A", label_column: "col:name", settings: {} },
+  columns: [],
+  process: null,
+};
+
+// Open the Webhooks tab of the unified Sheet Settings modal (the former standalone
+// "Webhooks" header button now lives inside Settings). Returns once the embedded
+// register form is present.
+async function openWebhooks() {
+  fireEvent.click(await screen.findByTestId("sheet-settings-button"));
+  fireEvent.click(await screen.findByTestId("settings-tab-webhooks"));
+  await screen.findByTestId("webhook-register-form");
+}
 
 // A client with an in-memory webhook store so register/list/delete/test round-trip.
 function webhookClient(opts?: { rejectRegister?: string }) {
@@ -19,6 +36,7 @@ function webhookClient(opts?: { rejectRegister?: string }) {
   const calls: { method: string; args: unknown }[] = [];
   const client: ArborClient = {
     ...base.client,
+    getSheetDefinition: async () => DEF,
     registerWebhook: async (params) => {
       calls.push({ method: "register", args: params });
       if (opts?.rejectRegister) throw new Error(opts.rejectRegister);
@@ -54,26 +72,29 @@ function webhookClient(opts?: { rejectRegister?: string }) {
 }
 
 describe("WebhookPanel — sheet-admin webhook registration surface", () => {
-  it("shows a header Webhooks button for the structural owner and opens the modal", async () => {
+  it("reaches the Webhooks tab from the unified Sheet Settings button", async () => {
     const { client } = webhookClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
 
-    const btn = await screen.findByTestId("webhook-config-button");
-    expect(btn).toHaveTextContent(/webhooks/i);
-    expect(screen.queryByTestId("webhook-modal")).toBeNull();
+    const btn = await screen.findByTestId("sheet-settings-button");
+    // The consolidated entry is a single gear "Settings" button (title carries
+    // the full "Sheet Settings" name for the a11y/tooltip label).
+    expect(btn).toHaveTextContent(/settings/i);
+    expect(btn).toHaveAttribute("title", "Sheet Settings");
+    // the webhook surface is not mounted until Settings opens on its Webhooks tab.
+    expect(screen.queryByTestId("webhook-register-form")).toBeNull();
 
-    fireEvent.click(btn);
-    const modal = await screen.findByTestId("webhook-modal");
-    expect(within(modal).getByTestId("webhook-register-form")).toBeInTheDocument();
+    await openWebhooks();
+    const panel = screen.getByTestId("settings-webhooks");
+    expect(within(panel).getByTestId("webhook-register-form")).toBeInTheDocument();
   });
 
   it("register funnels through registerWebhook and surfaces the write-once secret", async () => {
     const { client, calls } = webhookClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(await screen.findByTestId("webhook-config-button"));
-    await screen.findByTestId("webhook-modal");
+    await openWebhooks();
 
     fireEvent.change(screen.getByTestId("webhook-url"), {
       target: { value: "https://hooks.example.com/arbor" },
@@ -100,8 +121,7 @@ describe("WebhookPanel — sheet-admin webhook registration surface", () => {
     const { client, calls } = webhookClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(await screen.findByTestId("webhook-config-button"));
-    await screen.findByTestId("webhook-modal");
+    await openWebhooks();
 
     fireEvent.change(screen.getByTestId("webhook-url"), {
       target: { value: "https://hooks.example.com/x" },
@@ -124,8 +144,7 @@ describe("WebhookPanel — sheet-admin webhook registration surface", () => {
     });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(await screen.findByTestId("webhook-config-button"));
-    await screen.findByTestId("webhook-modal");
+    await openWebhooks();
 
     fireEvent.change(screen.getByTestId("webhook-url"), {
       target: { value: "http://169.254.169.254/" },
@@ -139,11 +158,11 @@ describe("WebhookPanel — sheet-admin webhook registration surface", () => {
     expect(screen.queryByTestId("webhook-list")?.querySelectorAll("li[data-testid^='webhook-row']").length ?? 0).toBe(0);
   });
 
-  it("a non-owner, non-admin viewer sees no header Webhooks button", async () => {
+  it("a non-owner, non-admin viewer sees no Sheet Settings button (so no Webhooks tab)", async () => {
     // persona B is neither structural owner of S nor admin.
     const base = mockClient({ snapshot: loginAs("B") });
     render(<App client={base.client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    expect(screen.queryByTestId("webhook-config-button")).toBeNull();
+    expect(screen.queryByTestId("sheet-settings-button")).toBeNull();
   });
 });

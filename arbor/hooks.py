@@ -87,6 +87,8 @@ override_whitelisted_methods = {
     "arbor.get_sheet_snapshot": "arbor.arbor.api.get_sheet_snapshot",
     # Explore: bounded, navigable LLM read API (used above EXPLORE_THRESHOLD)
     "arbor.sheet_overview": "arbor.arbor.api.sheet_overview",
+    # The cheap schema/config (governance) read — columns + process, NO rows.
+    "arbor.get_sheet_definition": "arbor.arbor.api.get_sheet_definition",
     "arbor.list_children": "arbor.arbor.api.list_children",
     "arbor.get_subtree": "arbor.arbor.api.get_subtree",
     "arbor.get_node": "arbor.arbor.api.get_node",

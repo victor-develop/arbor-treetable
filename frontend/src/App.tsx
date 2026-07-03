@@ -23,8 +23,7 @@ import { ActivityPanel } from "./components/ActivityPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { ImpersonationBar } from "./components/ImpersonationBar";
 import { CommentDrawer, type CommentCell } from "./components/CommentDrawer";
-import { ProcessConfigPanel } from "./components/ProcessConfigPanel";
-import { WebhookPanel } from "./components/WebhookPanel";
+import { SheetSettings } from "./components/SheetSettings";
 import { useWhoami } from "./hooks/useWhoami";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
@@ -40,6 +39,7 @@ import { AddColumnForm, ColumnSettings } from "./components/ColumnConfig";
 import { AgentDock } from "./components/AgentDock";
 import { ImportExport } from "./components/ImportExport";
 import { SubscriptionControl, NotificationItem } from "./components/SubscriptionControl";
+import { GearIcon } from "./components/icons";
 import { DelegationControl } from "./components/DelegationControl";
 import { ViewMenu } from "./components/ViewMenu";
 import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
@@ -372,10 +372,14 @@ function ConnectedShell({
   // reloads the thread + refetches the sheet (for the per-cell summary glyph).
   const [commentCell, setCommentCell] = useState<CommentCell | null>(null);
   const [commentThread, setCommentThread] = useState<CellComment[]>([]);
-  // Process config modal (Feature: process). Gated on the structural-owner/admin
-  // viewer hint; seeded from getProcess(sheet).
-  const [processOpen, setProcessOpen] = useState(false);
-  const [webhookOpen, setWebhookOpen] = useState(false);
+  // Unified Sheet Settings modal (consolidates the former Process modal, Webhooks
+  // modal, per-column gear, and toolbar Add-column into ONE tabbed surface). Gated
+  // on the structural-owner/admin viewer hint; its Columns tab is always available.
+  // `settingsTab` seeds which tab opens (defaults to Columns).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<import("./components/SheetSettings").SheetSettingsTab>(
+    "columns",
+  );
   const [processDef, setProcessDef] = useState<ProcessDef | null>(null);
 
   // Process Dashboard BADGE (WS-B2). The Dashboard nav link carries a live
@@ -572,10 +576,14 @@ function ConnectedShell({
       .then(setProcessDef)
       .catch(() => setProcessDef(null));
   }, [client, sheetName]);
-  const openProcess = useCallback(() => {
+  // Open the unified Sheet Settings modal. The Process tab still seeds its editor
+  // from getProcess(sheet) (the canvas hydrates from the full ProcessDef, incl.
+  // title); SheetSettings' own getSheetDefinition read seeds the Columns list.
+  const openSettings = useCallback(() => {
     setProcessDef(null);
     loadProcess();
-    setProcessOpen(true);
+    setSettingsTab("columns");
+    setSettingsOpen(true);
   }, [loadProcess]);
   const defineProcessOp = useCallback(
     (
@@ -921,33 +929,23 @@ function ConnectedShell({
                 roles), available to every user. Renders nothing when there is
                 nothing to request and no roles held. */}
             <RequestRoleControl roles={roles} onApply={(p) => roleOp("applyForRole", p)} />
-            {/* Process config (Feature: process). Structural-owner / admin only —
-                opens the ProcessConfigPanel as a modal (like RolesModal). Seeded
-                from getProcess(sheet) on open. */}
+            {/* Unified Sheet Settings (consolidates the former Process modal,
+                Webhooks modal, per-column gear, and toolbar Add-column into ONE
+                tabbed surface). Structural-owner / admin only; seeded from the
+                single getSheetDefinition read — the SAME capability the LLM agent
+                uses, so the panel and the agent never diverge on the schema. */}
             {canConfigProcess && (
               <button
                 type="button"
-                className="arbor-process-config-btn"
-                data-testid="process-config-button"
+                className="arbor-sheet-settings-btn"
+                data-testid="sheet-settings-button"
                 aria-haspopup="dialog"
-                aria-expanded={processOpen}
-                onClick={openProcess}
+                aria-expanded={settingsOpen}
+                title="Sheet Settings"
+                onClick={openSettings}
               >
-                Process
-              </button>
-            )}
-            {/* Notification webhooks (Feature: webhooks). Same structural-owner /
-                admin gate as Process — opens the WebhookPanel modal. */}
-            {canConfigProcess && (
-              <button
-                type="button"
-                className="arbor-webhook-config-btn"
-                data-testid="webhook-config-button"
-                aria-haspopup="dialog"
-                aria-expanded={webhookOpen}
-                onClick={() => setWebhookOpen(true)}
-              >
-                Webhooks
+                <GearIcon />
+                <span>Settings</span>
               </button>
             )}
             {/* Global Roles admin (admin-only). Role data is site-wide, so this
@@ -1182,48 +1180,28 @@ function ConnectedShell({
             onDelete={deleteComment}
             onClose={closeComments}
           />
-          {/* Process config modal (Feature: process). Structural-owner / admin only;
-              seeded from getProcess(sheet). Reuses the shared .arbor-modal shell. */}
-          {canConfigProcess && processOpen && (
-            <div
-              className="arbor-modal-backdrop"
-              data-testid="process-config-modal"
-              onClick={(e) => {
-                if (e.target === e.currentTarget) setProcessOpen(false);
-              }}
-            >
-              <div className="arbor-modal">
-                <header className="arbor-modal-head">
-                  <span>Process</span>
-                  <button
-                    type="button"
-                    data-testid="pc-close"
-                    aria-label="Close"
-                    onClick={() => setProcessOpen(false)}
-                  >
-                    ✕
-                  </button>
-                </header>
-                <ProcessConfigPanel
-                  // Remount when the async getProcess load resolves so the canvas
-                  // re-seeds from the persisted rules (the panel seeds rules from
-                  // `process` once at mount; it opens with processDef=null then the
-                  // fetch fills it — without this key the loaded rules never hydrate).
-                  key={processDef ? `loaded:${processDef.rules.length}` : "new"}
-                  sheet={sheetName}
-                  columns={snap.columns}
-                  process={processDef}
-                  onDefine={defineProcessOp}
-                  onEnable={enableProcessOp}
-                  onDisable={disableProcessOp}
-                />
-              </div>
-            </div>
-          )}
-          {/* Notification webhooks modal (Feature: webhooks). Same gate as Process;
-              owns its own list fetch via the client. */}
-          {canConfigProcess && webhookOpen && (
-            <WebhookPanel sheet={sheetName} client={client} onClose={() => setWebhookOpen(false)} />
+          {/* Unified Sheet Settings modal (consolidates Process + Webhooks + per-
+              column config + Add-column). Structural-owner / admin gated. Seeds the
+              Columns/Process/Webhooks tabs from the single getSheetDefinition read
+              (the SAME capability the LLM agent uses); the Process tab additionally
+              takes the host's getProcess-loaded ProcessDef so the canvas hydrates
+              with the process TITLE the lean definition omits. */}
+          {canConfigProcess && settingsOpen && (
+            <SheetSettings
+              sheet={sheetName}
+              client={client}
+              canConfigProcess={canConfigProcess}
+              initialTab={settingsTab}
+              processDef={processDef}
+              onClose={() => setSettingsOpen(false)}
+              onDefineProcess={defineProcessOp}
+              onEnableProcess={enableProcessOp}
+              onDisableProcess={disableProcessOp}
+              onAddColumn={(params) => columnOp("addColumn", params)}
+              onUpdateColumn={(params) => columnOp("updateColumn", params)}
+              onDeleteColumn={(params) => columnOp("deleteColumn", params)}
+              onGrantColumn={(params) => columnOp("grantColumn", params)}
+            />
           )}
           {/* Global Roles admin modal — admin-only, header-launched. Mounted only
               when open; reuses the .arbor-modal shell (like ColumnSettings). Every

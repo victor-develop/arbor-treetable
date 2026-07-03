@@ -135,6 +135,10 @@ class _SheetView:
     name: str
     structural_owner: str
     settings: dict[str, Any] = field(default_factory=dict)
+    # The human display title (Tree Sheet.title). Optional so the pure core can
+    # ``getattr(sv, "title", "")`` and fall back to ``name`` when unset (the
+    # in-memory double has no title). Read by getSheetDefinition's sheet block.
+    title: str = ""
 
 
 @dataclass
@@ -264,6 +268,7 @@ class FrappeRepository:
             name=doc.name,
             structural_owner=doc.structural_owner,
             settings=settings or {},
+            title=getattr(doc, "title", "") or "",
         )
 
     def _node_view(self, doc) -> _NodeView:

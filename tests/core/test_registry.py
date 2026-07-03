@@ -16,6 +16,8 @@ from arbor.core.types import SchemaValidationError, UnknownCapabilityError
 EXPECTED_IDS = {
     "getSheetSnapshot",
     "getSheetOverview",
+    # the cheap schema/config (governance) read — columns + process, NO rows.
+    "getSheetDefinition",
     "listChildren",
     "getSubtree",
     "getNode",
@@ -81,7 +83,27 @@ LLM_HIDDEN = {
 def test_all_capabilities_registered():
     ids = {c.id for c in all_capabilities()}
     assert ids == EXPECTED_IDS
-    assert len(all_capabilities()) == 42
+    assert len(all_capabilities()) == 43
+
+
+def test_get_sheet_definition_is_a_pure_read_llm_tool():
+    """getSheetDefinition mirrors getSheetOverview: Axis.NONE, target/op NONE,
+    emits nothing (a pure read), and IS exposed to the LLM agent."""
+    from arbor.core.types import Axis, Operation, TargetKind
+
+    cap = get_capability("getSheetDefinition")
+    assert cap.axis == Axis.NONE
+    assert cap.target_kind == TargetKind.NONE
+    assert cap.operation == Operation.NONE
+    assert cap.emits == ()
+    assert cap.is_exposed_to_llm is True
+    # a sheet id is the only required param.
+    validate_schema({"sheet": "S"}, cap.params_schema)
+    with pytest.raises(SchemaValidationError):
+        validate_schema({}, cap.params_schema)
+    # it appears among the LLM tools.
+    tool_names = {t["function"]["name"] for t in get_llm_tools()}
+    assert "getSheetDefinition" in tool_names
 
 
 def test_unknown_capability_raises():
@@ -203,7 +225,7 @@ def test_webhook_registration_methods_are_not_registry_capabilities():
         {"registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"}
     )
     # count is unchanged: the shims added no capability.
-    assert len(all_capabilities()) == 42
+    assert len(all_capabilities()) == 43
     assert ids == EXPECTED_IDS
 
 

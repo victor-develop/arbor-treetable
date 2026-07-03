@@ -492,6 +492,24 @@ def sheet_overview(sheet):
 
 
 @frappe.whitelist()
+def get_sheet_definition(sheet):
+    """The sheet's DEFINITION (schema + governance) — a CHEAP read with NO row or
+    cell data. Powers the unified Sheet Settings panel AND the workspace agent's
+    "configure an existing sheet" flow off the SAME capability.
+
+    ``GET /api/method/arbor.get_sheet_definition?sheet=…`` →
+    ``{kind:"read", data:{sheet:{name,title,structural_owner,label_column,settings},
+    columns:[{name,field,label,type,column_owner,editors,is_label,options?,can_edit}],
+    process:{enabled,row_scope,rules:[ProcessRuleView...]}|null}}``. Columns are
+    read-ACL FILTERED (a column the viewer cannot read is omitted); the process
+    rule labels/keys are redacted per unreadable column, and expected-column owners
+    are LIVE-resolved. Routed through the ONE executor (surface parity) — never
+    reads a Tree Node Value. Unlike ``get_process`` this is a registry capability,
+    so it is reachable by the agent as ``getSheetDefinition`` too."""
+    return _dispatch("getSheetDefinition", {"sheet": sheet})
+
+
+@frappe.whitelist()
 def list_children(sheet, parent=None, cursor=None, limit=50):
     """One parent's direct children, keyset-paginated (``parent`` omitted = roots).
     Each node carries all its cells + its own child_count."""

@@ -31,7 +31,7 @@ import base64
 import json
 from typing import Any, Optional
 
-from .acl import visible_columns
+from .acl import can_read_column, resolve_column_approvers, visible_columns
 from .ports import Repository
 from .types import Actor
 
@@ -293,6 +293,134 @@ def sheet_overview(repo: Repository, sheet: str, actor: Actor) -> dict[str, Any]
         "root_node_ids": root_ids,
         "max_depth": max_depth,
         "top_branches": top_branches,
+    }
+
+
+def _readable_column_label(repo: Repository, sheet: str, actor: Actor, column):
+    """``(label, readable)`` for ``column``: its display label when the viewer MAY
+    read it (``acl.can_read_column``), else ``(None, False)`` so the caller
+    redacts the key. Never a cell VALUE — only the column schema label. A missing
+    column resolves to ``(None, False)``. The pure-core peer of api._readable_column_label."""
+    if not column:
+        return None, False
+    try:
+        col = repo.get_column(sheet, column)
+    except Exception:  # unknown column -> redacted
+        return None, False
+    if not can_read_column(repo, sheet, col, actor):
+        return None, False
+    return (getattr(col, "label", None) or col.field), True
+
+
+def _process_rule_views(repo: Repository, sheet: str, actor: Actor, process) -> list[dict[str, Any]]:
+    """Build the ProcessRuleView list for ``process``, read-ACL REDACTING each
+    trigger/expected column the viewer cannot read (label -> None AND key -> None),
+    and LIVE-resolving each readable expected column's owner. The pure-core mirror
+    of api._process_view_dict's rule builder, so the human panel + agent read the
+    SAME shape."""
+    rules: list[dict[str, Any]] = []
+    for r in sorted(process.rules, key=lambda x: x.idx):
+        trig_label, trig_readable = _readable_column_label(repo, sheet, actor, r.trigger_column)
+        expected_columns: list = []
+        expected_labels: list = []
+        expected_owners: dict[str, Any] = {}
+        for col in r.expected_columns:
+            label, readable = _readable_column_label(repo, sheet, actor, col)
+            expected_labels.append(label)
+            if readable:
+                expected_columns.append(col)
+                expected_owners[col] = (
+                    ", ".join(sorted(resolve_column_approvers(repo, sheet, col))) or None
+                )
+            else:
+                expected_columns.append(None)
+                expected_owners[col] = None
+        trigger_columns: list = []
+        trigger_labels: list = []
+        for col in (r.trigger_columns or ([r.trigger_column] if r.trigger_column else [])):
+            tlabel, treadable = _readable_column_label(repo, sheet, actor, col)
+            trigger_labels.append(tlabel)
+            trigger_columns.append(col if treadable else None)
+        rules.append(
+            {
+                "rule_key": r.rule_key,
+                "idx": r.idx,
+                "trigger_kind": r.trigger_kind,
+                "trigger_column": r.trigger_column if trig_readable else None,
+                "trigger_column_label": trig_label,
+                "trigger_columns": trigger_columns,
+                "trigger_labels": trigger_labels,
+                "trigger_join": r.trigger_join,
+                "trigger_op": r.trigger_op,
+                "expected_columns": expected_columns,
+                "expected_labels": expected_labels,
+                "within_seconds": r.within_seconds,
+                "notify_on_expect": bool(r.notify_on_expect),
+                "label": r.label,
+                "expected_owners": expected_owners,
+            }
+        )
+    return rules
+
+
+def sheet_definition(repo: Repository, sheet: str, actor: Actor) -> dict[str, Any]:
+    """The sheet's DEFINITION (governance + schema) — a CHEAP read with NO row or
+    cell data. The single source of truth BOTH the human Sheet-Settings panel and
+    the LLM agent read (mirrors ``sheet_overview``: never raises on size).
+
+    Returns::
+
+        {
+          "sheet": {name, title, structural_owner, label_column, settings},
+          "columns": [{name (ID), field, label, type, column_owner, editors,
+                       is_label, options?, can_edit}],   # read-ACL FILTERED
+          "process": {enabled, row_scope, rules:[ProcessRuleView...]} | None
+        }
+
+    Columns are filtered to those ``actor`` may read via the SAME
+    ``acl.visible_columns`` rule the snapshot uses, and ``can_edit`` reflects
+    whether ``actor`` is one of the column's approvers (owner + editors). NO cell
+    VALUE is ever read. The process block reuses the get_process rule-view builder
+    (read-ACL-redacted labels + live-resolved owners), or is ``None``."""
+    sv = repo.get_sheet(sheet)
+    label_col = _label_column(repo, sheet)
+
+    columns = []
+    for c in _readable_columns(repo, sheet, actor):
+        entry: dict[str, Any] = {
+            "name": c.name,
+            "field": c.field,
+            "label": getattr(c, "label", "") or c.field,
+            "type": getattr(c, "type", "text"),
+            "column_owner": c.column_owner,
+            "editors": list(getattr(c, "editors", []) or []),
+            "is_label": bool(c.is_label),
+            "can_edit": actor.user in resolve_column_approvers(repo, sheet, c.name),
+        }
+        opts = getattr(c, "options", None)
+        if opts is not None:
+            entry["options"] = opts
+        columns.append(entry)
+
+    process = repo.get_process(sheet)
+    process_block = None
+    if process is not None:
+        process_block = {
+            "enabled": bool(process.enabled),
+            "row_scope": process.row_scope,
+            "rules": _process_rule_views(repo, sheet, actor, process),
+        }
+
+    return {
+        "sheet": {
+            "name": sv.name,
+            "title": getattr(sv, "title", "") or sv.name,
+            "structural_owner": sv.structural_owner,
+            "label_column": label_col,
+            "settings": getattr(sv, "settings", {}) or {},
+        },
+        "columns": columns,
+        "process": process_block,
     }
 
 

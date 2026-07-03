@@ -417,6 +417,47 @@ export type ProcessDef = {
   rules: ProcessRuleView[];
 };
 
+// One column entry in a SheetDefinition (arbor.get_sheet_definition). This is the
+// SCHEMA/governance view of a column — id + label + type + owner + editors, plus
+// the viewer's `can_edit` ACL hint — and carries NO cell values. `name` is the
+// column ID (what defineProcess / updateColumn take); `field` is the storage key.
+// Read-ACL filtered server-side: a column the viewer cannot read is omitted.
+export type SheetDefinitionColumn = {
+  name: string;
+  field: string;
+  label: string;
+  type: ColumnType;
+  column_owner: string;
+  editors: string[];
+  is_label: boolean;
+  options?: SelectOptions | null;
+  // ACL hint — is the viewer one of this column's approvers (owner or editor)?
+  can_edit: boolean;
+};
+
+// The cheap schema/config (governance) READ for a sheet (arbor.get_sheet_definition
+// → the `getSheetDefinition` capability). NO row/cell data — columns + process only.
+// The SINGLE source both the unified Sheet Settings panel and the LLM agent read,
+// so the human surface and the agent can never diverge. Prefer this over
+// getSheetSnapshot when you only need the schema/governance (e.g. mapping a column
+// LABEL to its ID). The `process` block reuses the get_process rule-view shape
+// (read-ACL-redacted labels + live-resolved owners), or is null.
+export type SheetDefinition = {
+  sheet: {
+    name: string;
+    title: string;
+    structural_owner: string;
+    label_column: string | null;
+    settings: Record<string, unknown>;
+  };
+  columns: SheetDefinitionColumn[];
+  process: {
+    enabled: boolean;
+    row_scope: string;
+    rules: ProcessRuleView[];
+  } | null;
+};
+
 // One aggregate edge (trigger -> expected column) for the flow dashboard
 // (process_dashboard). Each rule with N expected columns contributes N edges that
 // share `rule_key`. `from_column` is null for a row (START) trigger. `*_label`
@@ -609,6 +650,11 @@ export type ArborClient = {
   disableProcess?: (sheet: string) => Promise<Outcome>;
   startProcessRun?: (sheet: string, node: string) => Promise<Outcome>;
   getProcess?: (sheet: string) => Promise<ProcessDef>;
+  // The cheap schema/config (governance) read — columns + process, NO rows. The
+  // unified Sheet Settings surface reads this ONE endpoint (same one the agent
+  // uses) to render the column list + current process without a whole snapshot.
+  // Optional so mocked clients implement only what they exercise.
+  getSheetDefinition?: (sheet: string) => Promise<SheetDefinition>;
   processDashboard?: (sheet: string) => Promise<ProcessDashboard>;
   listProcessRuns?: (
     sheet: string,
@@ -851,6 +897,16 @@ export const api: ArborClient = {
     const res = await fetchImpl(`/api/method/arbor.get_process?${qs}`, { headers });
     if (!res.ok) throw new Error(`get_process failed: ${res.status}`);
     return unwrap<ProcessDef>(await res.json());
+  },
+
+  // getSheetDefinition is a registry READ capability, so the endpoint returns the
+  // standard Outcome envelope ({kind:"read", data:<definition>}); unwrap .data.
+  getSheetDefinition: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet }).toString();
+    const res = await fetchImpl(`/api/method/arbor.get_sheet_definition?${qs}`, { headers });
+    if (!res.ok) throw new Error(`get_sheet_definition failed: ${res.status}`);
+    return unwrap<{ kind: string; data: SheetDefinition }>(await res.json()).data;
   },
 
   processDashboard: async (sheet) => {

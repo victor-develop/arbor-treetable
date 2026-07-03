@@ -82,6 +82,11 @@ _DEFAULT_SYSTEM = (
     "SheetTooLargeError, that is your cue to switch to the explore tools "
     "(getSheetOverview then listChildren / getSubtree) and never retry the "
     "snapshot. "
+    "To CONFIGURE an existing sheet (edit a column, or wire/adjust a process), call "
+    "getSheetDefinition FIRST: it is a cheap governance read returning every "
+    "column's id, label, type and owner plus the current process, and NO rows. Use "
+    "it to map a user's column LABEL to the column ID you pass to defineProcess / "
+    "updateColumn — do NOT pull a whole getSheetSnapshot just to learn the schema. "
     "Finish with a concise natural-language summary of what you did and which "
     "Change Requests you filed and to whom."
 )
@@ -103,7 +108,11 @@ _WORKSPACE_SYSTEM = (
     "trigger->expectation edge (trigger_kind 'row' with expected_columns for a "
     "row-start step, or trigger_kind 'column' with trigger_columns=[...] for a "
     "column->column step), then enableProcess(sheet=...). Only after the sheet "
-    "exists may you read it back with getSheetSnapshot or the explore tools."
+    "exists may you read it back with getSheetSnapshot or the explore tools. "
+    "In this createSheet flow, read each new column's ID from the addColumn result "
+    "('data'.column) — you do NOT need getSheetDefinition for a sheet you just "
+    "built. Reserve getSheetDefinition for configuring a PRE-EXISTING sheet whose "
+    "column IDs you don't yet know."
 )
 
 
