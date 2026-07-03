@@ -125,6 +125,40 @@ def visible_columns(repo: Repository, sheet, actor: Actor, columns) -> list:
     return [c for c in columns if can_read_column(repo, sheet, c, actor)]
 
 
+# ---------- Comment authority (Area 2, comments-as-capabilities) ------------
+# The comment mutation caps (addComment/resolveComment/deleteComment) authorize
+# UNIFORMLY through the executor via this resolver. These are HARD authority
+# checks — a denial is an AuthorizationError (403), never a Change Request (like
+# the control caps). The rule reuses the ONE two-axis resolver:
+#   addComment      -> can_read_column(sheet, column)   (discuss any cell you read)
+#   resolveComment  -> resolve_column_approvers(column) (owner + editors settle)
+#   deleteComment   -> author OR a column approver       (self + owner moderation)
+# admins always pass (platform moderation), same honor as can_read_column.
+def can_add_comment(repo: Repository, sheet: str, column: str, actor: Actor) -> bool:
+    """Post/read authority for a cell's comments: whether ``actor`` may read the
+    column (you may discuss any cell you can read)."""
+    col = repo.get_column(sheet, column)
+    return can_read_column(repo, sheet, col, actor)
+
+
+def can_resolve_comment(repo: Repository, sheet: str, column: str, actor: Actor) -> bool:
+    """Resolve/reopen authority: the column approvers (owner + editors), plus an
+    explicit admin honor (admins may moderate)."""
+    if getattr(actor, "is_admin", False):
+        return True
+    return actor.user in resolve_column_approvers(repo, sheet, column)
+
+
+def can_delete_comment(
+    repo: Repository, sheet: str, column: str, author: str, actor: Actor
+) -> bool:
+    """Delete authority: the comment's ``author`` OR a column approver (owner +
+    editors), plus the admin moderation honor."""
+    if actor.user == author:
+        return True
+    return can_resolve_comment(repo, sheet, column, actor)
+
+
 # ---------- Composition -----------------------------------------------------
 def resolve_authority(
     cap: Capability, params: dict, actor: Actor, repo: Repository

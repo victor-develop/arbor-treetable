@@ -87,6 +87,28 @@ class RoleGrantView(Protocol):
 
 
 @runtime_checkable
+class CommentView(Protocol):
+    """An Arbor Cell Comment — threaded, per-cell collaboration metadata keyed by
+    the ``(sheet, node, column)`` cell (Area 2). Promoted to a capability audit
+    record: ``author`` is the EFFECTIVE actor; ``real_user`` / ``impersonated_as``
+    carry the impersonation trace (both None for a normal action); ``deleted`` is
+    the soft-delete tombstone (row preserved for audit; ``list`` hides it)."""
+
+    name: str
+    sheet: str
+    node: str
+    column: str
+    thread_root: Optional[str]
+    parent_comment: Optional[str]
+    author: str
+    body: str
+    resolved: bool
+    real_user: Optional[str]
+    impersonated_as: Optional[str]
+    deleted: bool
+
+
+@runtime_checkable
 class ProcessRuleView(Protocol):
     """One trigger->expectation rule of an Arbor Process (process DAG). A rule
     reads "On <trigger>: expect (``expected_columns`` — an 'and' set sharing ONE
@@ -275,6 +297,40 @@ class Repository(Protocol):
 
     def end_impersonation(self, real_user: str) -> None:
         """Deactivate any active overlay for ``real_user`` (idempotent)."""
+        ...
+
+    # --- per-cell comments (Area 2, promoted to capabilities) ---------------
+    def get_comment(self, comment: str) -> Optional["CommentView"]:
+        """The Arbor Cell Comment by id (INCLUDING soft-deleted tombstones, so the
+        executor can still authorize a delete/resolve against a deleted row), or
+        None if it does not exist."""
+        ...
+
+    def create_comment(
+        self,
+        actor: Actor,
+        sheet: str,
+        node: str,
+        column: str,
+        body: str,
+        parent_comment: Optional[str] = None,
+        mentions: Optional[list[str]] = None,
+    ) -> str:
+        """Insert a comment and return its id. The adapter stamps the FULL audit
+        trace from ``actor``: ``author=actor.user`` +
+        ``real_user=actor.real_user`` + ``impersonated_as=actor.impersonated_as``
+        (so an impersonated post records the REAL principal). ``thread_root`` is
+        derived from ``parent_comment`` (the controller's job)."""
+        ...
+
+    def set_comment_resolved(self, actor: Actor, comment: str, resolved: bool) -> str:
+        """Resolve (``resolved=True``) or reopen (``resolved=False``) the comment's
+        THREAD ROOT. Idempotent. Returns the affected root id."""
+        ...
+
+    def soft_delete_comment(self, actor: Actor, comment: str) -> None:
+        """Soft-delete (tombstone) a comment: ``deleted=1`` + ``deleted_by`` +
+        ``deleted_at``, row PRESERVED for audit. ``list`` filters it out."""
         ...
 
     # --- process / SLA (process DAG) ----------------------------------------

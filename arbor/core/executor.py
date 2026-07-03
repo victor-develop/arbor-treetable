@@ -22,7 +22,12 @@ from . import change_request as cr_module
 from . import explore
 from . import registry
 from . import role_app as role_module
-from .acl import resolve_authority
+from .acl import (
+    can_add_comment,
+    can_delete_comment,
+    can_resolve_comment,
+    resolve_authority,
+)
 from .ports import EventSink, Repository
 from .schema import validate_schema
 from .types import (
@@ -33,6 +38,7 @@ from .types import (
     EventType,
     Outcome,
     TreeEvent,
+    UnknownCapabilityError,
 )
 
 # Capabilities the executor dispatches to dedicated control logic rather than to
@@ -64,7 +70,16 @@ _CONTROL = {
     # (the Arbor Impersonation Session row is the record).
     "beginImpersonation",
     "endImpersonation",
+    # per-cell comments (Area 2) — non-tree collaboration WRITE caps; authorize
+    # via the acl comment resolver, ALWAYS execute or deny (never a CR), emit NO
+    # Tree Event (the Arbor Cell Comment row is the record).
+    "addComment",
+    "resolveComment",
+    "deleteComment",
 }
+
+# Comment caps routed to their dedicated (authorize -> handle) control path.
+_COMMENT_CAPS = {"addComment", "resolveComment", "deleteComment"}
 
 # Impersonation control caps gated on platform admin (System Manager) at dispatch
 # time — the framework-free axis resolver has no notion of platform roles, so
@@ -280,7 +295,50 @@ def _dispatch_control(
     if cap.id in _ADMIN_IMPERSONATION_CAPS:
         return _dispatch_impersonation(cap, params, actor, repo)
 
+    if cap.id in _COMMENT_CAPS:
+        return _dispatch_comment(cap, params, actor, repo)
+
     raise AuthorizationError(f"unhandled control capability {cap.id}")  # pragma: no cover
+
+
+def _dispatch_comment(
+    cap: Capability, params: dict, actor: Actor, repo: Repository
+) -> Outcome:
+    """Per-cell comment control dispatch (Area 2). Authorized UNIFORMLY via the
+    acl comment resolver — a denial is a hard ``AuthorizationError`` (403), NEVER a
+    Change Request (like the control caps). Emits NO Tree Event (the Arbor Cell
+    Comment row IS the audit record). The handler stamps the FULL impersonation
+    trace (author/real_user/impersonated_as) through the adapter.
+
+    resolveComment/deleteComment take a bare ``comment`` id; the executor resolves
+    its (sheet, column, author) via ``get_comment`` so authority is enforced
+    against the target row's column — the SAME two-axis resolver every surface uses.
+    """
+    if cap.id == "addComment":
+        if not can_add_comment(repo, params["sheet"], params["column"], actor):
+            raise AuthorizationError("you do not have access to this column")
+        return _run_comment(cap, params, actor, repo)
+
+    comment = repo.get_comment(params["comment"])
+    if comment is None:
+        raise UnknownCapabilityError(f"no such comment {params['comment']!r}")
+
+    if cap.id == "resolveComment":
+        if not can_resolve_comment(repo, comment.sheet, comment.column, actor):
+            raise AuthorizationError("only the column owner or editors may resolve a thread")
+        return _run_comment(cap, params, actor, repo)
+
+    # deleteComment — author OR column approver.
+    if not can_delete_comment(repo, comment.sheet, comment.column, comment.author, actor):
+        raise AuthorizationError("only the author or a column owner/editor may delete")
+    return _run_comment(cap, params, actor, repo)
+
+
+def _run_comment(cap: Capability, params: dict, actor: Actor, repo: Repository) -> Outcome:
+    """Run a comment handler (no event — comment caps emit=()). Mirrors the
+    control-cap execute-only path."""
+    result = cap.handler(params, actor, repo)
+    return Outcome(kind="executed", result=result, data=result.data)
 
 
 def _dispatch_impersonation(

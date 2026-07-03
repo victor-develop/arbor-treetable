@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 38 capabilities are declared here as ``Capability`` records. Four consumers
+All 41 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -331,10 +331,41 @@ _S_START_PROCESS_RUN = {
     "required": ["sheet", "node"],
     "properties": {"sheet": {"type": "string"}, "node": {"type": "string"}},
 }
+# --- per-cell comments (Area 2). Non-tree collaboration WRITE caps routed through
+# the ONE executor (mirror the impersonation/subscribe control caps: axis=NONE,
+# emits=(), executor-gated). addComment posts on a cell (or replies via
+# parent_comment); resolveComment settles/reopens a thread (resolved=false =
+# reopen); deleteComment SOFT-deletes (tombstone) for audit. list_cell_comments
+# stays a non-capability read shim (like list_notifications).
+_S_ADD_COMMENT = {
+    "type": "object",
+    "required": ["sheet", "node", "column", "body"],
+    "properties": {
+        "sheet": {"type": "string"},
+        "node": {"type": "string"},
+        "column": {"type": "string"},
+        "body": {"type": "string"},
+        "parent_comment": {"type": ["string", "null"]},
+        "mentions": {"type": "array", "items": {"type": "string"}},
+    },
+}
+_S_RESOLVE_COMMENT = {
+    "type": "object",
+    "required": ["comment", "resolved"],
+    "properties": {
+        "comment": {"type": "string"},
+        "resolved": {"type": "boolean"},
+    },
+}
+_S_DELETE_COMMENT = {
+    "type": "object",
+    "required": ["comment"],
+    "properties": {"comment": {"type": "string"}},
+}
 
 
 # ---------------------------------------------------------------------------
-# The 38 capabilities.
+# The 41 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -807,6 +838,50 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="sheet.structural_owner",
         emits=("COLUMN_CONFIG_UPDATED",),
         handler=handlers.start_process_run_handler,
+    ),
+    # --- per-cell comments (Area 2). Promoted from whitelisted shims to registry
+    # capabilities routed through the ONE executor — mirroring the impersonation /
+    # subscribe control caps: Axis.NONE, emit NO Tree Event (the Arbor Cell Comment
+    # row — a complete audit record with real_user/impersonated_as + soft-delete
+    # tombstone — IS the record). is_exposed_to_llm=True (FULL agent access: the
+    # LLM may read/post/resolve/delete). Authorized uniformly in the executor via
+    # the acl comment authority resolver; they ALWAYS execute or deny (403) — a
+    # comment cap NEVER becomes a Change Request (like the control caps).
+    Capability(
+        id="addComment",
+        name="Post a comment on a cell (or reply to a thread)",
+        params_schema=_S_ADD_COMMENT,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,
+        acl_rule="can_read_column(sheet, column)",
+        emits=(),  # the Arbor Cell Comment row is the record; no Tree Event
+        handler=handlers.add_comment_handler,
+    ),
+    Capability(
+        id="resolveComment",
+        name="Resolve or reopen a comment thread",
+        params_schema=_S_RESOLVE_COMMENT,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,
+        acl_rule="resolve_column_approvers(column)",
+        emits=(),
+        handler=handlers.resolve_comment_handler,
+    ),
+    Capability(
+        id="deleteComment",
+        name="Delete a comment (soft-delete tombstone)",
+        params_schema=_S_DELETE_COMMENT,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,
+        acl_rule="author OR resolve_column_approvers(column)",
+        emits=(),
+        handler=handlers.delete_comment_handler,
     ),
 )
 

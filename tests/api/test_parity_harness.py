@@ -83,6 +83,13 @@ REST_METHODS = {
     "enableProcess": "enable_process",
     "disableProcess": "disable_process",
     "startProcessRun": "start_process_run",
+    # per-cell comments (Area 2) — the comment MUTATIONS are now capabilities
+    # (FULL agent access), reachable via their named ``arbor.<m>`` REST aliases.
+    # ``list_cell_comments`` stays a non-capability read shim (like
+    # ``list_notifications``) and is intentionally absent from this manifest.
+    "addComment": "add_cell_comment",
+    "resolveComment": "resolve_cell_comment",
+    "deleteComment": "delete_cell_comment",
 }
 
 
@@ -263,34 +270,43 @@ def test_named_rest_methods_exist_on_api_when_importable():
 # ---------------------------------------------------------------------------
 # I. internalReset exclusion from the LLM/agent surface (API-149 / AGENT-002)
 # ---------------------------------------------------------------------------
-def test_cell_comment_shims_are_whitelisted_but_not_capabilities():
-    """Area 2 (comments) added NO registry capability: the 4 comment shims are
-    reachable ONLY as whitelisted non-capability methods (present in
-    ``hooks.override_whitelisted_methods``, absent from ``registry`` and the LLM
-    tool surface). Proves the closed capability set held — the parity/registry
-    harness stays unchanged."""
+def test_comment_mutations_are_capabilities_list_stays_read_shim():
+    """Area 2 (comments) PROMOTED the comment MUTATIONS to registry capabilities:
+    ``addComment`` / ``resolveComment`` / ``deleteComment`` are now in the registry,
+    the LLM tool surface (FULL agent access), and the REST_METHODS manifest via
+    their named ``arbor.<m>`` aliases. ``list_cell_comments`` STAYS a non-capability
+    read shim (like ``list_notifications``): whitelisted but never a capability."""
     from arbor import hooks
 
-    comment_methods = {
+    # All 4 named aliases stay whitelisted (reachable over REST) …
+    comment_aliases = {
         "arbor.add_cell_comment",
         "arbor.list_cell_comments",
         "arbor.resolve_cell_comment",
         "arbor.delete_cell_comment",
     }
-    # Whitelisted (reachable over REST) …
-    assert comment_methods <= set(hooks.override_whitelisted_methods)
-    for m in comment_methods:
+    assert comment_aliases <= set(hooks.override_whitelisted_methods)
+    for m in comment_aliases:
         assert hooks.override_whitelisted_methods[m].startswith("arbor.arbor.api.")
 
-    # … but NOT registry capabilities (no id, no camelCase equivalent), and never
-    # an LLM tool.
+    # … and the 3 MUTATIONS are now capabilities + LLM tools (full agent access).
     cap_ids = {c.id for c in all_capabilities()}
     tool_names = {t["function"]["name"] for t in get_llm_tools()}
-    for cam in ("addCellComment", "listCellComments", "resolveCellComment", "deleteCellComment"):
+    for cid in ("addComment", "resolveComment", "deleteComment"):
+        assert cid in cap_ids
+        assert cid in tool_names  # LLM-operable
+        assert cid in REST_METHODS  # named REST endpoint
+    # The comment caps emit NO Tree Event (the doctype row is the audit record).
+    from arbor.core.registry import get_capability
+
+    for cid in ("addComment", "resolveComment", "deleteComment"):
+        assert get_capability(cid).emits == ()
+
+    # list stays a NON-capability read shim: no id, no camelCase, never an LLM tool.
+    for cam in ("listCellComments",):
         assert cam not in cap_ids
         assert cam not in tool_names
-    # And no comment id appears in the REST_METHODS capability→method manifest.
-    assert not (comment_methods & set(REST_METHODS.values()))
+    assert "list_cell_comments" not in set(REST_METHODS.values())
 
 
 def test_internal_reset_absent_from_llm_tools():

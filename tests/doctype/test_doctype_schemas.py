@@ -316,6 +316,16 @@ def test_arbor_cell_comment_fields():
 		fld = next(x for x in dt["fields"] if x["fieldname"] == fn)
 		assert fld["fieldtype"] == "Link"
 		assert fld["options"] == "Arbor Cell Comment"
+	# Promoted to a complete AUDIT record (comments-as-capabilities): the
+	# impersonation trace + the soft-delete tombstone columns.
+	assert {"real_user", "impersonated_as", "deleted", "deleted_by", "deleted_at"} <= f
+	for fn in ("real_user", "impersonated_as", "deleted_by"):
+		fld = next(x for x in dt["fields"] if x["fieldname"] == fn)
+		assert fld["fieldtype"] == "Link" and fld["options"] == "User"
+	deleted = next(x for x in dt["fields"] if x["fieldname"] == "deleted")
+	assert deleted["fieldtype"] == "Check" and deleted.get("default") == "0"
+	deleted_at = next(x for x in dt["fields"] if x["fieldname"] == "deleted_at")
+	assert deleted_at["fieldtype"] == "Datetime"
 
 
 def test_arbor_process_fields_and_rules_child():

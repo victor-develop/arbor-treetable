@@ -55,6 +55,10 @@ EXPECTED_IDS = {
     "enableProcess",
     "disableProcess",
     "startProcessRun",
+    # per-cell comments (Area 2, promoted to capabilities) — FULL agent access.
+    "addComment",
+    "resolveComment",
+    "deleteComment",
 }
 
 # Capabilities hidden from the LLM agent: internalReset + the privilege-granting
@@ -75,7 +79,7 @@ LLM_HIDDEN = {
 def test_all_capabilities_registered():
     ids = {c.id for c in all_capabilities()}
     assert ids == EXPECTED_IDS
-    assert len(all_capabilities()) == 38
+    assert len(all_capabilities()) == 41
 
 
 def test_unknown_capability_raises():
@@ -197,7 +201,7 @@ def test_webhook_registration_methods_are_not_registry_capabilities():
         {"registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"}
     )
     # count is unchanged: the shims added no capability.
-    assert len(all_capabilities()) == 38
+    assert len(all_capabilities()) == 41
     assert ids == EXPECTED_IDS
 
 
