@@ -44,7 +44,12 @@ from arbor.core.acl import (
     resolve_structural_approver,
     visible_columns,
 )
-from arbor.core.explore import CellBudgetExceededError, SheetTooLargeError
+from arbor.core.explore import (
+    CellBudgetExceededError,
+    SheetTooLargeError,
+    process_rule_views,
+    readable_column_label as _readable_column_label,
+)
 from arbor.core.snapshot import serialize_snapshot
 from arbor.core.types import (
     Actor,
@@ -800,52 +805,9 @@ def get_process(sheet):
 
 
 def _process_view_dict(repo, actor, process):
-    rules = []
-    for r in sorted(process.rules, key=lambda x: x.idx):
-        trig_label, trig_readable = _readable_column_label(
-            repo, process.sheet, actor, r.trigger_column
-        )
-        expected_columns: list = []
-        expected_labels: list = []
-        expected_owners: dict[str, Any] = {}
-        for col in r.expected_columns:
-            label, readable = _readable_column_label(repo, process.sheet, actor, col)
-            expected_labels.append(label)
-            if readable:
-                expected_columns.append(col)
-                expected_owners[col] = ", ".join(
-                    sorted(resolve_column_approvers(repo, process.sheet, col))
-                ) or None
-            else:
-                # redact the field key for a column the viewer cannot read.
-                expected_columns.append(None)
-                expected_owners[col] = None
-        # trigger SET labels (redact each unreadable column, like expected).
-        trigger_columns: list = []
-        trigger_labels: list = []
-        for col in (r.trigger_columns or ([r.trigger_column] if r.trigger_column else [])):
-            tlabel, treadable = _readable_column_label(repo, process.sheet, actor, col)
-            trigger_labels.append(tlabel)
-            trigger_columns.append(col if treadable else None)
-        rules.append(
-            {
-                "rule_key": r.rule_key,
-                "idx": r.idx,
-                "trigger_kind": r.trigger_kind,
-                "trigger_column": r.trigger_column if trig_readable else None,
-                "trigger_column_label": trig_label,
-                "trigger_columns": trigger_columns,
-                "trigger_labels": trigger_labels,
-                "trigger_join": r.trigger_join,
-                "trigger_op": r.trigger_op,
-                "expected_columns": expected_columns,
-                "expected_labels": expected_labels,
-                "within_seconds": r.within_seconds,
-                "notify_on_expect": bool(r.notify_on_expect),
-                "label": r.label,
-                "expected_owners": expected_owners,
-            }
-        )
+    # The per-rule ProcessRuleView shape (read-ACL redaction + owner resolution) is
+    # ONE builder in the pure core, reused by getSheetDefinition; here we just wrap
+    # it with the process-level metadata.
     return {
         "name": process.name,
         "sheet": process.sheet,
@@ -853,7 +815,7 @@ def _process_view_dict(repo, actor, process):
         "enabled": bool(process.enabled),
         "row_scope": process.row_scope,
         "sla_breach_notify": bool(process.sla_breach_notify),
-        "rules": rules,
+        "rules": process_rule_views(repo, process.sheet, actor, process),
     }
 
 
@@ -1431,20 +1393,9 @@ def _node_label(repo, sheet, label_col, node):
     return node
 
 
-def _readable_column_label(repo, sheet, actor, column):
-    """``(label, readable)`` for ``column``: the column's display label when the
-    viewer MAY read it (``arbor.core.acl.can_read_column``), else ``(None, False)``
-    so the caller redacts the name. Never returns a cell VALUE — only the column
-    schema label. A missing column resolves to ``(None, False)``."""
-    if not column:
-        return None, False
-    try:
-        col = repo.get_column(sheet, column)
-    except Exception:
-        return None, False
-    if not can_read_column(repo, sheet, col, actor):
-        return None, False
-    return (getattr(col, "label", None) or col.field), True
+# _readable_column_label is the pure-core arbor.core.explore.readable_column_label,
+# imported (aliased) at the top of this module — one implementation, reused by
+# process_dashboard / _activity_summary / the sheet snapshot column filter.
 
 
 def _activity_summary(ev_type, actor_name, payload, repo, sheet, actor, label_col):

@@ -296,11 +296,11 @@ def sheet_overview(repo: Repository, sheet: str, actor: Actor) -> dict[str, Any]
     }
 
 
-def _readable_column_label(repo: Repository, sheet: str, actor: Actor, column):
+def readable_column_label(repo: Repository, sheet: str, actor: Actor, column):
     """``(label, readable)`` for ``column``: its display label when the viewer MAY
     read it (``acl.can_read_column``), else ``(None, False)`` so the caller
     redacts the key. Never a cell VALUE — only the column schema label. A missing
-    column resolves to ``(None, False)``. The pure-core peer of api._readable_column_label."""
+    column resolves to ``(None, False)``. The single source of truth (api reuses this)."""
     if not column:
         return None, False
     try:
@@ -312,20 +312,20 @@ def _readable_column_label(repo: Repository, sheet: str, actor: Actor, column):
     return (getattr(col, "label", None) or col.field), True
 
 
-def _process_rule_views(repo: Repository, sheet: str, actor: Actor, process) -> list[dict[str, Any]]:
+def process_rule_views(repo: Repository, sheet: str, actor: Actor, process) -> list[dict[str, Any]]:
     """Build the ProcessRuleView list for ``process``, read-ACL REDACTING each
     trigger/expected column the viewer cannot read (label -> None AND key -> None),
     and LIVE-resolving each readable expected column's owner. The pure-core mirror
-    of api._process_view_dict's rule builder, so the human panel + agent read the
+    of the ProcessRuleView shape, so the human panel + agent read the
     SAME shape."""
     rules: list[dict[str, Any]] = []
     for r in sorted(process.rules, key=lambda x: x.idx):
-        trig_label, trig_readable = _readable_column_label(repo, sheet, actor, r.trigger_column)
+        trig_label, trig_readable = readable_column_label(repo, sheet, actor, r.trigger_column)
         expected_columns: list = []
         expected_labels: list = []
         expected_owners: dict[str, Any] = {}
         for col in r.expected_columns:
-            label, readable = _readable_column_label(repo, sheet, actor, col)
+            label, readable = readable_column_label(repo, sheet, actor, col)
             expected_labels.append(label)
             if readable:
                 expected_columns.append(col)
@@ -338,7 +338,7 @@ def _process_rule_views(repo: Repository, sheet: str, actor: Actor, process) -> 
         trigger_columns: list = []
         trigger_labels: list = []
         for col in (r.trigger_columns or ([r.trigger_column] if r.trigger_column else [])):
-            tlabel, treadable = _readable_column_label(repo, sheet, actor, col)
+            tlabel, treadable = readable_column_label(repo, sheet, actor, col)
             trigger_labels.append(tlabel)
             trigger_columns.append(col if treadable else None)
         rules.append(
@@ -408,7 +408,7 @@ def sheet_definition(repo: Repository, sheet: str, actor: Actor) -> dict[str, An
         process_block = {
             "enabled": bool(process.enabled),
             "row_scope": process.row_scope,
-            "rules": _process_rule_views(repo, sheet, actor, process),
+            "rules": process_rule_views(repo, sheet, actor, process),
         }
 
     return {
