@@ -59,6 +59,10 @@ _CONTROL = {
     "subscribe",
     "unsubscribe",
     "acknowledge",
+    # sheet bootstrap (self-service create) — a control cap: no sheet exists yet to
+    # ACL-gate, so it authorizes on "authenticated (non-Guest)" HERE and runs its
+    # handler through the ONE executor (like subscribe/impersonation).
+    "createSheet",
     # role management (Feature: roles)
     "assignRole",
     "revokeRole",
@@ -281,6 +285,9 @@ def _dispatch_control(
         return cr_module.withdraw_change(
             repo, sink, params["change_request"], actor, comment=params.get("comment")
         )
+
+    if cap.id == "createSheet":
+        return _create_sheet(cap, params, actor, repo)
 
     if cap.id == "subscribe":
         return _subscribe(params, actor, repo, sink)
@@ -588,6 +595,19 @@ def _acknowledge(params: dict, actor: Actor, repo: Repository) -> Outcome:
     ack = repo.create_acknowledgement(params["notification"], actor.user)
     # No Tree Event (CAPABILITIES.md): the Acknowledgement row is the record.
     return Outcome(kind="executed", data={"acknowledgement": ack})
+
+
+def _create_sheet(cap: Capability, params: dict, actor: Actor, repo: Repository) -> Outcome:
+    """Self-service sheet bootstrap (control cap). Gate: any AUTHENTICATED non-Guest
+    actor may create a sheet — a permissive gate, NOT admin-only. A Guest (or empty
+    identity) is denied with a hard AuthorizationError (403), NEVER a Change Request
+    (there is no sheet yet to route one to). The handler makes the creator the
+    sheet's structural_owner + owner of the default label column. Emits NO Tree
+    Event (emits=() — the Tree Sheet row is the record)."""
+    if not actor.user or actor.user == "Guest":
+        raise AuthorizationError("authentication required to create a sheet")
+    result = cap.handler(params, actor, repo)
+    return Outcome(kind="executed", result=result, data=result.data)
 
 
 def _sheet_of_target(repo: Repository, params: dict) -> str:

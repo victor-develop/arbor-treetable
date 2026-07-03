@@ -101,4 +101,69 @@ describe("SheetList", () => {
     await waitFor(() => expect(screen.getByTestId("new-sheet-error")).toBeInTheDocument());
     expect(onNavigate).not.toHaveBeenCalled();
   });
+
+  // ---- workspace agent on the home page (GOAL: talk to the agent to build) ----
+
+  it("mounts the floating agent dock on the home page", async () => {
+    const client = clientWith([sheet({ name: "S1", node_count: 1 })]);
+    render(<SheetList client={client} />);
+    await waitFor(() => expect(screen.getByTestId("sheet-list")).toBeInTheDocument());
+    expect(screen.getByTestId("agent-dock")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-fab")).toBeInTheDocument();
+  });
+
+  it("the home-page agent chats in WORKSPACE mode (no sheet)", async () => {
+    const chatCalls: Array<string | null | undefined> = [];
+    const client = {
+      ...clientWith([]),
+      agentChat: vi.fn(async (s: string | null | undefined, _m: string, onFrame: (f: unknown) => void) => {
+        chatCalls.push(s);
+        onFrame({ type: "final", content: "ok" });
+      }),
+    } as unknown as ArborClient;
+    render(<SheetList client={client} />);
+    await waitFor(() => expect(screen.getByTestId("sheet-list-empty")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("agent-fab"));
+    fireEvent.change(screen.getByTestId("agent-input"), {
+      target: { value: "create a Roadmap sheet" },
+    });
+    fireEvent.click(screen.getByTestId("agent-send"));
+    await waitFor(() => expect(chatCalls).toHaveLength(1));
+    expect(chatCalls[0] ?? null).toBeNull();
+  });
+
+  it("refreshes the list and surfaces an 'open <sheet>' CTA after the agent creates a sheet", async () => {
+    // First listSheets() → empty; after the agent creates one, a refetch returns it.
+    const rowsByCall = [[], [sheet({ name: "roadmap-1", node_count: 1 })]];
+    let call = 0;
+    const listSheets = vi.fn(async () => rowsByCall[Math.min(call++, rowsByCall.length - 1)]);
+    const client = {
+      executeAction: vi.fn(),
+      getSheetSnapshot: vi.fn(),
+      listSheets,
+      agentChat: vi.fn(async (_s, _m, onFrame) => {
+        onFrame({ type: "observation", outcome: "executed", data: { sheet: "roadmap-1" } });
+        onFrame({ type: "final", content: "Created roadmap-1." });
+      }),
+    } as unknown as ArborClient;
+    const onNavigate = vi.fn();
+    render(<SheetList client={client} onNavigate={onNavigate} />);
+    await waitFor(() => expect(screen.getByTestId("sheet-list-empty")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("agent-fab"));
+    fireEvent.change(screen.getByTestId("agent-input"), { target: { value: "make it" } });
+    fireEvent.click(screen.getByTestId("agent-send"));
+
+    // The list refetches (call count grows past the initial mount fetch)…
+    await waitFor(() => expect(listSheets.mock.calls.length).toBeGreaterThan(1));
+    // …and it now contains the created sheet.
+    await waitFor(() => expect(screen.getByTestId("sheet-row-roadmap-1")).toBeInTheDocument());
+
+    // An "open <sheet>" affordance appears; clicking it navigates to the new sheet.
+    const cta = screen.getByTestId("open-created-sheet");
+    expect(cta).toHaveTextContent("roadmap-1");
+    fireEvent.click(cta);
+    expect(onNavigate).toHaveBeenCalledWith("roadmap-1");
+  });
 });

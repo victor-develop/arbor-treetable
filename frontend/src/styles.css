@@ -3091,6 +3091,27 @@ body {
   color: var(--arbor-error);
 }
 
+/* "The agent created a sheet — open <name>" CTA, raised on the home page after a
+   workspace agent turn creates a sheet. Sits just below the create form. */
+.arbor-agent-created {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-2, #555);
+}
+.arbor-agent-created-open {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.arbor-agent-created-open:hover {
+  text-decoration: none;
+}
+
 /* ── Global Roles admin (header button + modal) ───────────────────────────
    Role data is site-wide, so role administration launches from an admin-only
    header button (matching the Data / My-roles secondary-button family) into a

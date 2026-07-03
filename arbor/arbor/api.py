@@ -1123,70 +1123,40 @@ def end_impersonation():
 
 
 @frappe.whitelist()
-def create_sheet(name, title=None, label="Item"):
-    """Create a brand-new sheet — a STANDALONE whitelisted mutation, NOT a
-    registry capability (a sheet has no per-sheet ACL yet, so there is nothing to
-    route through the executor / ACL resolver).
+def create_sheet(name=None, title=None, label="Item"):
+    """Create a brand-new sheet — now the registry ``createSheet`` CAPABILITY,
+    dispatched through the ONE ``execute_action`` (surface parity for free) rather
+    than a standalone frappe mutation. The prior direct-write logic now lives in
+    ``FrappeRepository.create_sheet`` (the Repository port the createSheet handler
+    calls).
 
-    ``POST /api/method/arbor.create_sheet {name, title?, label?}`` ->
-    ``{"sheet": <created sheet name>}``.
+    ``POST /api/method/arbor.create_sheet {name?, title?, label?}`` ->
+    ``{"sheet": <created sheet name>}`` (the created id is also under the standard
+    ``data`` envelope; the top-level ``sheet`` key is kept for FE/back-compat).
 
-    Any authenticated non-Guest user may create a sheet; the creator becomes its
-    ``structural_owner`` (so they immediately get can_add_column /
-    can_change_structure on it — see ``_acl_hints``). We also create a default
-    LABEL Tree Column (``is_label``, ``type=text``, owned by the creator) so the
-    new sheet is immediately usable (nodes render a label).
+    Any authenticated non-Guest user may create a sheet (gated in the executor's
+    createSheet control path — permissive "authenticated", NOT admin-only); the
+    creator becomes its ``structural_owner`` and owns the default LABEL Tree Column
+    (``is_label``, ``type=text``) so the new sheet is immediately usable.
 
-    A duplicate ``name`` is a storage conflict -> HTTP 409 / ValidationError. An
-    empty/blank name is a bad request -> ValidationError.
-    """
-    actor = _actor()  # raises AuthenticationError on Guest
-
+    A duplicate ``name`` is a storage conflict -> HTTP 409 (adapter ConflictError);
+    a blank name AND title is a bad request -> 400 (core ValueError). The legacy
+    ``label`` arg maps to the capability's ``label_column`` (the default label
+    column's text); ``name``/``title`` are both optional (title falls back to name)."""
     name = (name or "").strip() if isinstance(name, str) else (str(name).strip() if name else "")
-    if not name:
-        frappe.throw(_("Sheet name is required"), exc=frappe.ValidationError)
-
-    if frappe.db.exists("Tree Sheet", name):
-        frappe.local.response["http_status_code"] = 409
-        frappe.throw(_("Sheet {0} already exists").format(name), exc=frappe.ValidationError)
-
     title = (title or "").strip() if isinstance(title, str) else None
-    label_text = (label or "").strip() if isinstance(label, str) else ""
-    if not label_text:
-        label_text = "Item"
-
-    # Catalog scaffolding (no capability exists for "create a sheet"): write the
-    # Tree Sheet shell + its default label column directly via frappe. The creator
-    # owns both, so the very first snapshot already grants them structure/column
-    # affordances. Tree Sheet autonames to a hash, so we insert then rename to the
-    # requested ``name`` (the same idiom the showcase seed uses to give a sheet a
-    # stable, human-readable id).
-    sheet_doc = frappe.new_doc("Tree Sheet")
-    sheet_doc.title = title or name
-    sheet_doc.structural_owner = actor.user
-    sheet_doc.status = "active"
-    sheet_doc.settings = {}
-    sheet_doc.insert(ignore_permissions=True)
-    if sheet_doc.name != name:
-        from frappe.model.rename_doc import rename_doc as _rename_doc
-
-        _rename_doc(
-            "Tree Sheet", sheet_doc.name, name, force=True, ignore_permissions=True
-        )
-    sheet = name
-
-    label_col = frappe.new_doc("Tree Column")
-    label_col.sheet = sheet
-    label_col.field = "title"
-    label_col.label = label_text
-    label_col.type = "text"
-    label_col.is_label = 1
-    label_col.editable = 1
-    label_col.read_level = "public"
-    label_col.column_owner = actor.user
-    label_col.insert(ignore_permissions=True)
-
-    return {"sheet": sheet}
+    body = _dispatch(
+        "createSheet",
+        {
+            "title": title or name,
+            "name": name or None,
+            "label_column": label,
+        },
+    )
+    # Keep the historical top-level {"sheet": ...} shape for the SheetList FE + the
+    # existing bench test, alongside the standard executor envelope.
+    body["sheet"] = (body.get("data") or {}).get("sheet")
+    return body
 
 
 @frappe.whitelist()

@@ -157,6 +157,10 @@ export type AgentFrame =
       outcome: OutcomeKind;
       change_request?: string;
       resolved_approver?: string;
+      // Raw outcome payload (outcome.data) when present — additive/back-compat.
+      // The workspace agent's createSheet returns {sheet: <id>} here, which the
+      // list-page dock reads to refresh the catalog + surface an "open" CTA.
+      data?: Record<string, unknown>;
     }
   | { type: "final"; content: string };
 
@@ -642,8 +646,10 @@ export type ArborClient = {
   testWebhook?: (endpoint: string) => Promise<{ delivery: string | null; status: string | null }>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
+  // `sheet` is nullable: a falsy sheet is a WORKSPACE session (the sheet-less
+  // list-page agent) — the backend treats an absent sheet as workspace mode.
   agentChat: (
-    sheet: string,
+    sheet: string | null | undefined,
     message: string,
     onFrame: (frame: AgentFrame) => void,
   ) => Promise<void>;
@@ -898,7 +904,8 @@ export const api: ArborClient = {
     const res = await fetchImpl("/api/method/arbor.agent.chat", {
       method: "POST",
       headers,
-      body: JSON.stringify({ sheet, message }),
+      // A falsy sheet is sent as null → the backend selects the workspace agent.
+      body: JSON.stringify({ sheet: sheet || null, message }),
     });
     if (!res.ok) throw new Error(`agent.chat failed: ${res.status}`);
     // The Frappe endpoint returns the whole Re-Act session as one JSON document
@@ -918,8 +925,17 @@ export const api: ArborClient = {
           onFrame({ type: "action", tool: String(e.tool ?? ""), arguments: (e.arguments ?? {}) as Record<string, unknown> });
           break;
         case "observation": {
-          const obs = (e.observation ?? {}) as { kind?: OutcomeKind; change_request?: string };
-          onFrame({ type: "observation", outcome: obs.kind ?? "read", change_request: obs.change_request });
+          const obs = (e.observation ?? {}) as {
+            kind?: OutcomeKind;
+            change_request?: string;
+            data?: Record<string, unknown>;
+          };
+          onFrame({
+            type: "observation",
+            outcome: obs.kind ?? "read",
+            change_request: obs.change_request,
+            data: obs.data,
+          });
           break;
         }
         case "final":

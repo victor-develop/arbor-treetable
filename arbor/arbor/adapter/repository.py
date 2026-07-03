@@ -312,6 +312,60 @@ class FrappeRepository:
     def get_sheet(self, sheet: str) -> _SheetView:
         return self._sheet_view(frappe.get_doc(DT_SHEET, sheet))
 
+    def create_sheet(
+        self,
+        actor: Any,
+        title: str,
+        name: Optional[str] = None,
+        label_column: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Self-service sheet bootstrap (createSheet capability). Writes the Tree
+        Sheet shell + its default LABEL Tree Column directly via frappe (there is no
+        node/column mutation capability for "create a sheet"); the CREATOR owns both,
+        so the very first snapshot already grants them structure/column affordances.
+
+        Mirrors the legacy ``arbor.create_sheet`` shim: Tree Sheet autonames to a
+        hash, so we insert then rename to the requested ``name`` (a stable,
+        human-readable id) when supplied. A duplicate ``name`` raises ConflictError
+        (surfaced as 409); a blank ``title`` is a ValueError (400)."""
+        title = (title or "").strip() if isinstance(title, str) else ""
+        req_name = (name or "").strip() if isinstance(name, str) else (str(name).strip() if name else "")
+        if not title and not req_name:
+            raise ValueError("Sheet title is required")
+        if req_name and frappe.db.exists(DT_SHEET, req_name):
+            raise ConflictError(f"Sheet {req_name} already exists")
+
+        label_text = (label_column or "").strip() if isinstance(label_column, str) else ""
+        if not label_text:
+            label_text = "Item"
+
+        sheet_doc = frappe.new_doc(DT_SHEET)
+        sheet_doc.title = title or req_name
+        sheet_doc.structural_owner = actor.user
+        sheet_doc.status = "active"
+        sheet_doc.settings = {}
+        sheet_doc.insert(ignore_permissions=True)
+        if req_name and sheet_doc.name != req_name:
+            from frappe.model.rename_doc import rename_doc as _rename_doc
+
+            _rename_doc(
+                DT_SHEET, sheet_doc.name, req_name, force=True, ignore_permissions=True
+            )
+        sheet = req_name or sheet_doc.name
+
+        label_col = frappe.new_doc(DT_COLUMN)
+        label_col.sheet = sheet
+        label_col.field = "title"
+        label_col.label = label_text
+        label_col.type = "text"
+        label_col.is_label = 1
+        label_col.editable = 1
+        label_col.read_level = "public"
+        label_col.column_owner = actor.user
+        label_col.insert(ignore_permissions=True)
+
+        return {"sheet": sheet}
+
     def get_column(self, sheet: str, column: str) -> _ColumnView:
         """Resolve by Tree Column ``name`` first, else by ``(sheet, field)``."""
         if frappe.db.exists(DT_COLUMN, column):

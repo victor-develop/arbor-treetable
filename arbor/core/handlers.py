@@ -98,6 +98,28 @@ def update_cell_handler(params: dict[str, Any], actor: Actor, repo: Repository) 
     )
 
 
+# --- sheet bootstrap (self-service create) ----------------------------------
+def create_sheet_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    """Create a new sheet through the ONE Repository port. The creator becomes the
+    sheet's ``structural_owner`` (set inside the adapter from ``actor``). Emits NO
+    Tree Event (emits=() — the closed 11-event set is preserved; the Tree Sheet row
+    is the record). ``label_column`` / ``first_column`` are accepted aliases for the
+    default LABEL column's text (mirroring the ``create_sheet`` REST shim's
+    ``label``)."""
+    label_column = params.get("label_column") or params.get("first_column")
+    created = repo.create_sheet(
+        actor,
+        title=params["title"],
+        name=params.get("name"),
+        label_column=label_column,
+    )
+    sheet = created["sheet"] if isinstance(created, dict) else created
+    return HandlerResult(
+        event_payload={"op": "create-sheet", "sheet": sheet},
+        data={"sheet": sheet},
+    )
+
+
 # --- meta — schema ----------------------------------------------------------
 def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]

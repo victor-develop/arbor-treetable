@@ -86,6 +86,26 @@ _DEFAULT_SYSTEM = (
     "Change Requests you filed and to whom."
 )
 
+# Workspace (sheetless) mode: the session begins with NO active sheet, so the
+# agent must MINT one first with createSheet, then thread the returned sheet id
+# into every subsequent tool call. There is nothing to snapshot up front.
+_WORKSPACE_SYSTEM = (
+    _DEFAULT_SYSTEM
+    + " "
+    "You are in WORKSPACE mode: there is NO active sheet yet. Do NOT call "
+    "getSheetSnapshot or any explore/read tool before a sheet exists. To build a "
+    "sheet end-to-end: (1) call createSheet(title=...) FIRST and read the new "
+    "sheet id from its result ('data'.sheet); (2) pass that sheet id as the "
+    "'sheet' argument to EVERY following tool call; (3) add columns with "
+    "addColumn(sheet=..., field=..., label=..., type=..., column_owner=<the "
+    "control person for that column>); (4) wire the process with "
+    "defineProcess(sheet=..., rules=[...]) where each rule is a "
+    "trigger->expectation edge (trigger_kind 'row' with expected_columns for a "
+    "row-start step, or trigger_kind 'column' with trigger_columns=[...] for a "
+    "column->column step), then enableProcess(sheet=...). Only after the sheet "
+    "exists may you read it back with getSheetSnapshot or the explore tools."
+)
+
 
 def make_execute_tool(
     actor: Actor,

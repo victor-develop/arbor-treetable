@@ -6,8 +6,9 @@
 // link to ?sheet=<name>, which loads <App> (index.tsx). Re-derives nothing; the
 // server supplies the catalog.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api as defaultClient, type ArborClient, type SheetSummary } from "../api";
+import { AgentDock } from "./AgentDock";
 
 export function SheetList({
   client,
@@ -27,6 +28,9 @@ export function SheetList({
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // The last sheet the workspace agent created this session, surfaced as an
+  // "open <sheet>" CTA. Cleared when the user opens it.
+  const [createdSheet, setCreatedSheet] = useState<string | null>(null);
 
   const navigate =
     onNavigate ??
@@ -49,23 +53,31 @@ export function SheetList({
       .finally(() => setCreating(false));
   };
 
-  useEffect(() => {
-    let live = true;
+  // Refetch the catalog. Stable across renders so the agent-created handler can
+  // trigger a refresh without re-subscribing the mount effect.
+  const refresh = useCallback(() => {
     if (!c.listSheets) {
       setSheets([]);
       return;
     }
     c.listSheets()
-      .then((rows) => {
-        if (live) setSheets(rows);
-      })
-      .catch(() => {
-        if (live) setSheets([]);
-      });
-    return () => {
-      live = false;
-    };
+      .then((rows) => setSheets(rows))
+      .catch(() => setSheets([]));
   }, [c]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // When the workspace agent reports a created sheet, refresh the list AND raise
+  // an "open <sheet>" CTA so the user can jump straight into it.
+  const onSheetCreated = useCallback(
+    (name: string) => {
+      setCreatedSheet(name);
+      refresh();
+    },
+    [refresh],
+  );
 
   // Sort by node_count desc (real sheets first), then apply the case-insensitive
   // substring filter on the name. Memoized so typing in the filter is cheap even
@@ -136,6 +148,19 @@ export function SheetList({
             {createError}
           </p>
         )}
+        {createdSheet && (
+          <p className="arbor-agent-created" data-testid="agent-created">
+            The agent created a sheet.{" "}
+            <button
+              type="button"
+              className="arbor-agent-created-open"
+              data-testid="open-created-sheet"
+              onClick={() => navigate(createdSheet)}
+            >
+              Open {createdSheet}
+            </button>
+          </p>
+        )}
 
         {sheets === null ? (
           <p data-testid="sheet-list-loading">Loading…</p>
@@ -168,6 +193,11 @@ export function SheetList({
           </ul>
         )}
       </section>
+
+      {/* The floating workspace agent — the SAME dock App mounts, but sheet-less.
+          Talk to it in natural language to build a sheet end to end; when it
+          creates one we refresh the list and raise the open CTA above. */}
+      <AgentDock client={c} sheet={null} onSheetCreated={onSheetCreated} />
     </main>
   );
 }

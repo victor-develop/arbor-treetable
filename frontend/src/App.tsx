@@ -37,7 +37,7 @@ import { useSheet, cellKey } from "./hooks/useSheet";
 import { useCrSelection } from "./hooks/useCrSelection";
 import { TreeTable } from "./components/TreeTable";
 import { AddColumnForm, ColumnSettings } from "./components/ColumnConfig";
-import { AgentSidebar } from "./components/AgentSidebar";
+import { AgentDock } from "./components/AgentDock";
 import { ImportExport } from "./components/ImportExport";
 import { SubscriptionControl, NotificationItem } from "./components/SubscriptionControl";
 import { DelegationControl } from "./components/DelegationControl";
@@ -360,13 +360,9 @@ function ConnectedShell({
     setEditingNode(node.name);
     setEditSignal((s) => s + 1);
   }, []);
-  // Mobile: the agent rail collapses to a bottom drawer toggled by a FAB so the
-  // table owns the screen by default (desktop always shows the rail).
-  // The agent is a floating chat widget (a bubble bottom-right that opens a popup
-  // panel), so it never hogs a docked column — the table always keeps full width.
-  // agentOpen toggles the popup; the sidebar stays MOUNTED (CSS-hidden) so the
-  // transcript survives close/reopen. Same pattern on desktop and mobile.
-  const [agentOpen, setAgentOpen] = useState(false);
+  // The agent is a floating chat widget (AgentDock) — a bubble bottom-right that
+  // opens a popup panel, so it never hogs a docked column: the table always keeps
+  // full width. Open/close + mounted-transcript state now live inside AgentDock.
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -1162,52 +1158,14 @@ function ConnectedShell({
               activity={activitySlot}
             />
           </section>
-          {/* Floating agent widget: a bubble pinned bottom-right that opens a popup
-              panel (same on desktop + mobile). The table always keeps full width —
-              no docked column. The sidebar stays mounted (the popup is CSS-hidden
-              when closed) so the transcript survives close/reopen. */}
-          <div
-            className={`arbor-agent-dock${agentOpen ? " is-open" : ""}`}
-            data-testid="agent-dock"
-          >
-            <div className="arbor-agent-popup" role="dialog" aria-label="Agent panel">
-              <AgentSidebar
-                client={client}
-                sheet={sheetName}
-                onActionObserved={() => void sheet.refetch()}
-              />
-            </div>
-            <button
-              type="button"
-              className="arbor-agent-fab"
-              data-testid="agent-fab"
-              aria-expanded={agentOpen}
-              aria-label={agentOpen ? "Close agent" : "Ask the agent"}
-              title={agentOpen ? "Close agent" : "Ask the agent"}
-              onClick={() => setAgentOpen((o) => !o)}
-            >
-              {agentOpen ? (
-                <span className="arbor-fab-glyph" aria-hidden="true">
-                  ✕
-                </span>
-              ) : (
-                <svg
-                  className="arbor-fab-glyph"
-                  width="22"
-                  height="22"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
-              )}
-            </button>
-          </div>
+          {/* Floating agent widget (extracted to AgentDock so App and SheetList
+              mount the SAME bubble/popup with identical stacking). Sheet-scoped
+              here: every observation refetches the grid. */}
+          <AgentDock
+            client={client}
+            sheet={sheetName}
+            onActionObserved={() => void sheet.refetch()}
+          />
           {/* Comments (Feature: comments). A right-edge drawer pinned BELOW the
               agent popup (z 40 vs 60) and above the table. Mounted only when a cell
               is selected; inert (readOnly) in Proposed preview so the thread reads
