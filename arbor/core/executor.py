@@ -46,6 +46,7 @@ from .types import (
 _CONTROL = {
     "getSheetSnapshot",
     "getSheetOverview",
+    "getSheetDefinition",
     "listChildren",
     "getSubtree",
     "getNode",
@@ -104,6 +105,7 @@ _ADMIN_ROLE_CAPS = {"assignRole", "revokeRole", "approveRoleApplication", "rejec
 # carries the >500 guard and lets the adapter serialize the rows).
 _READS = {
     "getSheetOverview",
+    "getSheetDefinition",
     "listChildren",
     "getSubtree",
     "getNode",
@@ -426,6 +428,8 @@ def _dispatch_read(cap: Capability, params: dict, actor: Actor, repo: Repository
     sheet = params["sheet"]
     if cap.id == "getSheetOverview":
         return Outcome(kind="read", data=explore.sheet_overview(repo, sheet, actor))
+    if cap.id == "getSheetDefinition":
+        return Outcome(kind="read", data=explore.sheet_definition(repo, sheet, actor))
     if cap.id == "listChildren":
         return Outcome(
             kind="read",

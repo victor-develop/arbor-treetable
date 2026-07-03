@@ -17,6 +17,7 @@ import {
   type ProcessDashboard,
   type ProcessDef,
   type ProcessRun,
+  type SheetDefinition,
   type Whoami,
 } from "./api";
 
@@ -258,6 +259,41 @@ describe("process client", () => {
     const u = new URL(calls[0].url, "http://x");
     expect(u.pathname).toBe("/api/method/arbor.get_process");
     expect(u.searchParams.get("sheet")).toBe("S1");
+  });
+
+  it("getSheetDefinition GETs the definition and unwraps the read Outcome .data", async () => {
+    const def: SheetDefinition = {
+      sheet: {
+        name: "S1",
+        title: "Orders",
+        structural_owner: "alice@example.com",
+        label_column: "col:name",
+        settings: {},
+      },
+      columns: [
+        {
+          name: "col:status",
+          field: "status",
+          label: "Status",
+          type: "single-select-split",
+          column_owner: "carol@example.com",
+          editors: ["bob@example.com"],
+          is_label: false,
+          can_edit: true,
+        },
+      ],
+      process: null,
+    };
+    // The capability endpoint returns the standard Outcome envelope; the client
+    // unwraps .data so callers get the bare definition.
+    const { calls } = mockFetch({ kind: "read", data: def });
+    const out = await api.getSheetDefinition!("S1");
+    expect(out).toEqual(def);
+    const u = new URL(calls[0].url, "http://x");
+    expect(u.pathname).toBe("/api/method/arbor.get_sheet_definition");
+    expect(u.searchParams.get("sheet")).toBe("S1");
+    // read: no method override (defaults to GET)
+    expect(calls[0].init?.method).toBeUndefined();
   });
 
   it("processDashboard GETs the aggregate for a sheet", async () => {

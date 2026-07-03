@@ -49,6 +49,8 @@ REST_METHODS = {
     "getSheetSnapshot": "get_sheet_snapshot",
     # explore: bounded, navigable LLM read API (each has a named arbor.<m> endpoint)
     "getSheetOverview": "sheet_overview",
+    # the cheap schema/config (governance) read — columns + process, NO rows.
+    "getSheetDefinition": "get_sheet_definition",
     "listChildren": "list_children",
     "getSubtree": "get_subtree",
     "getNode": "get_node",
@@ -215,6 +217,39 @@ def test_unauthorized_structural_add_parity():
     assert ip_fx.repo.get_change_request(out.change_request)["resolved_approver"] == A
     assert ag_fx.repo.get_change_request(obs["change_request"])["resolved_approver"] == A
     assert ip_fx.repo.get_change_request(out.change_request)["target_kind"] == "node-structure"
+
+
+# ---------------------------------------------------------------------------
+# getSheetDefinition — cross-surface parity + read-ACL + NO rows.
+# ---------------------------------------------------------------------------
+def test_get_sheet_definition_parity_inprocess_vs_agent():
+    """The in-process executor read and the agent tool-call read return the
+    IDENTICAL definition (same core function is the single source of truth)."""
+    params = lambda fx: {"sheet": fx.sheet}
+    out, _ip_sink, _ = _drive_in_process("getSheetDefinition", params, C)
+    obs, _ag_sink, _ = _drive_agent("getSheetDefinition", params, C)
+    assert out.kind == "read"
+    assert obs["kind"] == "read"
+    assert out.data == obs["data"]
+    # a governance read, not a snapshot: columns + process, never node rows.
+    assert "columns" in out.data
+    assert "process" in out.data
+    assert "nodes" not in out.data
+
+
+def test_get_sheet_definition_read_acl_across_surfaces():
+    """A viewer who cannot read a column never sees it on EITHER surface."""
+    def _params(fx):
+        fx.repo.update_column(fx.sheet, fx.col_budget, {"read_level": "owner-only", "readers": []})
+        return {"sheet": fx.sheet}
+
+    out, _s, _ = _drive_in_process("getSheetDefinition", _params, E)  # E is not an approver
+    obs, _s2, _ = _drive_agent("getSheetDefinition", _params, E)
+    ip_cols = {c["name"] for c in out.data["columns"]}
+    ag_cols = {c["name"] for c in obs["data"]["columns"]}
+    assert ip_cols == ag_cols
+    # budget is owner-only; E cannot read it → omitted from the definition.
+    assert not any(c.endswith("budget") for c in ip_cols)
 
 
 # ---------------------------------------------------------------------------

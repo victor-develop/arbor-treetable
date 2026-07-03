@@ -596,6 +596,23 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     let enableCalls = 0;
     const c: ArborClient = {
       ...client,
+      // The unified Sheet Settings modal seeds its Columns list from this read;
+      // provide the canonical S columns so the Process canvas has columns to offer.
+      getSheetDefinition: async () => ({
+        sheet: { name: "S", title: "S", structural_owner: "A", label_column: "col:name", settings: {} },
+        columns: (loginAs("A").columns).map((col) => ({
+          name: col.name,
+          field: col.field,
+          label: col.label,
+          type: col.type,
+          column_owner: col.column_owner,
+          editors: col.editors,
+          is_label: col.is_label,
+          options: col.options ?? null,
+          can_edit: col.can_edit,
+        })),
+        process: null,
+      }),
       getProcess: async (): Promise<ProcessDef> =>
         opts?.def ?? {
           sheet: "S",
@@ -616,22 +633,44 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     return { client: c, defineCalls, getEnable: () => enableCalls };
   }
 
-  it("structural owner sees the Process button; opening seeds the panel from getProcess", async () => {
+  // The former standalone "Process" button now lives inside the unified Sheet
+  // Settings modal's Process tab. Open Settings → Process, then wait for the panel.
+  async function openProcessTab() {
+    fireEvent.click(await screen.findByTestId("sheet-settings-button"));
+    fireEvent.click(await screen.findByTestId("settings-tab-process"));
+    await screen.findByTestId("process-config");
+  }
+
+  it("structural owner reaches the Process tab; it seeds the panel from getProcess", async () => {
     const { client } = processClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(screen.getByTestId("process-config-button"));
-    // The modal opens with the (empty) process editor seeded from getProcess.
-    expect(await screen.findByTestId("process-config-modal")).toBeInTheDocument();
-    expect(screen.getByTestId("process-config")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("sheet-settings-button"));
+    // The unified Settings modal opens; its Process tab hosts the editor.
+    expect(await screen.findByTestId("sheet-settings-modal")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("settings-tab-process"));
+    expect(await screen.findByTestId("process-config")).toBeInTheDocument();
+  });
+
+  it("the header Settings (gear) button opens the unified Sheet Settings on the Columns tab", async () => {
+    const { client } = processClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    // No settings surface until the header gear is clicked.
+    expect(screen.queryByTestId("sheet-settings-modal")).toBeNull();
+    fireEvent.click(await screen.findByTestId("sheet-settings-button"));
+    // Opens on the default Columns tab, seeded from the single getSheetDefinition read.
+    expect(await screen.findByTestId("settings-columns")).toBeInTheDocument();
+    // The Flow / Delivery tabs are reachable from the same surface.
+    expect(screen.getByTestId("settings-tab-process")).toHaveTextContent("Flow");
+    expect(screen.getByTestId("settings-tab-webhooks")).toHaveTextContent("Delivery");
   });
 
   it("adding a node + connecting an edge + Save process fires defineProcess", async () => {
     const { client, defineCalls } = processClient();
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(screen.getByTestId("process-config-button"));
-    await screen.findByTestId("process-config");
+    await openProcessTab();
 
     // Add col:status as a canvas node, then draw START -> col:status.
     fireEvent.change(screen.getByTestId("canvas-add-column"), { target: { value: "col:status" } });
@@ -672,18 +711,17 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    fireEvent.click(screen.getByTestId("process-config-button"));
-    await screen.findByTestId("process-config");
+    await openProcessTab();
     fireEvent.click(await screen.findByTestId("pc-enable"));
     await waitFor(() => expect(getEnable()).toBe(1));
   });
 
-  it("a non-structural-owner / non-admin sees NO Process button", async () => {
+  it("a non-structural-owner / non-admin sees NO Sheet Settings button", async () => {
     // B is not the structural owner (A is) and not admin.
     const { client } = mockClient({ snapshot: loginAs("B") });
     render(<App client={client} sheetName="S" />);
     await screen.findByTestId("tree-table");
-    expect(screen.queryByTestId("process-config-button")).toBeNull();
+    expect(screen.queryByTestId("sheet-settings-button")).toBeNull();
   });
 
   it("renders the header nav (Inbox + Dashboard) links", async () => {

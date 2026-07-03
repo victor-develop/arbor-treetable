@@ -3112,6 +3112,141 @@ body {
   text-decoration: none;
 }
 
+/* ── Unified Sheet Settings (gear button + tabbed modal) ───────────────────
+   The ONE consolidated sheet-config surface (Columns / Flow / Delivery). The
+   header gear button matches the secondary-button family (roles/data); the
+   modal reuses the shared .arbor-modal shell and the governance tab-strip idiom
+   so the calm/dense tokens carry through. */
+.arbor-sheet-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.arbor-sheet-settings-btn:hover {
+  background: var(--surface-hover, var(--surface-2));
+  border-color: var(--ink-subtle);
+}
+/* The settings modal is wider than the column-settings modal — it hosts the
+   column list, the Flow DAG canvas, and the Delivery webhook panel — and its
+   body scrolls when a tab's content runs long. */
+.arbor-sheet-settings {
+  min-width: 480px;
+  max-width: 680px;
+}
+/* Tab strip — mirror the governance tabs (underline-on-active, calm ink). */
+.arbor-settings-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--outline-subtle);
+  padding: 4px 12px 0;
+}
+.arbor-settings-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  padding: 10px 14px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.arbor-settings-tab:hover {
+  color: var(--ink);
+}
+.arbor-settings-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.arbor-settings-panel {
+  padding: 16px;
+  max-height: 66vh;
+  overflow-y: auto;
+}
+/* Embedded editor panels drop their standalone card chrome — the settings modal
+   already supplies the frame (same treatment governance gives its inbox cards). */
+.arbor-settings-panel .arbor-process-config,
+.arbor-settings-panel .arbor-webhook-body {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
+.arbor-settings-loading {
+  padding: 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+/* Column list — one dense row per column: label + owner + optional label badge,
+   expanding into its ColumnSettings editor in place. */
+.arbor-settings-column-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.arbor-settings-column-row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ink);
+}
+.arbor-settings-column-row:hover {
+  background: var(--surface-2);
+}
+.arbor-settings-column-row[aria-expanded="true"] {
+  background: var(--surface-2);
+  border-color: var(--outline);
+}
+.arbor-settings-column-label {
+  font-weight: 500;
+  flex: 1 1 auto;
+}
+.arbor-settings-column-owner {
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+.arbor-settings-column-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-ink);
+  background: var(--accent-tint);
+  border-radius: var(--r-sm, 4px);
+  padding: 1px 6px;
+}
+/* The expanded ColumnSettings editor sits under its row, inset + hairline-topped
+   so the row → editor relationship reads as a disclosure, not a floating card. */
+.arbor-settings-column-list .arbor-column-settings {
+  padding: 12px 10px 8px;
+  margin: 0 0 4px;
+  border-top: 1px solid var(--outline-subtle);
+}
+
 /* ── Global Roles admin (header button + modal) ───────────────────────────
    Role data is site-wide, so role administration launches from an admin-only
    header button (matching the Data / My-roles secondary-button family) into a

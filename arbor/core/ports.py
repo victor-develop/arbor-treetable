@@ -25,6 +25,10 @@ class SheetView(Protocol):
     name: str
     structural_owner: str
     settings: dict[str, Any]
+    # Human display title (optional; adapters populate it, the in-memory double may
+    # not). Readers use ``getattr(sv, "title", "") or sv.name`` so a missing title
+    # falls back to the name — getSheetDefinition's sheet block reads it this way.
+    title: str
 
 
 @runtime_checkable

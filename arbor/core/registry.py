@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 42 capabilities are declared here as ``Capability`` records. Four consumers
+All 43 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -33,6 +33,13 @@ _S_SNAPSHOT = {
 }
 # --- explore (bounded LLM read API) schemas -------------------------------
 _S_SHEET_OVERVIEW = {
+    "type": "object",
+    "required": ["sheet"],
+    "properties": {"sheet": {"type": "string"}},
+}
+# getSheetDefinition — the cheap schema/config (governance) read: columns +
+# process, NO rows. A sheet id is the only argument.
+_S_SHEET_DEFINITION = {
     "type": "object",
     "required": ["sheet"],
     "properties": {"sheet": {"type": "string"}},
@@ -376,7 +383,7 @@ _S_DELETE_COMMENT = {
 
 
 # ---------------------------------------------------------------------------
-# The 42 capabilities.
+# The 43 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -403,6 +410,21 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="reader_can_view_sheet",
         emits=(),
         handler=None,  # read path; executor routes to explore.sheet_overview
+    ),
+    # The cheap schema/config (governance) read — columns + process, NO row/cell
+    # data (mirrors getSheetOverview: a pure read, Axis.NONE, emits nothing). Both
+    # the human Sheet-Settings panel and the LLM agent read this ONE capability.
+    Capability(
+        id="getSheetDefinition",
+        name="Get sheet definition (schema + governance, no rows)",
+        params_schema=_S_SHEET_DEFINITION,
+        axis=Axis.NONE,
+        target_kind=TargetKind.NONE,
+        operation=Operation.NONE,
+        is_exposed_to_llm=True,
+        acl_rule="reader_can_view_sheet",
+        emits=(),
+        handler=None,  # read path; executor routes to explore.sheet_definition
     ),
     Capability(
         id="listChildren",
