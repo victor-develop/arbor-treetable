@@ -23,6 +23,7 @@ import type {
   SnapshotColumn,
 } from "../api";
 import { AddColumnForm, ColumnSettings } from "./ColumnConfig";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { ProcessConfigPanel } from "./ProcessConfigPanel";
 import { WebhookPanel } from "./WebhookPanel";
 
@@ -177,67 +178,77 @@ export function SheetSettings({
 
         {def && tab === "columns" && (
           <section className="arbor-settings-panel" data-testid="settings-columns">
-            {/* Add-column (the old toolbar form) now lives inside Settings. */}
-            <AddColumnForm
-              sheet={sheet}
-              existingFields={def.columns.map((c) => c.field)}
-              canAdd={isOwner}
-              onSubmit={onAddColumn}
-            />
-            <ul className="arbor-settings-column-list">
-              {columns.map((col) => (
-                <li key={col.name} data-testid={`settings-column-${col.name}`}>
-                  <button
-                    type="button"
-                    className="arbor-settings-column-row"
-                    data-testid={`settings-column-toggle-${col.name}`}
-                    aria-expanded={editingColumn === col.name}
-                    onClick={() =>
-                      setEditingColumn((cur) => (cur === col.name ? null : col.name))
-                    }
-                  >
-                    <span className="arbor-settings-column-label">{col.label}</span>
-                    <span className="arbor-settings-column-owner">{col.column_owner}</span>
-                    {col.is_label && <span className="arbor-settings-column-badge">label</span>}
-                  </button>
-                  {editingColumn === col.name && (
-                    <ColumnSettings
-                      sheet={sheet}
-                      column={col}
-                      canConfigure={col.can_edit}
-                      // The current column owner OR the sheet's structural owner may re-grant.
-                      canGrant={col.can_edit || isOwner}
-                      onUpdate={onUpdateColumn}
-                      onDelete={onDeleteColumn}
-                      onGrant={onGrantColumn}
-                    />
-                  )}
-                </li>
-              ))}
-            </ul>
+            {/* Per-tab boundary: a crash in the columns editor keeps the tab strip
+                (and the Flow / Delivery tabs) usable instead of blanking the modal. */}
+            <ErrorBoundary label="settings-columns">
+              {/* Add-column (the old toolbar form) now lives inside Settings. */}
+              <AddColumnForm
+                sheet={sheet}
+                existingFields={def.columns.map((c) => c.field)}
+                canAdd={isOwner}
+                onSubmit={onAddColumn}
+              />
+              <ul className="arbor-settings-column-list">
+                {columns.map((col) => (
+                  <li key={col.name} data-testid={`settings-column-${col.name}`}>
+                    <button
+                      type="button"
+                      className="arbor-settings-column-row"
+                      data-testid={`settings-column-toggle-${col.name}`}
+                      aria-expanded={editingColumn === col.name}
+                      onClick={() =>
+                        setEditingColumn((cur) => (cur === col.name ? null : col.name))
+                      }
+                    >
+                      <span className="arbor-settings-column-label">{col.label}</span>
+                      <span className="arbor-settings-column-owner">{col.column_owner}</span>
+                      {col.is_label && <span className="arbor-settings-column-badge">label</span>}
+                    </button>
+                    {editingColumn === col.name && (
+                      <ColumnSettings
+                        sheet={sheet}
+                        column={col}
+                        canConfigure={col.can_edit}
+                        // The current column owner OR the sheet's structural owner may re-grant.
+                        canGrant={col.can_edit || isOwner}
+                        onUpdate={onUpdateColumn}
+                        onDelete={onDeleteColumn}
+                        onGrant={onGrantColumn}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </ErrorBoundary>
           </section>
         )}
 
         {def && tab === "process" && canConfigProcess && (
           <section className="arbor-settings-panel" data-testid="settings-process">
-            <ProcessConfigPanel
-              // Re-seed the canvas once the definition's rules are known.
-              key={processDef?.rules ? `loaded:${processDef.rules.length}` : "new"}
-              sheet={sheet}
-              columns={columns}
-              process={processDef}
-              onDefine={onDefineProcess}
-              onEnable={onEnableProcess}
-              onDisable={onDisableProcess}
-            />
+            {/* The Flow/DAG canvas is the panel that white-screened before the
+                data guards landed; this boundary is its render-crash backstop. */}
+            <ErrorBoundary label="settings-flow" resetKeys={[processDef?.rules?.length ?? -1]}>
+              <ProcessConfigPanel
+                // Re-seed the canvas once the definition's rules are known.
+                key={processDef?.rules ? `loaded:${processDef.rules.length}` : "new"}
+                sheet={sheet}
+                columns={columns}
+                process={processDef}
+                onDefine={onDefineProcess}
+                onEnable={onEnableProcess}
+                onDisable={onDisableProcess}
+              />
+            </ErrorBoundary>
           </section>
         )}
 
         {def && tab === "webhooks" && canConfigProcess && (
           <section className="arbor-settings-panel" data-testid="settings-webhooks">
-            {/* WebhookPanel renders its own modal chrome; here it is embedded, so we
-                pass a no-op onClose (the outer Settings modal owns dismissal). */}
-            <WebhookPanel sheet={sheet} client={client} onClose={onClose} embedded />
+            <ErrorBoundary label="settings-delivery">
+              {/* WebhookPanel renders its own modal chrome; here it is embedded, so we
+                  pass a no-op onClose (the outer Settings modal owns dismissal). */}
+              <WebhookPanel sheet={sheet} client={client} onClose={onClose} embedded />
+            </ErrorBoundary>
           </section>
         )}
       </div>
