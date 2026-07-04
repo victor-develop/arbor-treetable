@@ -235,7 +235,12 @@ def _agent_scope_from_request() -> Optional[AgentScope]:
     is present but invalid / revoked / expired / not owned by the authenticated
     user is a hard 401/403; it never silently degrades to full access.
     """
-    if getattr(frappe, "request", None) is None:
+    # NB: ``frappe.request`` is a werkzeug LocalProxy — it is never None (accessing
+    # it out of a request context raises instead). Guard on ``frappe.local.request``,
+    # which getattr resolves to None when unbound. Without this, dispatch OUTSIDE an
+    # HTTP request (background jobs, scheduler, bench, the in-process agent lane)
+    # would raise RuntimeError("object is not bound") on the header read.
+    if getattr(frappe.local, "request", None) is None:
         return None
     token = frappe.get_request_header("X-Arbor-Agent-Token")
     if not token:
