@@ -525,6 +525,14 @@ Everything doable in the UI is a documented REST call. The API and Web share the
 Auth: standard Frappe API keys / OIDC bearer tokens (see §10). An **external system**
 persona is exactly an API consumer + a Webhook Endpoint subscriber.
 
+**External LLM agents** are a first-class case of this: an outside model (ChatGPT /
+Claude / the user's own) crawls a generated `skill.md` contract
+(`GET /api/method/arbor.skill_md`, public) and calls `execute_action` with a Frappe
+API key plus an optional scoped **Arbor Agent Token** down-scope. This is a *ceiling*
+on the user's own authority (the two-axis ACL still runs underneath), distinct from
+the in-app internal agent chat (§8), which uses the live session. See
+[EXTERNAL-AGENTS](EXTERNAL-AGENTS.md).
+
 ---
 
 ## 10. SSO isolation seam
@@ -567,6 +575,13 @@ class AuthProvider(Protocol):
 - The active provider is selected by site config (`arbor.auth.provider_class`).
 - **Everything except `arbor_sso_overlay` is open-source-ready.** No SSO-overlay SDK
   import appears anywhere in core. Test suites for core mock `AuthProvider`.
+
+**Two-tier auth for agents.** The provider seam authenticates *humans and the
+in-app agent* (a session). An *external* LLM agent instead authenticates with a
+Frappe API key + an optional scoped **Arbor Agent Token** — a ceiling on that
+user's authority, enforced at dispatch before the executor. That layer is
+documented separately in [EXTERNAL-AGENTS](EXTERNAL-AGENTS.md); it composes with
+this seam (it does not replace it).
 
 ---
 
