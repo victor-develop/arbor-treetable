@@ -400,7 +400,9 @@ def skill_md() -> None:
     frappe.local.response["type"] = "download"
     frappe.local.response["filename"] = "skill.md"
     frappe.local.response["filecontent"] = md
-    frappe.local.response["content_type"] = "text/markdown; charset=utf-8"
+    # Just the type — Frappe appends "; charset=utf-8" itself (setting it here too
+    # produced a doubled "; charset=utf-8; charset=utf-8").
+    frappe.local.response["content_type"] = "text/markdown"
 
 
 def _bootstrap_prompt(token: str, mode: str, sheets: Optional[list]) -> str:
