@@ -127,6 +127,51 @@ describe("SheetSettings", () => {
     expect(within(screen.getByTestId("settings-webhooks")).getByTestId("webhook-list")).toBeInTheDocument();
   });
 
+  it("Flow tab does NOT crash when processDef is truthy but has no rules (white-screen regression)", async () => {
+    // Repro of the reported white screen: a sheet with no process, but the host
+    // passed a lean/legacy processDef object whose `rules` is undefined. Clicking
+    // Flow must render the empty canvas, not throw (which unmounted the whole app).
+    renderSettings({
+      processDef: {
+        sheet: "S",
+        title: null,
+        enabled: false,
+        row_scope: "root-children",
+        rules: undefined as never,
+      },
+    });
+    await waitFor(() => screen.getByTestId("settings-tabs"));
+    fireEvent.click(screen.getByTestId("settings-tab-process"));
+    expect(screen.getByTestId("settings-process")).toBeInTheDocument();
+    expect(within(screen.getByTestId("settings-process")).getByTestId("process-config")).toBeInTheDocument();
+  });
+
+  it("Flow tab renders when the definition's process block has undefined rules", async () => {
+    const def: SheetDefinition = {
+      ...DEF,
+      process: { enabled: false, row_scope: "root-children", rules: undefined as never },
+    };
+    const { client } = clientWithDef(def);
+    render(
+      <SheetSettings
+        sheet="S"
+        client={client}
+        canConfigProcess
+        onClose={vi.fn()}
+        onDefineProcess={vi.fn()}
+        onEnableProcess={vi.fn()}
+        onDisableProcess={vi.fn()}
+        onAddColumn={vi.fn()}
+        onUpdateColumn={vi.fn()}
+        onDeleteColumn={vi.fn()}
+        onGrantColumn={vi.fn()}
+      />,
+    );
+    await waitFor(() => screen.getByTestId("settings-tabs"));
+    fireEvent.click(screen.getByTestId("settings-tab-process"));
+    expect(screen.getByTestId("settings-process")).toBeInTheDocument();
+  });
+
   it("hides the owner-only tabs for a non-owner (Columns only)", async () => {
     renderSettings({ canConfigProcess: false });
     await waitFor(() => screen.getByTestId("settings-tabs"));
