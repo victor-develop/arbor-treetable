@@ -20,6 +20,7 @@ import {
   type SnapshotNode,
 } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LoginScreen } from "./components/LoginScreen";
 import { ImpersonationBar } from "./components/ImpersonationBar";
 import { CommentDrawer, type CommentCell } from "./components/CommentDrawer";
@@ -972,6 +973,7 @@ function ConnectedShell({
             <details className="arbor-data-disclosure" data-testid="data-disclosure">
               <summary>Data</summary>
               <div className="arbor-data-disclosure-body">
+                <ErrorBoundary label="import-export">
                 <ImportExport
                   snapshot={snap}
                   targetSheet={sheetName}
@@ -998,6 +1000,7 @@ function ConnectedShell({
                     sheet.setBanner({ kind: "saved", message: "Import completed" });
                   }}
                 />
+                </ErrorBoundary>
               </div>
             </details>
           </div>
@@ -1065,6 +1068,7 @@ function ConnectedShell({
               </div>
             </div>
             <div className="arbor-tree-card" data-density={density}>
+              <ErrorBoundary label="tree-table">
               <TreeTable
                 columns={sheet.columns}
                 // Proposed preview renders the OVERLAID nodes (pending cell values
@@ -1099,6 +1103,7 @@ function ConnectedShell({
                 proposedCell={proposedCell}
                 movedNode={movedNode}
               />
+              </ErrorBoundary>
             </div>
             {/* Draft flow — the "Review N change(s)" bar. Mounted ONLY while the
                 viewer has >=1 unsubmitted draft (owners commit directly and never
@@ -1127,59 +1132,67 @@ function ConnectedShell({
                       ✕
                     </button>
                   </header>
-                  <ColumnSettings
-                    sheet={sheetName}
-                    column={editingColumn}
-                    canConfigure={editingColumn.can_edit}
-                    canGrant={
-                      snap.actor === editingColumn.column_owner ||
-                      snap.actor === snap.sheet.structural_owner
-                    }
-                    onUpdate={(params) => columnOp("updateColumn", params)}
-                    onDelete={(params) => columnOp("deleteColumn", params)}
-                    onGrant={(params) => columnOp("grantColumn", params)}
-                  />
+                  <ErrorBoundary label="column-settings-modal" resetKeys={[editingColumn.name]}>
+                    <ColumnSettings
+                      sheet={sheetName}
+                      column={editingColumn}
+                      canConfigure={editingColumn.can_edit}
+                      canGrant={
+                        snap.actor === editingColumn.column_owner ||
+                        snap.actor === snap.sheet.structural_owner
+                      }
+                      onUpdate={(params) => columnOp("updateColumn", params)}
+                      onDelete={(params) => columnOp("deleteColumn", params)}
+                      onGrant={(params) => columnOp("grantColumn", params)}
+                    />
+                  </ErrorBoundary>
                 </div>
               </div>
             )}
             {/* ONE consolidated Governance panel replaces the three stacked
                 sections. Each tab renders the EXISTING inbox content unchanged. */}
-            <GovernancePanel
-              changeRequestCount={crs.length}
-              notificationCount={notifications.length}
-              delegationCount={delegationCount}
-              activityCount={activityCount}
-              activityHasMore={activityHasMore}
-              changeRequests={crSlot}
-              notifications={notificationSlot}
-              delegations={delegationSlot}
-              activity={activitySlot}
-            />
+            <ErrorBoundary label="governance-panel">
+              <GovernancePanel
+                changeRequestCount={crs.length}
+                notificationCount={notifications.length}
+                delegationCount={delegationCount}
+                activityCount={activityCount}
+                activityHasMore={activityHasMore}
+                changeRequests={crSlot}
+                notifications={notificationSlot}
+                delegations={delegationSlot}
+                activity={activitySlot}
+              />
+            </ErrorBoundary>
           </section>
           {/* Floating agent widget (extracted to AgentDock so App and SheetList
               mount the SAME bubble/popup with identical stacking). Sheet-scoped
               here: every observation refetches the grid. */}
-          <AgentDock
-            client={client}
-            sheet={sheetName}
-            onActionObserved={() => void sheet.refetch()}
-          />
+          <ErrorBoundary label="agent-dock-sheet">
+            <AgentDock
+              client={client}
+              sheet={sheetName}
+              onActionObserved={() => void sheet.refetch()}
+            />
+          </ErrorBoundary>
           {/* Comments (Feature: comments). A right-edge drawer pinned BELOW the
               agent popup (z 40 vs 60) and above the table. Mounted only when a cell
               is selected; inert (readOnly) in Proposed preview so the thread reads
               but no composer/action fires. Every write reloads the thread + the
               snapshot summary. */}
-          <CommentDrawer
-            open={commentCell !== null}
-            cell={commentCell}
-            comments={commentThread}
-            readOnly={preview}
-            onPost={postComment}
-            onResolve={resolveComment}
-            onReopen={reopenComment}
-            onDelete={deleteComment}
-            onClose={closeComments}
-          />
+          <ErrorBoundary label="comment-drawer" resetKeys={[commentCell?.node, commentCell?.column]}>
+            <CommentDrawer
+              open={commentCell !== null}
+              cell={commentCell}
+              comments={commentThread}
+              readOnly={preview}
+              onPost={postComment}
+              onResolve={resolveComment}
+              onReopen={reopenComment}
+              onDelete={deleteComment}
+              onClose={closeComments}
+            />
+          </ErrorBoundary>
           {/* Unified Sheet Settings modal (consolidates Process + Webhooks + per-
               column config + Add-column). Structural-owner / admin gated. Seeds the
               Columns/Process/Webhooks tabs from the single getSheetDefinition read
@@ -1187,54 +1200,87 @@ function ConnectedShell({
               takes the host's getProcess-loaded ProcessDef so the canvas hydrates
               with the process TITLE the lean definition omits. */}
           {canConfigProcess && settingsOpen && (
-            <SheetSettings
-              sheet={sheetName}
-              client={client}
-              canConfigProcess={canConfigProcess}
-              initialTab={settingsTab}
-              processDef={processDef}
-              onClose={() => setSettingsOpen(false)}
-              onDefineProcess={defineProcessOp}
-              onEnableProcess={enableProcessOp}
-              onDisableProcess={disableProcessOp}
-              onAddColumn={(params) => columnOp("addColumn", params)}
-              onUpdateColumn={(params) => columnOp("updateColumn", params)}
-              onDeleteColumn={(params) => columnOp("deleteColumn", params)}
-              onGrantColumn={(params) => columnOp("grantColumn", params)}
-            />
+            <ErrorBoundary
+              label="sheet-settings"
+              resetKeys={[settingsTab]}
+              fallback={(_err, reset) => (
+                <div
+                  className="arbor-modal-backdrop"
+                  data-testid="sheet-settings-error-backdrop"
+                  onClick={(e) => {
+                    // Keep the modal dismissible even after the body crashed: a
+                    // backdrop click closes the settings surface entirely.
+                    if (e.target === e.currentTarget) setSettingsOpen(false);
+                  }}
+                >
+                  <div className="arbor-modal">
+                    <div className="arbor-banner is-error" role="alert" data-testid="error-boundary-sheet-settings">
+                      <span>This panel hit an error.</span>
+                      <button
+                        type="button"
+                        data-testid="error-boundary-sheet-settings-reset"
+                        onClick={reset}
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            >
+              <SheetSettings
+                sheet={sheetName}
+                client={client}
+                canConfigProcess={canConfigProcess}
+                initialTab={settingsTab}
+                processDef={processDef}
+                onClose={() => setSettingsOpen(false)}
+                onDefineProcess={defineProcessOp}
+                onEnableProcess={enableProcessOp}
+                onDisableProcess={disableProcessOp}
+                onAddColumn={(params) => columnOp("addColumn", params)}
+                onUpdateColumn={(params) => columnOp("updateColumn", params)}
+                onDeleteColumn={(params) => columnOp("deleteColumn", params)}
+                onGrantColumn={(params) => columnOp("grantColumn", params)}
+              />
+            </ErrorBoundary>
           )}
           {/* Global Roles admin modal — admin-only, header-launched. Mounted only
               when open; reuses the .arbor-modal shell (like ColumnSettings). Every
               write funnels through roleOp (refresh roles + snapshot). */}
           {isAdmin && rolesOpen && (
-            <RolesModal
-              isAdmin={isAdmin}
-              roles={roles}
-              grants={roleGrants}
-              applications={roleApplications}
-              onClose={() => setRolesOpen(false)}
-              onAssign={(p) => roleOp("assignRole", p)}
-              onRevoke={(p) => roleOp("revokeRole", p)}
-              onApprove={(p) => roleOp("approveRoleApplication", p)}
-              onReject={(p) => roleOp("rejectRoleApplication", p)}
-              onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
-            />
+            <ErrorBoundary label="roles-modal">
+              <RolesModal
+                isAdmin={isAdmin}
+                roles={roles}
+                grants={roleGrants}
+                applications={roleApplications}
+                onClose={() => setRolesOpen(false)}
+                onAssign={(p) => roleOp("assignRole", p)}
+                onRevoke={(p) => roleOp("revokeRole", p)}
+                onApprove={(p) => roleOp("approveRoleApplication", p)}
+                onReject={(p) => roleOp("rejectRoleApplication", p)}
+                onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+              />
+            </ErrorBoundary>
           )}
           {/* Draft flow — the Draft Review modal. Mounted only when open; reuses
               the shared .arbor-modal shell. Groups the staged drafts by resolved
               approver, shows each old → new diff, and routes discard/submit
               through useSheet. */}
           {draftReviewOpen && (
-            <DraftReviewModal
-              drafts={draftRows}
-              onClose={() => setDraftReviewOpen(false)}
-              onSubmit={submitDrafts}
-              onDiscardOne={(node, column) => void sheet.discardDraft(node, column)}
-              onDiscardAll={() => {
-                void sheet.discardAllDrafts();
-                setDraftReviewOpen(false);
-              }}
-            />
+            <ErrorBoundary label="draft-review-modal">
+              <DraftReviewModal
+                drafts={draftRows}
+                onClose={() => setDraftReviewOpen(false)}
+                onSubmit={submitDrafts}
+                onDiscardOne={(node, column) => void sheet.discardDraft(node, column)}
+                onDiscardAll={() => {
+                  void sheet.discardAllDrafts();
+                  setDraftReviewOpen(false);
+                }}
+              />
+            </ErrorBoundary>
           )}
         </div>
       ) : (

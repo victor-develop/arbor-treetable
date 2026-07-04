@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api as defaultClient, type ArborClient, type SheetSummary } from "../api";
 import { AgentDock } from "./AgentDock";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 export function SheetList({
   client,
@@ -196,8 +197,11 @@ export function SheetList({
 
       {/* The floating workspace agent — the SAME dock App mounts, but sheet-less.
           Talk to it in natural language to build a sheet end to end; when it
-          creates one we refresh the list and raise the open CTA above. */}
-      <AgentDock client={c} sheet={null} onSheetCreated={onSheetCreated} />
+          creates one we refresh the list and raise the open CTA above. Wrapped so
+          an agent-chat crash never takes down the sheet list (mirrors App's dock). */}
+      <ErrorBoundary label="agent-dock-home">
+        <AgentDock client={c} sheet={null} onSheetCreated={onSheetCreated} />
+      </ErrorBoundary>
     </main>
   );
 }

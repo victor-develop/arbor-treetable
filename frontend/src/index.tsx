@@ -3,6 +3,7 @@ import App from "./App";
 import { SheetList } from "./components/SheetList";
 import { InboxPage } from "./components/InboxPage";
 import { ProcessDashboard } from "./components/ProcessDashboard";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { api as defaultClient, setAuthHeaderProvider } from "./api";
 import { pickRoute, type Route } from "./lib/route";
 import "./styles.css";
@@ -38,13 +39,15 @@ function rootForRoute(route: Route): JSX.Element {
       // Cross-sheet inbox. Ack reuses the acknowledge capability via executeAction;
       // opening a row deep-links to its sheet (+ node highlight is a future hook).
       return (
-        <InboxPage
-          client={defaultClient}
-          onAck={(notification) =>
-            void defaultClient.executeAction("acknowledge", { notification })
-          }
-          onOpen={({ sheet: s }) => navigate(`?sheet=${encodeURIComponent(s)}`)}
-        />
+        <ErrorBoundary label="route-inbox">
+          <InboxPage
+            client={defaultClient}
+            onAck={(notification) =>
+              void defaultClient.executeAction("acknowledge", { notification })
+            }
+            onOpen={({ sheet: s }) => navigate(`?sheet=${encodeURIComponent(s)}`)}
+          />
+        </ErrorBoundary>
       );
     case "dashboard":
       return (
@@ -61,14 +64,24 @@ function rootForRoute(route: Route): JSX.Element {
               <h1>Process · {route.sheet}</h1>
             </div>
           </header>
-          <ProcessDashboard client={defaultClient} sheet={route.sheet} />
+          <ErrorBoundary label="route-dashboard">
+            <ProcessDashboard client={defaultClient} sheet={route.sheet} />
+          </ErrorBoundary>
         </main>
       );
     case "sheet":
       // Land in the Proposed (pending-overlaid) view on entry; toggle to Live to edit.
-      return <App sheetName={route.sheet} initialViewMode="proposed" />;
+      return (
+        <ErrorBoundary label="route-sheet">
+          <App sheetName={route.sheet} initialViewMode="proposed" />
+        </ErrorBoundary>
+      );
     case "home":
-      return <SheetList />;
+      return (
+        <ErrorBoundary label="route-home">
+          <SheetList />
+        </ErrorBoundary>
+      );
   }
 }
 
@@ -79,5 +92,26 @@ if (root) {
   // mid-edit and clobber an optimistic commit. Production createRoot never
   // double-mounts, so this only ever bit the dev server + e2e timing.
   const route = pickRoute(new URLSearchParams(window.location.search));
-  createRoot(root).render(rootForRoute(route));
+  // Last-resort full-page boundary: a crash anywhere in the route tree (outside
+  // the per-route boundaries below) degrades to a reload affordance instead of a
+  // blank #root.
+  createRoot(root).render(
+    <ErrorBoundary
+      label="app-root"
+      fallback={
+        <div className="arbor-banner is-error" role="alert" data-testid="error-boundary-app-root">
+          <span>Arbor hit an unexpected error.</span>
+          <button
+            type="button"
+            data-testid="error-boundary-app-root-reset"
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </button>
+        </div>
+      }
+    >
+      {rootForRoute(route)}
+    </ErrorBoundary>,
+  );
 }
