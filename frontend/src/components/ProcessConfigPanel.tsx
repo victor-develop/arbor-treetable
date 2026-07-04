@@ -23,7 +23,9 @@ import { buildGraph, validate } from "./process/graph";
 // (ProcessRuleInput[]) the canvas edits. Presentation-only fields (idx, labels,
 // owners) are dropped; the stable rule_key is kept so an edit re-uses it.
 function seed(process: ProcessDef | null): ProcessRuleInput[] {
-  if (!process) return [];
+  // Tolerate a ProcessDef whose `rules` is absent/null (e.g. a sheet with no
+  // process, or a lean/legacy payload) — never crash the editor.
+  if (!process || !Array.isArray(process.rules)) return [];
   return process.rules.map((r) => {
     // Filter redacted/null trigger columns the viewer cannot read.
     const triggers = (r.trigger_columns ?? []).filter((c): c is string => c != null);

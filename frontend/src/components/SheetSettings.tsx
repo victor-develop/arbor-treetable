@@ -55,7 +55,7 @@ function toProcessDef(sheet: string, def: SheetDefinition): ProcessDef | null {
     title: null,
     enabled: def.process.enabled,
     row_scope: def.process.row_scope,
-    rules: def.process.rules,
+    rules: def.process.rules ?? [],
   };
 }
 
@@ -222,7 +222,7 @@ export function SheetSettings({
           <section className="arbor-settings-panel" data-testid="settings-process">
             <ProcessConfigPanel
               // Re-seed the canvas once the definition's rules are known.
-              key={processDef ? `loaded:${processDef.rules.length}` : "new"}
+              key={processDef?.rules ? `loaded:${processDef.rules.length}` : "new"}
               sheet={sheet}
               columns={columns}
               process={processDef}
