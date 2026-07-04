@@ -176,6 +176,13 @@ override_whitelisted_methods = {
     "arbor.auth.login_url": "arbor.auth.api.login_url",
     "arbor.auth.oidc_callback": "arbor.auth.api.oidc_callback",
     "arbor.auth.whoami": "arbor.auth.api.whoami",
+    # External LLM agent surface ("two-tier auth"). skill_md is PUBLIC (allow_guest,
+    # describes the API shape only, no tenant data); issue/revoke/list manage the
+    # scoped Arbor Agent Token a user pastes into an external agent's bootstrap.
+    "arbor.skill_md": "arbor.arbor.api.skill_md",
+    "arbor.issue_agent_token": "arbor.arbor.api.issue_agent_token",
+    "arbor.revoke_agent_token": "arbor.arbor.api.revoke_agent_token",
+    "arbor.list_agent_tokens": "arbor.arbor.api.list_agent_tokens",
 }
 
 # ---------------------------------------------------------------------------

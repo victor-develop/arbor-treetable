@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-04 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "label",
+  "user",
+  "mode",
+  "sheets",
+  "token_hash",
+  "expires_on",
+  "revoked",
+  "last_used_at"
+ ],
+ "fields": [
+  {
+   "description": "Human label so the issuer can recognize this token (e.g. 'ChatGPT read-only').",
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label"
+  },
+  {
+   "description": "The Frappe User this token acts as. Every action still runs under this user's two-axis ACL.",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "write",
+   "description": "read = only side-effect-free explore/snapshot reads; write = every LLM-exposed capability (still floored by ACL).",
+   "fieldname": "mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Mode",
+   "options": "read\nwrite",
+   "reqd": 1
+  },
+  {
+   "description": "JSON list of sheet ids this token is restricted to, e.g. [\"acme\"]. Empty = every sheet the user can reach.",
+   "fieldname": "sheets",
+   "fieldtype": "Small Text",
+   "label": "Sheets"
+  },
+  {
+   "description": "Keyed HMAC-SHA256 of the token secret. The plaintext is shown to the issuer exactly once and never stored.",
+   "fieldname": "token_hash",
+   "fieldtype": "Data",
+   "label": "Token Hash",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "After this instant the token is rejected (401). Set at issue from the TTL.",
+   "fieldname": "expires_on",
+   "fieldtype": "Datetime",
+   "label": "Expires On"
+  },
+  {
+   "default": "0",
+   "description": "Revoked tokens are rejected immediately. One-click kill switch.",
+   "fieldname": "revoked",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Revoked"
+  },
+  {
+   "description": "Stamped on each successful use, for audit / stale-token cleanup.",
+   "fieldname": "last_used_at",
+   "fieldtype": "Datetime",
+   "label": "Last Used At",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Arbor",
+ "name": "Arbor Agent Token",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

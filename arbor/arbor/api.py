@@ -38,6 +38,14 @@ import frappe
 from frappe import _
 
 from arbor.core import executor, registry
+from arbor.core.agent_scope import (
+    AgentScope,
+    ScopeError,
+    authorize_scope,
+    generate_token,
+    hash_token,
+)
+from arbor.core.skill import render_skill_md
 from arbor.core.acl import (
     can_read_column,
     resolve_column_approvers,
@@ -207,6 +215,76 @@ def _actor_real(repo: Optional[FrappeRepository] = None) -> Actor:
     return Actor(user=user, actor_type=ActorType.HUMAN, is_admin=_is_admin_user(user))
 
 
+def _token_secret() -> Optional[str]:
+    """The site key that keys the Agent-Token HMAC (defense if the DB leaks).
+
+    Prefers the site ``encryption_key``; falls back to a conf ``secret``. When
+    neither exists the hash degrades to a plain SHA-256 of the (already high-
+    entropy) token — still safe, just not DB-leak-resistant."""
+    try:
+        return frappe.local.conf.get("encryption_key") or frappe.conf.get("secret")
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _agent_scope_from_request() -> Optional[AgentScope]:
+    """Resolve an ``X-Arbor-Agent-Token`` header to its :class:`AgentScope`.
+
+    Returns ``None`` when the header is absent (the first-party web app and the
+    internal agent never send it — they authenticate by session). A header that
+    is present but invalid / revoked / expired / not owned by the authenticated
+    user is a hard 401/403; it never silently degrades to full access.
+    """
+    if getattr(frappe, "request", None) is None:
+        return None
+    token = frappe.get_request_header("X-Arbor-Agent-Token")
+    if not token:
+        return None
+
+    token_hash = hash_token(token, secret=_token_secret())
+    name = frappe.db.get_value("Arbor Agent Token", {"token_hash": token_hash}, "name")
+    if not name:
+        frappe.local.response["http_status_code"] = 401
+        frappe.throw(_("Invalid Arbor Agent Token"), exc=frappe.AuthenticationError)
+
+    doc = frappe.get_doc("Arbor Agent Token", name)
+    if not doc.is_live():
+        frappe.local.response["http_status_code"] = 401
+        frappe.throw(_("Arbor Agent Token is revoked or expired"), exc=frappe.AuthenticationError)
+    # The token may only ADD scope to its OWN user — never let A's key + B's token
+    # act as B. The API key (Frappe-native) is the identity; the token is a ceiling.
+    if doc.user != frappe.session.user:
+        frappe.local.response["http_status_code"] = 403
+        frappe.throw(_("Agent token does not belong to the authenticated user"), exc=frappe.PermissionError)
+
+    # Best-effort last-used stamp; never block the call on it.
+    try:
+        frappe.db.set_value(
+            "Arbor Agent Token", name, "last_used_at", frappe.utils.now_datetime(), update_modified=False
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return doc.to_scope()
+
+
+def _enforce_agent_scope(action_id: str, params: dict[str, Any]) -> None:
+    """Apply any Arbor Agent Token scope to ``action_id``/``params``, else no-op.
+
+    Called at EVERY capability entrypoint — both the generic ``_dispatch`` and the
+    bespoke ``get_sheet_snapshot`` (which reaches the executor directly and would
+    otherwise sidestep the sheet restriction). A scope violation is a hard 403;
+    it never degrades to a Change Request.
+    """
+    scope = _agent_scope_from_request()
+    if scope is None:
+        return
+    try:
+        authorize_scope(scope, action_id, params or {})
+    except ScopeError as exc:
+        frappe.local.response["http_status_code"] = 403
+        raise frappe.PermissionError(str(exc)) from exc
+
+
 def _dispatch(
     action_id: str, params: dict[str, Any], actor: Optional[Actor] = None
 ) -> dict[str, Any]:
@@ -221,6 +299,12 @@ def _dispatch(
     if actor is None:
         actor = _actor(repo)
     sink = _sink()
+
+    # External-agent scope gate (two-tier auth): when the request carries an Arbor
+    # Agent Token, its mode/sheets constrain the call BEFORE the executor. A scope
+    # violation is a hard 403 (like a denied control action) — it NEVER degrades
+    # to a Change Request. Absent header → no-op (first-party / internal path).
+    _enforce_agent_scope(action_id, params)
     try:
         outcome = executor.execute_action(action_id, params or {}, actor, repo, sink)
     except UnknownCapabilityError as exc:
@@ -293,6 +377,122 @@ def execute_action(action_id: str, params: Optional[dict] = None) -> dict[str, A
     return _dispatch(action_id, _coerce(params))
 
 
+# ---------------------------------------------------------------------------
+# External LLM agent: the crawlable contract + scoped access tokens
+# ("two-tier auth" — internal chat uses the session; external agents use a
+# Frappe API key + an optional Arbor Agent Token down-scope).
+# ---------------------------------------------------------------------------
+@frappe.whitelist(allow_guest=True)
+def skill_md() -> None:
+    """``GET /api/method/arbor.skill_md`` → the generated ``skill.md`` contract.
+
+    Public (allow_guest): the doc describes the API SHAPE + capability catalog
+    only, never any tenant data, so the crawl never needs a credential — the
+    secret is spent only on real API calls. Rendered from the registry, so it is
+    always in sync. Returned as raw ``text/markdown``.
+    """
+    md = render_skill_md(frappe.utils.get_url())
+    frappe.local.response["type"] = "download"
+    frappe.local.response["filename"] = "skill.md"
+    frappe.local.response["filecontent"] = md
+    frappe.local.response["content_type"] = "text/markdown; charset=utf-8"
+
+
+def _bootstrap_prompt(token: str, mode: str, sheets: Optional[list]) -> str:
+    """The ready-to-paste prompt handing an external agent everything it needs."""
+    base = frappe.utils.get_url().rstrip("/")
+    scope_note = (
+        "You have READ-ONLY access."
+        if mode == "read"
+        else "You may read and write; a write you aren't authorized for becomes a Change Request (not an error)."
+    )
+    sheet_note = f" You are limited to these sheets: {', '.join(sheets)}." if sheets else ""
+    return (
+        f"You can operate my Arbor data through its HTTP API. "
+        f"First read the contract: {base}/api/method/arbor.skill_md\n"
+        f"API base: {base}/api/method/arbor.\n"
+        f"On every request send header  X-Arbor-Agent-Token: {token}\n"
+        f"plus the Frappe API key I gave you as  Authorization: token <key>:<secret>\n"
+        f"{scope_note}{sheet_note}\n"
+        f"Begin by calling arbor.list_sheets, then follow the discovery flow in skill.md."
+    )
+
+
+@frappe.whitelist()
+def issue_agent_token(
+    label: Optional[str] = None,
+    mode: str = "write",
+    sheets: Optional[Any] = None,
+    ttl_days: int = 30,
+) -> dict[str, Any]:
+    """Mint an Arbor Agent Token for the CURRENT user and return it exactly once.
+
+    ``mode`` ∈ {read, write}; ``sheets`` optional list restricting the token to
+    those sheet ids; ``ttl_days`` sets the expiry. The plaintext secret is
+    returned ONCE (never stored — only its keyed hash is) alongside a
+    ready-to-paste ``bootstrap_prompt``.
+    """
+    actor = _actor_real()  # issue for the REAL principal; ignore any impersonation
+    if mode not in ("read", "write"):
+        frappe.local.response["http_status_code"] = 400
+        frappe.throw(_("mode must be 'read' or 'write'"), exc=frappe.ValidationError)
+
+    sheets_list: Optional[list] = None
+    coerced = _coerce(sheets) if sheets else None
+    if isinstance(coerced, str):
+        sheets_list = [coerced]
+    elif isinstance(coerced, list) and coerced:
+        sheets_list = [str(s) for s in coerced]
+
+    plaintext = generate_token()
+    expires_on = (
+        frappe.utils.add_days(frappe.utils.now_datetime(), int(ttl_days)) if ttl_days else None
+    )
+    doc = frappe.get_doc(
+        {
+            "doctype": "Arbor Agent Token",
+            "label": label or "external agent",
+            "user": actor.user,
+            "mode": mode,
+            "sheets": frappe.as_json(sheets_list) if sheets_list else None,
+            "token_hash": hash_token(plaintext, secret=_token_secret()),
+            "expires_on": expires_on,
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return {
+        "token_id": doc.name,
+        "token": plaintext,  # shown ONCE; not recoverable
+        "mode": mode,
+        "sheets": sheets_list,
+        "expires_on": str(expires_on) if expires_on else None,
+        "bootstrap_prompt": _bootstrap_prompt(plaintext, mode, sheets_list),
+    }
+
+
+@frappe.whitelist()
+def revoke_agent_token(token_id: str) -> dict[str, Any]:
+    """Revoke one Arbor Agent Token (the issuer or an admin). Immediate kill."""
+    doc = frappe.get_doc("Arbor Agent Token", token_id)
+    if doc.user != _actor_real().user and not _is_admin_user(frappe.session.user):
+        raise frappe.PermissionError(_("not your token"))
+    doc.revoked = 1
+    doc.save(ignore_permissions=True)
+    return {"token_id": token_id, "revoked": True}
+
+
+@frappe.whitelist()
+def list_agent_tokens() -> list[dict[str, Any]]:
+    """List the CURRENT user's Agent Tokens (metadata only — never the hash)."""
+    user = _actor_real().user
+    return frappe.get_all(
+        "Arbor Agent Token",
+        filters={"user": user},
+        fields=["name", "label", "mode", "sheets", "expires_on", "revoked", "last_used_at"],
+        order_by="creation desc",
+    )
+
+
 @frappe.whitelist()
 def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, Any]:
     """The shared read serializer (ARCHITECTURE §4.3). Computes per-actor ACL
@@ -308,6 +508,11 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     repo = _repo()
     if actor is None:
         actor = _actor(repo)
+
+    # This endpoint reaches the executor directly (not via _dispatch), so apply
+    # the agent-token scope here too — otherwise a sheet-scoped token could read
+    # a sheet outside its scope through the bulk snapshot.
+    _enforce_agent_scope("getSheetSnapshot", {"sheet": sheet})
 
     if not frappe.db.exists("Tree Sheet", sheet):
         frappe.local.response["http_status_code"] = 404
