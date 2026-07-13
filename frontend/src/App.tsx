@@ -1234,6 +1234,7 @@ function ConnectedShell({
                 canConfigProcess={canConfigProcess}
                 initialTab={settingsTab}
                 processDef={processDef}
+                roles={roles}
                 onClose={() => setSettingsOpen(false)}
                 onDefineProcess={defineProcessOp}
                 onEnableProcess={enableProcessOp}
