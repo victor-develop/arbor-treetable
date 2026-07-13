@@ -18,6 +18,7 @@ import type {
   ArborClient,
   ProcessDef,
   ProcessRuleInput,
+  RoleView,
   SheetDefinition,
   SheetDefinitionColumn,
   SnapshotColumn,
@@ -66,6 +67,7 @@ export function SheetSettings({
   canConfigProcess,
   initialTab = "columns",
   processDef: processDefProp,
+  roles = [],
   onClose,
   onDefineProcess,
   onEnableProcess,
@@ -87,6 +89,9 @@ export function SheetSettings({
   // provided it seeds the Process tab; otherwise the definition's process block is
   // projected onto a ProcessDef (title null).
   processDef?: ProcessDef | null;
+  // Site-wide Arbor Role catalog, threaded to the column owner/editor principal
+  // pickers so a column can be owned/edited by a `role:<key>` instead of a person.
+  roles?: RoleView[];
   onClose: () => void;
   onDefineProcess: (rules: ProcessRuleInput[], opts?: { title?: string; row_scope?: string }) => void;
   onEnableProcess: () => void;
@@ -187,6 +192,7 @@ export function SheetSettings({
                 existingFields={def.columns.map((c) => c.field)}
                 canAdd={isOwner}
                 onSubmit={onAddColumn}
+                roles={roles}
               />
               <ul className="arbor-settings-column-list">
                 {columns.map((col) => (
@@ -214,6 +220,7 @@ export function SheetSettings({
                         onUpdate={onUpdateColumn}
                         onDelete={onDeleteColumn}
                         onGrant={onGrantColumn}
+                        roles={roles}
                       />
                     )}
                   </li>

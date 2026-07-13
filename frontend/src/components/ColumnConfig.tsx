@@ -4,8 +4,9 @@
 // All dispatch through executeAction; the component never re-derives ACL.
 
 import { useState } from "react";
-import type { ColumnType, SnapshotColumn } from "../api";
+import type { ColumnType, RoleView, SnapshotColumn } from "../api";
 import { COLUMN_TYPES } from "../lib/capabilities";
+import { PrincipalInput } from "./PrincipalInput";
 
 // Derive a stable field-key slug from a human label: lowercase, non-alphanumeric
 // runs collapse to a single "_", and leading/trailing "_" are trimmed.
@@ -22,11 +23,14 @@ export function AddColumnForm({
   existingFields,
   canAdd,
   onSubmit,
+  roles = [],
 }: {
   sheet: string;
   existingFields: string[];
   canAdd: boolean;
   onSubmit: (params: Record<string, unknown>) => void;
+  // Site-wide role catalog so the owner field can pick a `role:<key>` principal.
+  roles?: RoleView[];
 }): JSX.Element {
   // Collapsed by default: the toolbar shows just a compact toggle; expanding
   // reveals the full aligned grid in place (NOT a modal). Self-contained — no
@@ -158,14 +162,16 @@ export function AddColumnForm({
           ))}
         </select>
       </label>
-      <label className="arbor-field">
+      <div className="arbor-field">
         <span className="arbor-field-label">Column owner</span>
-        <input
-          data-testid="ac-owner"
+        <PrincipalInput
           value={columnOwner}
-          onChange={(e) => setColumnOwner(e.target.value)}
+          onChange={setColumnOwner}
+          roles={roles}
+          testid="ac-owner"
+          ariaLabel="Column owner"
         />
-      </label>
+      </div>
       {isSplit && (
         <div className="arbor-ac-options-row" data-testid="ac-options">
           <span className="arbor-field-label">Options</span>
@@ -222,6 +228,7 @@ export function ColumnSettings({
   onUpdate,
   onDelete,
   onGrant,
+  roles = [],
 }: {
   sheet: string;
   column: SnapshotColumn;
@@ -230,6 +237,8 @@ export function ColumnSettings({
   onUpdate: (params: Record<string, unknown>) => void;
   onDelete: (params: Record<string, unknown>) => void;
   onGrant: (params: Record<string, unknown>) => void;
+  // Site-wide role catalog so an editor can be added as a `role:<key>` principal.
+  roles?: RoleView[];
 }): JSX.Element {
   const [label, setLabel] = useState(column.label);
   const [width, setWidth] = useState(column.width ?? 120);
@@ -267,11 +276,13 @@ export function ColumnSettings({
       {canGrant && (
         <section data-testid="cs-ownership" className="arbor-cs-ownership">
           <span className="arbor-field-label arbor-cs-section-label">Editors</span>
-          <input
-            data-testid="cs-editor-draft"
-            placeholder="add editor"
+          <PrincipalInput
             value={editorDraft}
-            onChange={(e) => setEditorDraft(e.target.value)}
+            onChange={setEditorDraft}
+            roles={roles}
+            testid="cs-editor-draft"
+            ariaLabel="Add editor"
+            placeholder="add editor"
           />
           <button
             type="button"

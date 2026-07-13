@@ -1627,6 +1627,37 @@ body {
 .arbor-cs-ownership {
   position: relative;
 }
+/* PrincipalInput — User/Role segmented toggle + the active field. Compact so it
+   sits inline in the Add-column grid and the Editors row without reflowing. */
+.arbor-principal {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.arbor-principal-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line, #d9d9d6);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.arbor-principal-tab {
+  font-size: 11px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.arbor-principal-tab.is-active {
+  background: var(--accent, #2d6cdf);
+  color: #fff;
+}
+.arbor-principal-input,
+.arbor-principal-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 /* Section grouping labels rank above field labels (uppercase eyebrow vs the
    sentence-case field labels), so groups read distinctly from fields. */
 .arbor-cs-section-label,
