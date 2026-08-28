@@ -24,11 +24,18 @@ frappe never enforced them at the SQL layer either.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+#: DATETIME with microseconds on BOTH backends. Plain MySQL DATETIME truncates
+#: to whole seconds, which would collapse the ``creation`` insertion-order key
+#: (NestedSet sibling order, column/comment ordering) for burst inserts; sqlite
+#: keeps microseconds natively.
+DateTimeUS = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
 
 
 def new_id() -> str:
@@ -36,9 +43,22 @@ def new_id() -> str:
     return secrets.token_urlsafe(8)
 
 
+_last_now: Optional[datetime] = None
+
+
 def utcnow() -> datetime:
-    """Naive UTC now (MySQL DATETIME has no tz; frappe stores naive too)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Naive UTC now (MySQL DATETIME has no tz; frappe stores naive too).
+
+    Strictly monotonic within the process: burst inserts can tie on the OS
+    clock's resolution, and ``creation`` doubles as the insertion-order key
+    (NestedSet sibling order, list ordering) — a tie would let the random
+    ``name`` tiebreak scramble insertion order. Ties are nudged forward 1µs."""
+    global _last_now
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if _last_now is not None and now <= _last_now:
+        now = _last_now + timedelta(microseconds=1)
+    _last_now = now
+    return now
 
 
 class Base(DeclarativeBase):
@@ -51,8 +71,8 @@ class NamedRow:
     frappe adapter orders columns/notifications/events by it)."""
 
     name: Mapped[str] = mapped_column(sa.String(140), primary_key=True, default=new_id)
-    creation: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
-    modified: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
+    creation: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow)
+    modified: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow, onupdate=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +89,7 @@ class User(Base):
     # this flag (role-application recipients + the admin capability gate).
     is_admin: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(sa.Boolean, default=True)
-    creation: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+    creation: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +157,7 @@ class NodeValue(Base):
     column: Mapped[str] = mapped_column(sa.String(140))
     value: Mapped[Optional[Any]] = mapped_column(sa.JSON, default=None)
     version: Mapped[int] = mapped_column(sa.Integer, default=1)
-    modified: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow, onupdate=utcnow)
+    modified: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow, onupdate=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +195,7 @@ class ChangeRequest(NamedRow, Base):
     changes: Mapped[list[dict[str, Any]]] = mapped_column(sa.JSON, default=list)
     decided_by: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
     real_decider: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
-    decided_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     resulting_event: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
 
 
@@ -190,7 +210,7 @@ class TreeEventRow(Base):
     __table_args__ = (sa.Index("ix_tree_events_sheet_creation", "sheet", "creation"),)
 
     name: Mapped[str] = mapped_column(sa.String(140), primary_key=True, default=new_id)
-    creation: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+    creation: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow)
     sheet: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
     type: Mapped[str] = mapped_column(sa.String(40))  # one of types.EVENT_TYPES
     actor: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
@@ -227,7 +247,11 @@ class Notification(NamedRow, Base):
     recipient: Mapped[str] = mapped_column(sa.String(140))
     channel: Mapped[str] = mapped_column(sa.String(10), default="in-app")  # in-app|email|webhook
     requires_ack: Mapped[bool] = mapped_column(sa.Boolean, default=False)
-    delivered_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
+    # Non-schema context keys the core attaches at fan-out time (``op``/``role``/
+    # ``node``/... — InMemoryRepository keeps the whole dict, and readers pull
+    # these back out of the notification itself, not the linked event).
+    extra: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, default=None)
 
 
 class Acknowledgement(NamedRow, Base):
@@ -235,7 +259,7 @@ class Acknowledgement(NamedRow, Base):
 
     notification: Mapped[str] = mapped_column(sa.String(140))
     user: Mapped[str] = mapped_column(sa.String(140))
-    acked_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=utcnow)
+    acked_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +277,7 @@ class Role(Base):
     description: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
     applicable: Mapped[bool] = mapped_column(sa.Boolean, default=True)
     active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
-    creation: Mapped[datetime] = mapped_column(sa.DateTime, default=utcnow)
+    creation: Mapped[datetime] = mapped_column(DateTimeUS, default=utcnow)
 
 
 class RoleGrant(NamedRow, Base):
@@ -276,7 +300,7 @@ class RoleApplication(NamedRow, Base):
     status: Mapped[str] = mapped_column(sa.String(20), default="proposed")  # proposed|approved|rejected|withdrawn
     justification: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
     decided_by: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
-    decided_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     resulting_grant: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
     decided_event: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
 
@@ -290,8 +314,8 @@ class ImpersonationSession(NamedRow, Base):
     real_user: Mapped[str] = mapped_column(sa.String(140))
     impersonated_user: Mapped[str] = mapped_column(sa.String(140))
     active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=utcnow)
-    ended_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=utcnow)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     reason: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
 
 
@@ -316,12 +340,12 @@ class CellComment(NamedRow, Base):
     mentions: Mapped[list[str]] = mapped_column(sa.JSON, default=list)
     resolved: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     resolved_by: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     real_user: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
     impersonated_as: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
     deleted: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     deleted_by: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +394,13 @@ class ProcessRun(NamedRow, Base):
     sheet: Mapped[str] = mapped_column(sa.String(140))
     node: Mapped[str] = mapped_column(sa.String(140))
     status: Mapped[str] = mapped_column(sa.String(20), default="active")  # active|completed|abandoned
-    started_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=utcnow)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
+    # The pure machine's timestamps VERBATIM ({started_at, completed_at}). The
+    # machine has no clock — it hands the repo whatever ``now`` it was given
+    # (numeric epochs in tests, ISO strings in the api layer) and expects the
+    # same value back; the typed columns above are the coerced query keys.
+    raw: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, default=None)
 
 
 class ProcessRunExpectation(Base):
@@ -386,12 +415,18 @@ class ProcessRunExpectation(Base):
     run: Mapped[str] = mapped_column(sa.String(140))  # parent ProcessRun name
     rule_key: Mapped[str] = mapped_column(sa.String(140))
     expected_column: Mapped[str] = mapped_column(sa.String(140))
-    opened_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
-    satisfied_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
-    due_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
+    satisfied_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     breached: Mapped[bool] = mapped_column(sa.Boolean, default=False)
-    breached_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    breached_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     notified_owner: Mapped[Optional[str]] = mapped_column(sa.String(140), default=None)
+    # ``open_due`` is precomputed on write (due_at set, unsatisfied, un-breached
+    # — from the RAW values) so the sweep's candidate query stays one indexable
+    # predicate; ``raw`` is the machine's expectation dict VERBATIM (clockless
+    # timestamps round-trip untouched, exactly as InMemoryRepository stores them).
+    open_due: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    raw: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +462,7 @@ class WebhookDelivery(NamedRow, Base):
     attempts: Mapped[int] = mapped_column(sa.Integer, default=0)
     signature: Mapped[Optional[str]] = mapped_column(sa.String(255), default=None)
     body: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
-    next_retry_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     last_response: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
 
 
@@ -448,6 +483,6 @@ class AgentToken(NamedRow, Base):
     # user can reach (mirrors the doctype's Small Text field).
     sheets: Mapped[Optional[str]] = mapped_column(sa.Text, default=None)
     token_hash: Mapped[str] = mapped_column(sa.String(255), unique=True)
-    expires_on: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    expires_on: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)
     revoked: Mapped[bool] = mapped_column(sa.Boolean, default=False)
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, default=None)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTimeUS, default=None)

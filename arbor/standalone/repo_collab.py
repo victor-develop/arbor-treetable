@@ -138,11 +138,23 @@ class CollabRepoMixin:
         }
 
     # ---- notifications / acks ----------------------------------------------
+    #: Notification keys with real columns; everything else the core attaches
+    #: (``op``/``role``/``node``/...) lands in the ``extra`` JSON bag and is
+    #: merged back on read, so notification dicts round-trip whole — exactly
+    #: as InMemoryRepository keeps ``{"name": ..., **data}``.
+    _NOTIFICATION_FIELDS = (
+        "source",
+        "tree_event",
+        "comment",
+        "change_request",
+        "recipient",
+        "channel",
+        "requires_ack",
+    )
+
     def create_notification(self, data: dict[str, Any]) -> str:
         """Direct in-app Notification creation (sheet-less role fan-out + the
-        process notify sink). Only schema fields are persisted — extra keys the
-        core passes (``op``/``role``/...) are recoverable from the linked Tree
-        Event's payload. Idempotent per (tree_event, recipient, channel)."""
+        process notify sink). Idempotent per (tree_event, recipient, channel)."""
         channel = data.get("channel") or "in-app"
         if data.get("tree_event"):
             existing = self.session.scalar(
@@ -162,6 +174,9 @@ class CollabRepoMixin:
         for k in ("source", "tree_event", "comment", "change_request"):
             if data.get(k) is not None:
                 setattr(row, k, data[k])
+        extra = {k: v for k, v in data.items() if k not in self._NOTIFICATION_FIELDS and k != "name"}
+        if extra:
+            row.extra = extra
         self.session.add(row)
         self.session.flush()
         return row.name
@@ -179,6 +194,7 @@ class CollabRepoMixin:
             "recipient": row.recipient,
             "channel": row.channel,
             "requires_ack": bool(row.requires_ack),
+            **(row.extra or {}),
         }
 
     def create_acknowledgement(self, notification: str, user: str) -> str:
