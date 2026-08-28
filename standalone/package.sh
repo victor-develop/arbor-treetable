@@ -8,7 +8,7 @@
 # the built frontend (frontend/dist -> dist/), a `server:app` shim matching the
 # iapp start command, and requirements.txt.
 # Env the app expects (set once via `app-center iapp env set 19 K=V`):
-#   ARBOR_SECRET_KEY=<random>  ARBOR_DEV_LOGIN=1  ARBOR_FRONTEND_DIST=/app/dist
+#   ARBOR_SECRET_KEY=<random>  ARBOR_DEV_LOGIN=1  ARBOR_FRONTEND_DIST=/app/webroot
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-/tmp/arbor-deploy}"
@@ -19,7 +19,7 @@ cp -R "$ROOT/arbor/standalone" "$OUT/arbor/standalone"
 cp "$ROOT/arbor/arbor/__init__.py" "$OUT/arbor/arbor/"
 cp -R "$ROOT/arbor/arbor/agent" "$OUT/arbor/arbor/agent"
 cp -R "$ROOT/arbor/arbor/dispatch" "$OUT/arbor/arbor/dispatch"
-cp -R "$ROOT/frontend/dist" "$OUT/dist"
+cp -R "$ROOT/frontend/dist" "$OUT/webroot"
 find "$OUT" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 cat > "$OUT/server.py" <<'PY'
 """iapp entrypoint shim — the app's start command is `uvicorn server:app`."""
