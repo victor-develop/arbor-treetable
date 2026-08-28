@@ -44,40 +44,13 @@ import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import sqlalchemy as sa
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-
-from arbor.core import executor
-from arbor.core import process as process_machine
-from arbor.core.acl import can_read_column, resolve_column_approvers
-from arbor.core.agent_scope import AgentScope, ScopeError, authorize_scope, hash_token
-from arbor.core.change_request import (
-    _column_editor_approvers,
-    _reresolve_approver,
-    _synthetic_item_cr,
-)
-from arbor.core.explore import (
-    CellBudgetExceededError,
-    SheetTooLargeError,
-    process_rule_views,
-    readable_column_label as _readable_column_label,
-)
-from arbor.core.skill import render_skill_md
-from arbor.core.types import (
-    Actor,
-    ActorType,
-    AuthorizationError,
-    CRStateError,
-    Outcome,
-    SchemaValidationError,
-    StaleVersionError as CoreStaleVersionError,
-    UnknownCapabilityError,
-)
 
 # PURE (bench-free) lanes reused verbatim — these modules never import frappe
 # (their own headers guarantee it). The frappe BINDINGS (arbor.arbor.api,
@@ -91,14 +64,52 @@ from arbor.arbor.dispatch.notify import NotificationDispatcher
 from arbor.arbor.dispatch.ports import TransportTimeout
 from arbor.arbor.dispatch.serializer import serialize_notification_bytes
 from arbor.arbor.dispatch.webhook import WebhookDispatcher
+from arbor.core import executor
+from arbor.core import process as process_machine
+from arbor.core.acl import can_read_column, resolve_column_approvers
+from arbor.core.agent_scope import AgentScope, ScopeError, authorize_scope, hash_token
+from arbor.core.change_request import (
+    _column_editor_approvers,
+    _reresolve_approver,
+    _synthetic_item_cr,
+)
+from arbor.core.explore import (
+    CellBudgetExceededError,
+    SheetTooLargeError,
+    process_rule_views,
+)
+from arbor.core.explore import (
+    readable_column_label as _readable_column_label,
+)
+from arbor.core.skill import render_skill_md
+from arbor.core.types import (
+    Actor,
+    ActorType,
+    AuthorizationError,
+    CRStateError,
+    Outcome,
+    SchemaValidationError,
+    UnknownCapabilityError,
+)
+from arbor.core.types import (
+    StaleVersionError as CoreStaleVersionError,
+)
 
 from . import models as m
-from .auth import get_current_actor
+from .auth import (
+    configure as configure_auth,
+)
+from .auth import (
+    get_current_actor,
+    read_session_user,
+)
+from .auth import (
+    router as auth_router,
+)
 from .db import create_all, make_engine, make_session_factory
-from .errors import ConflictError, NotFoundError, StaleMoveError, StaleVersionError
+from .errors import ConflictError, StaleMoveError, StaleVersionError
 from .repository import CellDraft, SQLEventSink, SQLRepository
 from .snapshot import build_sheet_snapshot
-
 
 # ---------------------------------------------------------------------------
 # Engine / session wiring (DATABASE_URL -> sqlite fallback; see .db).
@@ -106,6 +117,9 @@ from .snapshot import build_sheet_snapshot
 ENGINE = make_engine()
 create_all(ENGINE)
 SessionLocal = make_session_factory(ENGINE)
+# Share ONE engine/pool with the auth lane (its session-cookie login routes +
+# get_current_actor read the same users/impersonation tables).
+configure_auth(SessionLocal)
 
 
 def _utcnow() -> datetime:
@@ -144,14 +158,14 @@ class _EventView:
     """Duck-typed ``dispatch.ports.EventView`` over a just-stored TreeEvent."""
 
     name: str
-    sheet: Optional[str]
+    sheet: str | None
     type: str
     payload: dict[str, Any]
-    actor: Optional[str]
+    actor: str | None
     actor_type: str
-    change_request: Optional[str]
-    timestamp: Optional[str]
-    created_at: Optional[datetime] = None
+    change_request: str | None
+    timestamp: str | None
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -166,7 +180,7 @@ class _SubView:
     event_types: list[str]
     delivery: str
     requires_ack: bool
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -178,12 +192,12 @@ class _EndpointView:
     secret: str
     event_types: list[str]
     scope: str
-    target: Optional[str]
+    target: str | None
     active: bool
     notification_sources: list[str] = field(default_factory=list)
-    label: Optional[str] = None
-    sheet: Optional[str] = None
-    owner_user: Optional[str] = None
+    label: str | None = None
+    sheet: str | None = None
+    owner_user: str | None = None
 
 
 def _parse_json_list(raw: Any) -> list[str]:
@@ -229,7 +243,7 @@ class SQLNotificationStore:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def live_subscriptions(self, sheet: Optional[str]) -> list[_SubView]:
+    def live_subscriptions(self, sheet: str | None) -> list[_SubView]:
         # A subscription is "live" if it exists (unsubscribe deletes the row).
         # The matcher makes the final scope decision, same as the frappe store.
         rows = self.session.scalars(sa.select(m.Subscription)).all()
@@ -248,7 +262,7 @@ class SQLNotificationStore:
             for r in rows
         ]
 
-    def get_node_range(self, node: str) -> Optional[tuple[int, int]]:
+    def get_node_range(self, node: str) -> tuple[int, int] | None:
         row = self.session.get(m.Node, node)
         if row is None:
             return None
@@ -315,7 +329,7 @@ class SQLWebhookStore:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def active_endpoints(self, sheet: Optional[str]) -> list[_EndpointView]:
+    def active_endpoints(self, sheet: str | None) -> list[_EndpointView]:
         rows = self.session.scalars(
             sa.select(m.WebhookEndpoint).where(m.WebhookEndpoint.active.is_(True))
         ).all()
@@ -325,11 +339,11 @@ class SQLWebhookStore:
         views = self.active_endpoints(None)
         return [v for v in views if source in (v.notification_sources or [])]
 
-    def get_endpoint(self, endpoint: str) -> Optional[_EndpointView]:
+    def get_endpoint(self, endpoint: str) -> _EndpointView | None:
         row = self.session.get(m.WebhookEndpoint, endpoint)
         return _endpoint_view(row) if row is not None else None
 
-    def get_node_range(self, node: str) -> Optional[tuple[int, int]]:
+    def get_node_range(self, node: str) -> tuple[int, int] | None:
         row = self.session.get(m.Node, node)
         if row is None:
             return None
@@ -475,12 +489,12 @@ class _NotifView:
 
     name: str
     source: str
-    sheet: Optional[str]
+    sheet: str | None
     type: str
     payload: dict[str, Any]
-    actor: Optional[str]
+    actor: str | None
     actor_type: str
-    timestamp: Optional[str]
+    timestamp: str | None
 
 
 def _on_notification_created(session: Session, name: str) -> None:
@@ -581,10 +595,13 @@ def _sink(session: Session, repo: SQLRepository) -> SQLEventSink:
 # ---------------------------------------------------------------------------
 # Actor resolution (Area 1 impersonation overlay — mirror of frappe _actor()).
 # ---------------------------------------------------------------------------
-def _actor_real(request: Request) -> Actor:
-    """The REAL authenticated principal WITHOUT any impersonation overlay — the
-    begin/end impersonation gate runs against this (401 when unauthenticated)."""
-    return get_current_actor(request)
+def _session_user(request: Request) -> str:
+    """The REAL authenticated principal from the session cookie (the
+    ``frappe.session.user`` analog) — 401 when there is no valid session."""
+    user = read_session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
 
 
 def _is_admin_user(repo: SQLRepository, user: str) -> bool:
@@ -593,42 +610,39 @@ def _is_admin_user(repo: SQLRepository, user: str) -> bool:
     return user in set(repo.list_admins())
 
 
+def _actor_real(request: Request, session: Session) -> Actor:
+    """The REAL authenticated principal WITHOUT any impersonation overlay, with
+    ``is_admin`` computed from the real user's row — the begin/end impersonation
+    control caps are gated on THIS (mirror of frappe ``_actor_real``): the
+    effective (possibly impersonated, non-admin) identity would wrongly block
+    ``endImpersonation`` while an overlay is live."""
+    user = _session_user(request)
+    row = session.get(m.User, user)
+    is_admin = bool(row is not None and row.enabled and row.is_admin)
+    return Actor(user=user, actor_type=ActorType.HUMAN, is_admin=is_admin)
+
+
 def _actor(request: Request, repo: SQLRepository) -> Actor:
-    """The acting identity: the authenticated user PLUS a traceable
-    impersonation overlay. Ordering is load-bearing (mirror of frappe
-    ``_actor()``): the real principal's admin is computed BEFORE the overlay is
-    applied; a persisted overlay whose real user is no longer admin is
-    force-ended (fail-safe); ``is_admin`` is recomputed from the IMPERSONATED
-    user so the admin genuinely experiences that user's affordances."""
-    real = get_current_actor(request)
-    session_row = repo.get_active_impersonation(real.user)
-    if session_row:
-        impersonated = session_row["impersonated_user"]
-        if real.is_admin and impersonated and impersonated != real.user:
-            return Actor(
-                user=impersonated,
-                actor_type=ActorType.HUMAN,
-                is_admin=_is_admin_user(repo, impersonated),
-                real_user=real.user,
-                impersonated_as=impersonated,
-            )
-        if not real.is_admin:
-            repo.end_impersonation(real.user)
-    return real
+    """The acting identity — the auth lane's ``get_current_actor`` already
+    mirrors the frappe ``_actor()`` ordering (real principal first, admin
+    computed before the overlay, fail-safe force-end, ``is_admin`` recomputed
+    from the impersonated user), so this is a straight delegation. ``repo`` is
+    kept in the signature for call-site symmetry with the frappe shims."""
+    return get_current_actor(request)
 
 
 # ---------------------------------------------------------------------------
 # Arbor Agent Token gate (two-tier auth; mirror of _agent_scope_from_request /
 # _enforce_agent_scope over the agent_tokens table + the pure agent_scope).
 # ---------------------------------------------------------------------------
-def _token_secret() -> Optional[str]:
+def _token_secret() -> str | None:
     """The key for the Agent-Token HMAC (defense if the DB leaks). Env-injected
     in the standalone lane; absent, the hash degrades to plain SHA-256 of the
     (already high-entropy) token — still safe, just not DB-leak-resistant."""
     return os.environ.get("ARBOR_TOKEN_SECRET") or os.environ.get("SECRET_KEY")
 
 
-def _parse_token_sheets(raw: Optional[str]) -> Optional[list[str]]:
+def _parse_token_sheets(raw: str | None) -> list[str] | None:
     """The token's sheet allow-list: a JSON array (as the frappe issuer stored
     it) or a newline/comma-separated Small Text. Empty/None = every sheet."""
     if not raw:
@@ -713,7 +727,7 @@ def _dispatch(
     session: Session,
     action_id: str,
     params: dict[str, Any],
-    actor: Optional[Actor] = None,
+    actor: Actor | None = None,
 ) -> dict[str, Any]:
     """Every capability routes here -> ``core.executor.execute_action``, with
     the SAME exception -> HTTP mapping as the frappe ``_dispatch``."""
@@ -840,7 +854,7 @@ def healthz() -> dict[str, Any]:
 # ---- generic dispatch + sheet bootstrap -------------------------------------
 @app.post("/api/method/arbor.execute_action")
 def execute_action(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     action_id = payload.get("action_id")
@@ -851,7 +865,7 @@ def execute_action(
 
 @app.post("/api/method/arbor.create_sheet")
 def create_sheet(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Dispatch the ``createSheet`` capability, then add the historical
     top-level ``sheet`` key beside the Outcome envelope (the FE reads
@@ -873,7 +887,7 @@ def create_sheet(
 # ---- impersonation (Area 1) — dispatched AS the REAL principal --------------
 @app.post("/api/method/arbor.begin_impersonation")
 def begin_impersonation(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     return _msg(
@@ -882,63 +896,17 @@ def begin_impersonation(
             session,
             "beginImpersonation",
             {"impersonated_user": payload.get("impersonated_user"), "reason": payload.get("reason")},
-            actor=_actor_real(request),
+            actor=_actor_real(request, session),
         )
     )
 
 
 @app.post("/api/method/arbor.end_impersonation")
 def end_impersonation(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
-    return _msg(_dispatch(request, session, "endImpersonation", {}, actor=_actor_real(request)))
-
-
-# ---- whoami (auth gate + impersonation banner) -------------------------------
-def _login_redirect(request: Request) -> Optional[str]:
-    """Optional seam: the auth module may expose ``login_redirect(request)``
-    (e.g. an OIDC login URL) for the FE's login gate. Absent -> None."""
-    try:
-        from . import auth as _auth_mod
-
-        fn = getattr(_auth_mod, "login_redirect", None)
-        if callable(fn):
-            return fn(request)
-    except Exception:
-        pass
-    return None
-
-
-@app.get("/api/method/arbor.auth.whoami")
-def whoami(request: Request, session: Session = Depends(get_db)):
-    """Never 401/500s for a Guest: it returns ``authenticated: false`` (the FE's
-    login gate keys off this shape), and overlays impersonation so the banner
-    and the grid agree."""
-    try:
-        get_current_actor(request)
-    except HTTPException as exc:
-        if exc.status_code == 401:
-            return _msg(
-                {
-                    "user": "Guest",
-                    "real_user": "Guest",
-                    "impersonating": False,
-                    "authenticated": False,
-                    "redirect_to": _login_redirect(request),
-                }
-            )
-        raise
-    repo = _repo(session)
-    actor = _actor(request, repo)
-    impersonating = bool(actor.is_impersonated)
     return _msg(
-        {
-            "user": actor.user,
-            "real_user": actor.real_user if impersonating else actor.user,
-            "impersonating": impersonating,
-            "authenticated": True,
-            "redirect_to": None,
-        }
+        _dispatch(request, session, "endImpersonation", {}, actor=_actor_real(request, session))
     )
 
 
@@ -1244,7 +1212,7 @@ _ACTIVITY_VERB = {
 }
 
 
-def _node_label(repo: SQLRepository, sheet: str, label_col: Optional[str], node: Optional[str]):
+def _node_label(repo: SQLRepository, sheet: str, label_col: str | None, node: str | None):
     """The human label of ``node`` (value of the label column), or the raw node
     id. Labels are ALWAYS readable (``can_read_column`` short-circuits on
     ``is_label``), so no ACL gate here."""
@@ -1299,11 +1267,11 @@ def _activity_summary(ev_type, actor_name, payload, repo, sheet, actor, label_co
 
 
 def _encode_activity_cursor(creation: Any, name: str) -> str:
-    raw = f"{creation}|{name}".encode("utf-8")
+    raw = f"{creation}|{name}".encode()
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
-def _decode_activity_cursor(cursor: Optional[str]) -> Optional[tuple[datetime, str]]:
+def _decode_activity_cursor(cursor: str | None) -> tuple[datetime, str] | None:
     """Decode the OPAQUE base64 ``creation|name`` keyset cursor; a malformed
     token is a 400 (a bad cursor is a client error)."""
     if cursor is None or cursor == "":
@@ -1321,9 +1289,9 @@ def list_activity(
     request: Request,
     sheet: str,
     limit: int = 50,
-    before: Optional[str] = None,
-    type: Optional[str] = Query(default=None),
-    actor: Optional[str] = Query(default=None),
+    before: str | None = None,
+    type: str | None = Query(default=None),
+    actor: str | None = Query(default=None),
     session: Session = Depends(get_db),
 ):
     repo = _repo(session)
@@ -1424,8 +1392,8 @@ def list_roles(request: Request, session: Session = Depends(get_db)):
 @app.get("/api/method/arbor.list_role_grants")
 def list_role_grants(
     request: Request,
-    role: Optional[str] = None,
-    grantee: Optional[str] = None,
+    role: str | None = None,
+    grantee: str | None = None,
     session: Session = Depends(get_db),
 ):
     repo = _repo(session)
@@ -1455,7 +1423,7 @@ def list_role_grants(
 def list_role_applications(
     request: Request,
     status: str = "proposed",
-    requester: Optional[str] = None,
+    requester: str | None = None,
     session: Session = Depends(get_db),
 ):
     repo = _repo(session)
@@ -1483,7 +1451,7 @@ def list_role_applications(
 
 
 # ---- personal cell-draft box (Feature: cell drafts) ------------------------------
-def _find_cell_draft(session: Session, user: str, sheet, node, column) -> Optional[CellDraft]:
+def _find_cell_draft(session: Session, user: str, sheet, node, column) -> CellDraft | None:
     return session.scalars(
         sa.select(CellDraft).where(
             CellDraft.user == user,
@@ -1496,7 +1464,7 @@ def _find_cell_draft(session: Session, user: str, sheet, node, column) -> Option
 
 @app.post("/api/method/arbor.save_cell_draft")
 def save_cell_draft(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Upsert the actor's draft for one cell, keyed (user, sheet, node, column)
     — two saves on the same cell collapse to ONE draft holding the latest value."""
@@ -1551,7 +1519,7 @@ def list_cell_drafts(request: Request, sheet: str, session: Session = Depends(ge
 
 @app.post("/api/method/arbor.discard_cell_draft")
 def discard_cell_draft(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     repo = _repo(session)
@@ -1567,7 +1535,7 @@ def discard_cell_draft(
 
 @app.post("/api/method/arbor.discard_cell_drafts")
 def discard_cell_drafts(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     repo = _repo(session)
@@ -1585,7 +1553,7 @@ def discard_cell_drafts(
 
 @app.post("/api/method/arbor.submit_cell_drafts")
 def submit_cell_drafts(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Promote ALL the actor's drafts for the sheet into ONE multi-change CR via
     the ``suggestChanges`` funnel, then delete the submitted drafts. An empty
@@ -1669,7 +1637,7 @@ def _can_resolve_comment(repo: SQLRepository, sheet: str, column: str, actor: Ac
 
 @app.post("/api/method/arbor.add_cell_comment")
 def add_cell_comment(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Post a comment (or reply). THIN over the ``addComment`` capability, plus
     the api-layer extras the frappe shim carried: 400 empty body, 404 unknown
@@ -1792,7 +1760,7 @@ def list_cell_comments(
 
 @app.post("/api/method/arbor.resolve_cell_comment")
 def resolve_cell_comment(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     want = bool(payload.get("resolved", True))
@@ -1805,7 +1773,7 @@ def resolve_cell_comment(
 
 @app.post("/api/method/arbor.delete_cell_comment")
 def delete_cell_comment(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     _dispatch(request, session, "deleteComment", {"comment": payload.get("comment")})
@@ -1868,9 +1836,9 @@ def process_dashboard(request: Request, sheet: str, session: Session = Depends(g
 def list_process_runs(
     request: Request,
     sheet: str,
-    rule_key: Optional[str] = None,
-    column: Optional[str] = None,
-    status: Optional[str] = None,
+    rule_key: str | None = None,
+    column: str | None = None,
+    status: str | None = None,
     session: Session = Depends(get_db),
 ):
     repo = _repo(session)
@@ -2013,7 +1981,7 @@ def _coerce_sources(sources: Any) -> list[str]:
 
 
 def _require_webhook_admin(
-    session: Session, repo: SQLRepository, sheet: Optional[str], actor: Actor
+    session: Session, repo: SQLRepository, sheet: str | None, actor: Actor
 ) -> None:
     """AUTHZ: the sheet's structural owner OR a platform admin (403 otherwise;
     never a CR — this is an out-of-band admin surface). Missing sheet -> 404."""
@@ -2050,7 +2018,7 @@ def _endpoint_out(row: m.WebhookEndpoint) -> dict[str, Any]:
 
 @app.post("/api/method/arbor.register_webhook")
 def register_webhook(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Register an endpoint: owner/admin authz, SSRF URL validation, and a
     server-minted write-once ``secret`` returned exactly ONCE here."""
@@ -2093,7 +2061,7 @@ def register_webhook(
 
 @app.get("/api/method/arbor.list_webhooks")
 def list_webhooks(
-    request: Request, sheet: Optional[str] = None, session: Session = Depends(get_db)
+    request: Request, sheet: str | None = None, session: Session = Depends(get_db)
 ):
     repo = _repo(session)
     actor = _actor(request, repo)
@@ -2110,7 +2078,7 @@ def list_webhooks(
 
 @app.post("/api/method/arbor.update_webhook")
 def update_webhook(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Patch url/label/active/notification_sources/event_types. NEVER rotates
     the secret (write-once; no secret in the patch surface)."""
@@ -2146,7 +2114,7 @@ def update_webhook(
 
 @app.post("/api/method/arbor.delete_webhook")
 def delete_webhook(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     repo = _repo(session)
@@ -2166,7 +2134,7 @@ def delete_webhook(
 
 @app.post("/api/method/arbor.test_webhook")
 def test_webhook(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Fire a signed ``type='webhook.test'`` ping through the REAL delivery
     engine (signing, delivery ledger, retry scheduling). Unique event_id per
@@ -2222,7 +2190,7 @@ def _agent_conf() -> dict[str, Any]:
 
 @app.post("/api/method/arbor.agent.chat")
 def agent_chat(
-    request: Request, payload: Optional[dict] = Body(None), session: Session = Depends(get_db)
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """One user turn of the server-side Re-Act agent (``sheet: null`` = the
     workspace agent). The agent acts under the caller's OWN user, stamped
@@ -2234,8 +2202,9 @@ def agent_chat(
         raise HTTPException(status_code=400, detail="`message` is required")
     sheet = payload.get("sheet")
 
-    real = get_current_actor(request)  # 401 gate
-    actor = Actor(user=real.user, actor_type=ActorType.AGENT)
+    # Mirror the frappe chat: the agent runs under the caller's REAL session
+    # user (never an impersonation overlay), stamped actor_type=agent.
+    actor = Actor(user=_session_user(request), actor_type=ActorType.AGENT)
     repo = _repo(session)
     sink = _sink(session, repo)
 
@@ -2275,6 +2244,12 @@ def skill_md(request: Request):
     catalog only, never tenant data. Raw ``text/markdown``."""
     base = str(request.base_url).rstrip("/")
     return PlainTextResponse(render_skill_md(base), media_type="text/markdown")
+
+
+# ---------------------------------------------------------------------------
+# Auth routes (whoami / login_url / the /auth/* login flow) — owned by .auth.
+# ---------------------------------------------------------------------------
+app.include_router(auth_router)
 
 
 # ---------------------------------------------------------------------------

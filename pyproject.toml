@@ -73,3 +73,5 @@ ignore = ["E501"]  # long lines tolerated in declarative schema/registry tables
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
+# FastAPI's Depends(...)/Body(...) parameter defaults are the framework idiom.
+"arbor/standalone/app.py" = ["B008"]
