@@ -256,7 +256,14 @@ class ProcessRepoMixin:
         """Replace the run's whole expectation ledger (the pure machine hands
         back the full mutated list). Deterministic child PKs (``<run>#NNNN``)
         preserve the machine's append order across the delete-then-reinsert,
-        so reads return the ledger in the exact order InMemoryRepository would."""
+        so reads return the ledger in the exact order InMemoryRepository would.
+
+        Each dict is stored VERBATIM in ``raw`` (the machine is clockless, so
+        its timestamps — numeric epochs, ISO strings — must round-trip
+        untouched, exactly as the in-memory reference keeps them); the typed
+        datetime columns are best-effort COERCED copies for SQL-side filtering,
+        and ``open_due`` precomputes the sweep's candidate predicate from the
+        raw values."""
         self.session.execute(
             sa.delete(ProcessRunExpectation).where(ProcessRunExpectation.run == run)
         )
@@ -274,28 +281,41 @@ class ProcessRepoMixin:
                     breached=bool(e.get("breached")),
                     breached_at=_to_dt(e.get("breached_at")),
                     notified_owner=e.get("notified_owner") or "",
+                    open_due=(
+                        e.get("due_at") is not None
+                        and e.get("satisfied_at") is None
+                        and not e.get("breached")
+                    ),
+                    raw=dict(e),
                 )
             )
         self.session.flush()
 
     def _run_dict(self, row: ProcessRun) -> dict[str, Any]:
         """A run row + its ledger as the plain dict shape ``core.process``
-        consumes (timestamps stringified, same as the frappe adapter)."""
+        consumes. Timestamps come back from the RAW (verbatim) store — the
+        clockless machine compares/equates them against the ``now`` values it
+        was handed, so a numeric epoch must read back as the same number, not
+        a stringified datetime. The typed columns fall back only for legacy
+        rows written before the raw store existed."""
         exps = self.session.scalars(
             sa.select(ProcessRunExpectation)
             .where(ProcessRunExpectation.run == row.name)
             .order_by(ProcessRunExpectation.name)
         ).all()
+        raw = row.raw or {}
         return {
             "name": row.name,
             "process": row.process,
             "sheet": row.sheet,
             "node": row.node,
             "status": row.status,
-            "started_at": _dt_str(row.started_at),
-            "completed_at": _dt_str(row.completed_at),
+            "started_at": raw.get("started_at", _dt_str(row.started_at)),
+            "completed_at": raw.get("completed_at", _dt_str(row.completed_at)),
             "expectations": [
-                {
+                dict(e.raw)
+                if e.raw is not None
+                else {
                     "rule_key": e.rule_key,
                     "expected_column": e.expected_column,
                     "opened_at": _dt_str(e.opened_at),
@@ -319,6 +339,10 @@ class ProcessRepoMixin:
             status=data.get("status", "active"),
             started_at=_to_dt(data.get("started_at")),
             completed_at=_to_dt(data.get("completed_at")),
+            raw={
+                "started_at": data.get("started_at"),
+                "completed_at": data.get("completed_at"),
+            },
         )
         self.session.add(row)
         self.session.flush()  # assign row.name for the ledger child rows
@@ -346,6 +370,9 @@ class ProcessRepoMixin:
                 self._set_expectations(run, v or [])
             elif k in ("started_at", "completed_at"):
                 setattr(row, k, _to_dt(v))
+                # keep the verbatim copy in step (reassign: JSON mutation is
+                # untracked by the ORM).
+                row.raw = {**(row.raw or {}), k: v}
             else:
                 setattr(row, k, v)
         self.session.flush()
@@ -364,26 +391,21 @@ class ProcessRepoMixin:
         return [self._run_dict(r) for r in self.session.scalars(stmt).all()]
 
     def list_active_runs_with_due(self, now: Any) -> list[dict[str, Any]]:
-        """Active runs with an OPEN (unsatisfied, un-breached) expectation whose
-        ``due_at <= now`` — the bounded SLA-sweep candidate set, narrowed in SQL
-        (this is the query the ledger's real ``due_at``/``satisfied_at`` columns
-        exist for). An uncoercible ``now`` falls back to "any open expectation
-        with a due_at", the in-memory double's (superset) candidate set — the
-        sweep itself re-compares ``due_at <= now`` either way."""
+        """Active runs carrying an OPEN (due_at set, unsatisfied, un-breached)
+        expectation — the SLA-sweep candidate set, filtered in SQL on the
+        precomputed ``open_due`` flag. Deliberately NOT narrowed by ``now``:
+        the in-memory reference ignores it (the machine's clockless timestamps
+        need not be SQL-comparable to ``now``), and the sweep re-compares
+        ``due_at <= now`` on the raw values itself."""
         e = ProcessRunExpectation
-        open_due = sa.and_(
-            e.run == ProcessRun.name,
-            e.due_at.is_not(None),
-            e.satisfied_at.is_(None),
-            e.breached.is_(False),
-        )
-        now_dt = _to_dt(now)
-        if now_dt is not None:
-            open_due = sa.and_(open_due, e.due_at <= now_dt)
         stmt = (
             sa.select(ProcessRun)
             .where(ProcessRun.status == "active")
-            .where(sa.exists(sa.select(e.name).where(open_due)))
+            .where(
+                sa.exists(
+                    sa.select(e.name).where(e.run == ProcessRun.name, e.open_due.is_(True))
+                )
+            )
             .order_by(ProcessRun.creation, ProcessRun.name)
         )
         return [self._run_dict(r) for r in self.session.scalars(stmt).all()]

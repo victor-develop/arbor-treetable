@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from arbor.core.types import StaleVersionError as CoreStaleVersionError
+
 
 class NotFoundError(KeyError):
     """A referenced row does not exist → HTTP 404 (KeyError-compatible so the
@@ -33,12 +35,14 @@ class CycleError(ConflictError):
     """A move would put a node under its own descendant (api.md API-150)."""
 
 
-class StaleVersionError(ConflictError):
+class StaleVersionError(ConflictError, CoreStaleVersionError):
     """Optimistic-concurrency: stored cell version != expected (api.md API-161).
 
     Carries ``current_version`` and ``current_value`` (the authoritative stored
     state) so the API seam can build the VERSION_CONFLICT payload without a
-    second read."""
+    second read. Subclasses the core's ``types.StaleVersionError`` too, so
+    surfaces (and the core tests) that catch the domain error catch this one —
+    the same exception identity the in-memory double raises."""
 
     def __init__(
         self,

@@ -43,6 +43,7 @@ packages = ["arbor", "arbor.core"]
 # frappe is absent (see each lane's conftest.py).
 markers = [
     "core: pure-domain core tests, runnable without a Frappe bench",
+    "standalone: the tests/core suite re-run against the standalone SQL adapter (sqlite in-memory)",
     "dispatch: bench-free dispatch-lane tests (notification + webhook dispatchers)",
     "webhooks: bench-free webhook lane tests (in-memory store + loopback receiver)",
     "agent: bench-free agent orchestration/governance tests",
