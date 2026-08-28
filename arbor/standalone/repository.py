@@ -25,8 +25,9 @@ Repository protocol never touches them; only ``app.py`` does.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable, Optional
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -56,8 +57,8 @@ class CellDraft(m.NamedRow, m.Base):
     sheet: Mapped[str] = mapped_column(sa.String(140))
     node: Mapped[str] = mapped_column(sa.String(140))
     column: Mapped[str] = mapped_column(sa.String(140))
-    value: Mapped[Optional[Any]] = mapped_column(sa.JSON, default=None)
-    base_version: Mapped[Optional[int]] = mapped_column(sa.Integer, default=None)
+    value: Mapped[Any | None] = mapped_column(sa.JSON, default=None)
+    base_version: Mapped[int | None] = mapped_column(sa.Integer, default=None)
 
 
 class SQLRepository(TreeRepoMixin, GovernanceRepoMixin, CollabRepoMixin, ProcessRepoMixin):
@@ -70,7 +71,7 @@ class SQLRepository(TreeRepoMixin, GovernanceRepoMixin, CollabRepoMixin, Process
     def __init__(
         self,
         session: Session,
-        on_notification: Optional[Callable[[str], None]] = None,
+        on_notification: Callable[[str], None] | None = None,
     ) -> None:
         self.session = session
         #: Post-insert seam for the Notification -> webhook bridge (WS-A3b/A3c).
@@ -90,6 +91,10 @@ class SQLRepository(TreeRepoMixin, GovernanceRepoMixin, CollabRepoMixin, Process
         return name
 
 
+#: Back-compat alias — ``.auth`` lazily imports the composed class by this name.
+Repository = SQLRepository
+
+
 class SQLEventSink:
     """``EventSink`` over the append-only ``tree_events`` table.
 
@@ -105,7 +110,7 @@ class SQLEventSink:
     def __init__(
         self,
         session: Session,
-        dispatch: Optional[Callable[[TreeEvent], None]] = None,
+        dispatch: Callable[[TreeEvent], None] | None = None,
     ) -> None:
         self.session = session
         self._dispatch = dispatch
