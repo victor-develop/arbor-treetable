@@ -384,3 +384,43 @@ describe("process client", () => {
     expect(new URL(calls[0].url, "http://x").pathname).toBe("/api/method/arbor.inbox");
   });
 });
+
+// ---- platform-admin console (arbor.admin.*) ---------------------------------
+
+describe("platform-admin client", () => {
+  it("updateRole wraps the edit in the {role, patch} envelope the server reads", async () => {
+    // Regression pin: a FLAT payload is a silent no-op server-side (the endpoint
+    // reads `payload["patch"]`), so the client must split role from the patch.
+    const { calls } = mockFetch({ role: "auditor", label: "Auditor", applicable: true, active: false });
+    await api.updateRole!({ role: "auditor", label: "Auditor", applicable: true, active: false });
+    expect(calls[0].url).toBe("/api/method/arbor.admin.update_role");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(lastBody(calls[0].init)).toEqual({
+      role: "auditor",
+      patch: { label: "Auditor", applicable: true, active: false },
+    });
+  });
+
+  it("createRole posts the flat create payload (no patch envelope)", async () => {
+    const { calls } = mockFetch({ role: "auditor", label: "Auditor", applicable: true, active: true });
+    await api.createRole!({ role: "auditor", label: "Auditor" });
+    expect(calls[0].url).toBe("/api/method/arbor.admin.create_role");
+    expect(lastBody(calls[0].init)).toEqual({ role: "auditor", label: "Auditor" });
+  });
+
+  it("setUser posts the email + flags; listUsers GETs and unwraps", async () => {
+    const { calls } = mockFetch({ email: "b@x.com", is_admin: true, enabled: true });
+    await api.setUser!({ email: "b@x.com", is_admin: true });
+    expect(calls[0].url).toBe("/api/method/arbor.admin.set_user");
+    expect(lastBody(calls[0].init)).toEqual({ email: "b@x.com", is_admin: true });
+
+    const users = [
+      { email: "a@x.com", full_name: "A", is_admin: true, enabled: true, creation: "2026" },
+    ];
+    const { calls: reads } = mockFetch(users);
+    const out = await api.listUsers!();
+    expect(out).toEqual(users);
+    expect(reads[0].url).toBe("/api/method/arbor.admin.list_users");
+    expect(reads[0].init?.method).toBeUndefined();
+  });
+});
