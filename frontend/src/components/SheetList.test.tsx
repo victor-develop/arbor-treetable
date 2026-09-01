@@ -167,3 +167,34 @@ describe("SheetList", () => {
     expect(onNavigate).toHaveBeenCalledWith("roadmap-1");
   });
 });
+
+// Global Admin entry on the home page (roles are SITE-WIDE; the sheet header was
+// the only entry before). Gated on whoami.is_admin from the standalone backend.
+describe("home Admin entry", () => {
+  const baseWhoami = {
+    user: "v@x.com",
+    real_user: "v@x.com",
+    impersonating: false,
+    authenticated: true,
+    redirect_to: null,
+  };
+  it("admin sees the Admin button and it opens the Admin modal", async () => {
+    const client = clientWith([]);
+    client.whoami = async () => ({ ...baseWhoami, is_admin: true });
+    client.listRoles = async () => [];
+    client.listRoleGrants = async () => [];
+    client.listRoleApplications = async () => [];
+    client.listUsers = async () => [];
+    render(<SheetList client={client} onNavigate={vi.fn()} />);
+    const btn = await screen.findByTestId("home-admin-button");
+    fireEvent.click(btn);
+    expect(await screen.findByTestId("admin-tabs")).toBeInTheDocument();
+  });
+  it("a non-admin gets no Admin button", async () => {
+    const client = clientWith([]);
+    client.whoami = async () => ({ ...baseWhoami, is_admin: false });
+    render(<SheetList client={client} onNavigate={vi.fn()} />);
+    await screen.findByTestId("sheet-filter");
+    expect(screen.queryByTestId("home-admin-button")).toBeNull();
+  });
+});
