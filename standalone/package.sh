@@ -33,5 +33,6 @@ pymysql>=1.1
 itsdangerous>=2.1
 authlib>=1.3
 python-multipart>=0.0.9
+litellm>=1.40
 REQ
 echo "assembled: $OUT ($(du -sh "$OUT" | cut -f1), $(find "$OUT" -type f | wc -l | tr -d ' ') files)"
