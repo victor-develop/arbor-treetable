@@ -44,6 +44,13 @@ test("guest is gated, signs in, creates a sheet, lands in the grid", async ({ pa
   //    that must come back "executed" for the owner, not "suggested").
   await page.getByRole("button", { name: /add node/i }).click();
   await expect(page.getByText("No nodes yet.")).toHaveCount(0);
+
+  // 7. Toggle Live (the app lands in Proposed) — the editable grid must render,
+  //    not the tree-table error boundary. Regression: a loosely-shaped select
+  //    options value crashed exactly this view (flattenOptions on undefined groups).
+  await page.getByRole("button", { name: "Live", exact: true }).click();
+  await expect(page.getByTestId("error-boundary-tree-table")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /add node/i })).toBeVisible();
 });
 
 test("a wrong login shows an inline error, not a white screen", async ({ page }) => {
