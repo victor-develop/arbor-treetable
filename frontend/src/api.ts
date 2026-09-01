@@ -249,6 +249,17 @@ export type RoleView = {
   viewer_has_open_application: boolean;
 };
 
+// One user account row from arbor.admin.list_users (the Admin modal's Users
+// tab — a platform-admin-only surface). `creation` is the signup timestamp
+// string; `is_admin`/`enabled` are the two flags set_user toggles.
+export type UserRow = {
+  email: string;
+  full_name: string;
+  is_admin: boolean;
+  enabled: boolean;
+  creation: string;
+};
+
 // An active role grant from arbor.list_role_grants (admin panel).
 export type RoleGrantView = {
   name: string;
@@ -594,6 +605,26 @@ export type ArborClient = {
   listRoles?: () => Promise<RoleView[]>;
   listRoleGrants?: (role?: string, grantee?: string) => Promise<RoleGrantView[]>;
   listRoleApplications?: (status?: string, requester?: string) => Promise<RoleApplicationView[]>;
+  // Platform-admin console (Admin modal). These hit the STANDALONE arbor.admin.*
+  // endpoints — a platform-admin face (like internalReset), NEVER registry
+  // capabilities, so the LLM agent cannot reach them. The server admin-gates
+  // every one; set_user additionally self-guards (an admin cannot demote or
+  // disable their own account). All optional so mocked clients can omit them.
+  createRole?: (params: {
+    role: string;
+    label: string;
+    description?: string;
+    applicable?: boolean;
+  }) => Promise<RoleView>;
+  updateRole?: (params: {
+    role: string;
+    label?: string;
+    description?: string;
+    applicable?: boolean;
+    active?: boolean;
+  }) => Promise<RoleView>;
+  listUsers?: () => Promise<UserRow[]>;
+  setUser?: (params: { email: string; is_admin?: boolean; enabled?: boolean }) => Promise<UserRow>;
   // Draft flow (Phase 1 server-persisted draft box). All scoped to the actor's
   // OWN drafts; the server enforces the actor scope. Optional so test/mocked
   // clients can implement only the subset they exercise.
@@ -759,6 +790,22 @@ export const api: ArborClient = {
     if (!res.ok) throw new Error(`list_role_applications failed: ${res.status}`);
     return unwrap<RoleApplicationView[]>(await res.json());
   },
+
+  // Platform-admin console (Admin modal) — the standalone arbor.admin.* face.
+  // Mutations funnel through post() (throws with status like every write);
+  // list_users is a GET mirroring the listRoles header pattern.
+  createRole: (params) => post<RoleView>("arbor.admin.create_role", params),
+
+  updateRole: (params) => post<RoleView>("arbor.admin.update_role", params),
+
+  listUsers: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.admin.list_users`, { headers });
+    if (!res.ok) throw new Error(`admin.list_users failed: ${res.status}`);
+    return unwrap<UserRow[]>(await res.json());
+  },
+
+  setUser: (params) => post<UserRow>("arbor.admin.set_user", params),
 
   listSheets: async () => {
     const headers = await authHeaderProvider();

@@ -3315,6 +3315,70 @@ body {
 .arbor-roles-modal-body .arbor-roles {
   padding: 16px;
 }
+/* Admin modal — Catalog + Users tabs share the Roles tab's inner padding. */
+.arbor-roles-modal-body .arbor-role-catalog,
+.arbor-roles-modal-body .arbor-admin-users {
+  padding: 16px;
+}
+/* Catalog: one dense row per role (mirrors .arbor-role-app rows); the inline
+   edit form drops to its own line under the row header. */
+.arbor-role-catalog-list {
+  list-style: none;
+  margin: 8px 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arbor-role-catalog-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.arbor-role-catalog-subject {
+  flex: 1;
+  min-width: 0;
+}
+.arbor-role-catalog-key,
+.arbor-role-catalog-flag {
+  color: var(--ink-muted);
+}
+.arbor-role-catalog-row .arbor-delegate-form {
+  flex-basis: 100%;
+}
+/* Compact checkbox fields (Self-applicable / Active) — row layout, not the
+   stacked label-above-input idiom of text fields. */
+.arbor-field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.arbor-field-check input {
+  width: auto;
+  flex: 0 0 auto;
+}
+/* Users tab: a calm dense account table. */
+.arbor-admin-users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.arbor-admin-users-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-muted);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-admin-users-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--outline-subtle);
+}
+.arbor-admin-users-self {
+  color: var(--ink-muted);
+}
 
 /* ------------------------------------------------------------------ webhooks */
 /* Notification webhook admin modal (WS-A3c) — reuses the shared .arbor-modal
