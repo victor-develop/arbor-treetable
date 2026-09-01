@@ -534,6 +534,7 @@ def whoami(request: Request) -> dict[str, Any]:
     user = session_user
     real_user = session_user
     impersonating = False
+    is_admin = False
     if authenticated:
         try:
             with _sessions()() as session:
@@ -542,6 +543,11 @@ def whoami(request: Request) -> dict[str, Any]:
             user = actor.user
             impersonating = actor.is_impersonated
             real_user = actor.real_user if impersonating else actor.user
+            # The EFFECTIVE identity's admin flag (recomputed under an overlay, so
+            # an admin acting as a plain user sees that user's affordances). Lets
+            # snapshot-less surfaces (the home page) gate the Admin entry —
+            # additive to the frappe whoami envelope, which simply omits it.
+            is_admin = bool(actor.is_admin)
         except Exception:  # pragma: no cover - defensive; whoami must never 500
             pass
 
@@ -551,6 +557,7 @@ def whoami(request: Request) -> dict[str, Any]:
             "real_user": real_user,
             "impersonating": impersonating,
             "authenticated": authenticated,
+            "is_admin": is_admin,
             "redirect_to": None if authenticated else "/auth/login",
         }
     }

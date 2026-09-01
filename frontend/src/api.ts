@@ -336,6 +336,9 @@ export type Whoami = {
   real_user?: string | null;
   impersonating?: boolean;
   authenticated: boolean;
+  // Effective identity's platform-admin flag (standalone backend; frappe omits
+  // it). Gates snapshot-less admin entries like the home page's Admin button.
+  is_admin?: boolean;
   redirect_to?: string | null;
 };
 
