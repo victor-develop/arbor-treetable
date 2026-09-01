@@ -1450,6 +1450,148 @@ def list_role_applications(
     )
 
 
+# ---- platform-admin operations (roles + users) -----------------------------------
+# Standalone-only PLATFORM-ADMIN face (like internalReset): these never become
+# registry capabilities and are never exposed to LLM tools. Hard 403 for a
+# non-admin — never a Change Request.
+_ROLE_KEY_RE = re.compile(r"^[a-z0-9\-_]+$")
+
+
+def _require_admin(actor: Actor) -> None:
+    """AUTHZ: platform admin only (403 otherwise; never a CR — this is an
+    out-of-band admin surface, the webhook-admin gate's sitewide twin)."""
+    if not getattr(actor, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Only an admin may perform this operation")
+
+
+def _role_out(row: m.Role) -> dict[str, Any]:
+    return {
+        "role": row.role,
+        "label": row.label,
+        "description": row.description,
+        "applicable": bool(row.applicable),
+        "active": bool(row.active),
+    }
+
+
+@app.post("/api/method/arbor.admin.create_role")
+def admin_create_role(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Create a Role. The role key is normalized (trim + lowercase) and must
+    match ``[a-z0-9-_]+`` (400 otherwise); an existing key is a 409 — creation
+    is NOT an upsert (``update_role`` owns edits)."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    _require_admin(actor)
+
+    role = str(payload.get("role") or "").strip().lower()
+    if not _ROLE_KEY_RE.match(role):
+        raise HTTPException(
+            status_code=400, detail="role key must match [a-z0-9-_]+ (trimmed, lowercase)"
+        )
+    if session.get(m.Role, role) is not None:
+        raise HTTPException(status_code=409, detail=f"Role {role} already exists")
+
+    label = payload.get("label")
+    label = label.strip() if isinstance(label, str) else ""
+    row = m.Role(
+        name=role,  # frappe autonamed by field:role — the PK IS the role key
+        role=role,
+        label=label or role,
+        description=payload.get("description"),
+        applicable=bool(payload.get("applicable", True)),
+        active=bool(payload.get("active", True)),
+    )
+    session.add(row)
+    session.flush()
+    return _msg(_role_out(row))
+
+
+@app.post("/api/method/arbor.admin.update_role")
+def admin_update_role(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Patch label/description/applicable/active of one Role (404 unknown key).
+    There is NO delete — ``active=false`` is the soft retire, matching the
+    frappe-era semantics (the grant ledger keeps pointing at the row)."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    _require_admin(actor)
+
+    role = str(payload.get("role") or "").strip().lower()
+    row = session.get(m.Role, role)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such role {role}")
+
+    patch = payload.get("patch") or {}
+    if patch.get("label") is not None:
+        row.label = str(patch["label"])
+    if "description" in patch:
+        row.description = patch["description"]
+    if patch.get("applicable") is not None:
+        row.applicable = bool(patch["applicable"])
+    if patch.get("active") is not None:
+        row.active = bool(patch["active"])
+    session.flush()
+    return _msg(_role_out(row))
+
+
+@app.get("/api/method/arbor.admin.list_users")
+def admin_list_users(request: Request, session: Session = Depends(get_db)):
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    _require_admin(actor)
+    rows = session.scalars(sa.select(m.User).order_by(m.User.creation.asc())).all()
+    return _msg(
+        [
+            {
+                "email": r.email,
+                "full_name": r.full_name,
+                "is_admin": bool(r.is_admin),
+                "enabled": bool(r.enabled),
+                "creation": str(r.creation),
+            }
+            for r in rows
+        ]
+    )
+
+
+@app.post("/api/method/arbor.admin.set_user")
+def admin_set_user(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Patch ``is_admin``/``enabled`` of one users row (404 unknown email).
+    GUARD: an admin may never demote or disable THEMSELVES — the last admin
+    locking the whole site out is exactly the failure this prevents."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    _require_admin(actor)
+
+    email = str(payload.get("email") or "").strip().lower()
+    row = session.get(m.User, email)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such user {email}")
+
+    demoting = payload.get("is_admin") is not None and not payload["is_admin"]
+    disabling = payload.get("enabled") is not None and not payload["enabled"]
+    # Both identities of an impersonating admin count as "self" here.
+    if (demoting or disabling) and email in {actor.user, actor.real_user or actor.user}:
+        raise HTTPException(status_code=400, detail="cannot remove your own admin/access")
+
+    if payload.get("is_admin") is not None:
+        row.is_admin = bool(payload["is_admin"])
+    if payload.get("enabled") is not None:
+        row.enabled = bool(payload["enabled"])
+    session.flush()
+    return _msg(
+        {"email": row.email, "is_admin": bool(row.is_admin), "enabled": bool(row.enabled)}
+    )
+
+
 # ---- personal cell-draft box (Feature: cell drafts) ------------------------------
 def _find_cell_draft(session: Session, user: str, sheet, node, column) -> CellDraft | None:
     return session.scalars(
