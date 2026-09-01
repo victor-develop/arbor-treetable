@@ -796,7 +796,9 @@ export const api: ArborClient = {
   // list_users is a GET mirroring the listRoles header pattern.
   createRole: (params) => post<RoleView>("arbor.admin.create_role", params),
 
-  updateRole: (params) => post<RoleView>("arbor.admin.update_role", params),
+  // The server reads `{role, patch:{...}}` — split the flat FE params into that
+  // envelope (a flat payload is a SILENT no-op server-side: `payload.get("patch")`).
+  updateRole: ({ role, ...patch }) => post<RoleView>("arbor.admin.update_role", { role, patch }),
 
   listUsers: async () => {
     const headers = await authHeaderProvider();
