@@ -8,8 +8,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api as defaultClient, type ArborClient, type SheetSummary } from "../api";
+import { useWhoami } from "../hooks/useWhoami";
 import { AgentDock } from "./AgentDock";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { LoginScreen } from "./LoginScreen";
 
 export function SheetList({
   client,
@@ -46,10 +48,18 @@ export function SheetList({
     setCreateError(null);
     c.createSheet(name)
       .then((res) => navigate(res.sheet))
-      .catch(() => {
-        // A duplicate name (or any server error) surfaces inline instead of
-        // navigating — the user can rename and retry.
-        setCreateError(`Could not create "${name}" — that name may already be taken.`);
+      .catch((err: unknown) => {
+        // Surface the REAL failure inline instead of navigating — the user can
+        // rename (409) or sign in (401) and retry. The generic fallback stays
+        // for anything unrecognized.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("401")) {
+          setCreateError("You are signed out — sign in and try again.");
+        } else if (msg.includes("409")) {
+          setCreateError(`Could not create "${name}" — that name is already taken.`);
+        } else {
+          setCreateError(`Could not create "${name}" — ${msg}`);
+        }
       })
       .finally(() => setCreating(false));
   };
@@ -88,6 +98,24 @@ export function SheetList({
     const q = filter.trim().toLowerCase();
     return q ? rows.filter((s) => s.name.toLowerCase().includes(q)) : rows;
   }, [sheets, filter]);
+
+  // AUTH GATE — the exact mirror of App.tsx's (the sheet route). The home page
+  // previously rendered for guests, so "create sheet" silently 401'd with a
+  // misleading duplicate-name error. Splash while whoami resolves; LoginScreen
+  // for a guest; clients without a whoami surface (unit tests) pass through.
+  const whoami = useWhoami(c);
+  if (typeof c.whoami === "function") {
+    if (whoami.loading) {
+      return (
+        <main className="arbor-app arbor-splash" data-testid="auth-splash">
+          <p>Loading…</p>
+        </main>
+      );
+    }
+    if (!whoami.authenticated) {
+      return <LoginScreen onAuthenticated={() => void whoami.refetch()} />;
+    }
+  }
 
   return (
     <main className="arbor-app arbor-sheet-list-page">

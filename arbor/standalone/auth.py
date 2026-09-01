@@ -406,6 +406,37 @@ def auth_login(request: Request, redirect: str = "/app"):
     )
 
 
+@router.post("/api/method/login")
+async def frappe_compat_login(request: Request):
+    """Frappe-compatible login endpoint — what the SPA's <LoginScreen> POSTs
+    (``{usr, pwd}`` JSON to ``/api/method/login``). Serving it here means the
+    React shell's auth gate works UNCHANGED against the standalone backend.
+
+    Dev-login mode only: ``usr`` is the email, ``pwd`` is accepted but ignored
+    (this mode is deliberately password-less; the perimeter is the VPN). When
+    dev login is off (real OIDC), respond 401 with the OIDC hint — the SPA shows
+    its inline error and the operator should use the OIDC flow instead."""
+    if not _dev_login_enabled():
+        return JSONResponse(
+            status_code=401,
+            content={"message": "password login is not available; use the OIDC sign-in"},
+        )
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    email = str((payload or {}).get("usr") or "")
+    with _sessions()() as session:
+        try:
+            user = ensure_user(session, email)
+        except ValueError as exc:
+            return JSONResponse(status_code=401, content={"message": str(exc)})
+        session.commit()
+    response = JSONResponse({"message": "Logged In"})
+    _set_session_cookie(response, user, secure=request.url.scheme == "https")
+    return response
+
+
 @router.post("/auth/login")
 async def auth_login_submit(request: Request):
     """Dev-login form target: find-or-create the users row, set the session."""
