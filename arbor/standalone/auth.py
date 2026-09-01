@@ -183,10 +183,30 @@ def ensure_user(session: Session, email: str, full_name: str = "") -> str:
     email = (email or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
         raise ValueError("identity has no usable email; cannot resolve a user")
+    # Admin bootstrap (the Desk-less deployment's System-Manager seed): emails in
+    # ARBOR_ADMIN_EMAILS (comma-separated) are (re)stamped is_admin on login, so a
+    # fresh site always has at least one admin who can then grant the rest via the
+    # in-app admin surface. Only ever ADDS admin for listed emails — it never
+    # demotes an admin appointed in-app.
+    bootstrap = {
+        e.strip().lower()
+        for e in os.environ.get("ARBOR_ADMIN_EMAILS", "").split(",")
+        if e.strip()
+    }
     row = session.get(User, email)
     if row is not None:
+        if email in bootstrap and not row.is_admin:
+            row.is_admin = True
+            session.flush()
         return row.email
-    session.add(User(email=email, full_name=full_name or email, is_admin=False, enabled=True))
+    session.add(
+        User(
+            email=email,
+            full_name=full_name or email,
+            is_admin=email in bootstrap,
+            enabled=True,
+        )
+    )
     session.flush()
     return email
 
