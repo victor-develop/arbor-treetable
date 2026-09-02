@@ -577,6 +577,9 @@ def _dispatch_tree_event(session: Session, repo: SQLRepository, ev: Any) -> None
                     "tree_event": view.name,
                 },
                 now=str(_utcnow()),
+                # notify_on_expect fan-out (expectation-opened → column owner);
+                # silent without a sink — the machine gates on notify is not None.
+                notify=_process_notifier(repo),
             )
 
 
@@ -807,12 +810,41 @@ def _run_webhook_retries() -> None:
         session.close()
 
 
+def _process_notifier(repo: "SQLRepository"):
+    """The process/SLA notify sink (the SQL analog of FrappeProcessNotifier):
+    ONE ``source in {'process','sla'}`` in-app Notification row per recipient via
+    ``repo.create_notification`` — which also bridges to webhook fan-out. FYI
+    only (``requires_ack`` False) so process rows never pollute accountability.
+    Without this sink the pure machine's notify branches are SILENT (they gate
+    on ``notify is not None``) and notify_on_expect / sla_breach_notify are inert.
+    """
+
+    def notify(recipients: list[str], data: dict[str, Any]) -> None:
+        for r in recipients:
+            # Only store-known fields: anything else lands in the JSON `extra`
+            # column, and non-JSON values (datetimes) blow up the insert. The
+            # row's own creation timestamp serves as the delivery time.
+            repo.create_notification(
+                {
+                    "source": data.get("source", "process"),
+                    "recipient": r,
+                    "channel": "in-app",
+                    "requires_ack": False,
+                }
+            )
+
+    return notify
+
+
 def _run_sla_sweep() -> None:
     session = SessionLocal()
     try:
         repo = _repo(session)
         process_machine.sla_sweep(
-            repo, str(_utcnow()), process_of=repo.get_process_by_name, notify=None
+            repo,
+            str(_utcnow()),
+            process_of=repo.get_process_by_name,
+            notify=_process_notifier(repo),
         )
         session.commit()
     except Exception:
