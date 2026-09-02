@@ -79,6 +79,24 @@ class _ProcessView:
 # ---------------------------------------------------------------------------
 # Timestamp coercion (write side) + stringification (read side)
 # ---------------------------------------------------------------------------
+def _resolve_due(due: Any) -> Any:
+    """Resolve the pure machine's ``{base, add_seconds}`` due marker into a real
+    ISO timestamp string (mirror of FrappeRepository._resolve_due). The pure
+    module is clockless, so a non-numeric ``opened_at`` yields this marker and
+    ``_past_due`` treats an UNRESOLVED dict as never-due — persisting it verbatim
+    made the SLA sweep permanently inert. Plain values pass through (idempotent).
+    """
+    if isinstance(due, dict) and "base" in due:
+        from datetime import datetime, timedelta
+
+        try:
+            base = datetime.fromisoformat(str(due["base"]))
+        except ValueError:
+            return due
+        return str(base + timedelta(seconds=int(due.get("add_seconds") or 0)))
+    return due
+
+
 def _to_dt(value: Any) -> Optional[datetime]:
     """Coerce a pure-machine timestamp into a naive-UTC ``datetime`` (the
     DATETIME column type), or None.
@@ -269,24 +287,28 @@ class ProcessRepoMixin:
         )
         self.session.flush()  # PKs are reused; the deletes must hit first
         for i, e in enumerate(exps or []):
+            raw = dict(e)
+            # Resolve the clockless due marker HERE (the adapter has the clock);
+            # raw carries the RESOLVED value so the sweep's string compare works.
+            raw["due_at"] = _resolve_due(raw.get("due_at"))
             self.session.add(
                 ProcessRunExpectation(
                     name=f"{run}#{i:04d}",
                     run=run,
-                    rule_key=e.get("rule_key"),
-                    expected_column=e.get("expected_column"),
-                    opened_at=_to_dt(e.get("opened_at")),
-                    satisfied_at=_to_dt(e.get("satisfied_at")),
-                    due_at=_to_dt(e.get("due_at")),
-                    breached=bool(e.get("breached")),
-                    breached_at=_to_dt(e.get("breached_at")),
-                    notified_owner=e.get("notified_owner") or "",
+                    rule_key=raw.get("rule_key"),
+                    expected_column=raw.get("expected_column"),
+                    opened_at=_to_dt(raw.get("opened_at")),
+                    satisfied_at=_to_dt(raw.get("satisfied_at")),
+                    due_at=_to_dt(raw.get("due_at")),
+                    breached=bool(raw.get("breached")),
+                    breached_at=_to_dt(raw.get("breached_at")),
+                    notified_owner=raw.get("notified_owner") or "",
                     open_due=(
-                        e.get("due_at") is not None
-                        and e.get("satisfied_at") is None
-                        and not e.get("breached")
+                        raw.get("due_at") is not None
+                        and raw.get("satisfied_at") is None
+                        and not raw.get("breached")
                     ),
-                    raw=dict(e),
+                    raw=raw,
                 )
             )
         self.session.flush()
