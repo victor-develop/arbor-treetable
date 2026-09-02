@@ -6,7 +6,20 @@ import type { ColumnType, SelectOptions, SnapshotColumn } from "../api";
 
 export function flattenOptions(options?: SelectOptions | null): string[] {
   if (!options) return [];
-  return options.groups.flatMap((g) => g.options);
+  // Tolerate loosely-shaped options from older rows / LLM writes: the canonical
+  // shape is {groups:[{options:[...]}]}, but a missing/malformed groups array
+  // (e.g. a legacy {"choices":[...]}) must degrade to "no options", never crash
+  // the grid (this exact TypeError blanked the Live view behind an ErrorBoundary).
+  const o = options as unknown as Record<string, unknown>;
+  if (Array.isArray(o.groups)) {
+    return (o.groups as Array<{ options?: unknown }>).flatMap((g) =>
+      Array.isArray(g?.options) ? (g.options as string[]) : [],
+    );
+  }
+  for (const key of ["choices", "options", "values"]) {
+    if (Array.isArray(o[key])) return o[key] as string[];
+  }
+  return [];
 }
 
 // Normalize a raw cell value into the canonical stored shape for its type.

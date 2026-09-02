@@ -61,3 +61,20 @@ describe("unknownSelections", () => {
     expect(unknownSelections(["done"], opts)).toEqual([]);
   });
 });
+
+// Regression (2026-09-01): an LLM-created column stored options={"choices":[...]}
+// (loose schema, pre-normalization) and the Live grid crashed on options.groups.
+// flattenOptions must tolerate every legacy/loose shape and never throw.
+import { flattenOptions } from "./cells";
+describe("flattenOptions loose-shape tolerance", () => {
+  it("canonical groups still flatten", () => {
+    expect(flattenOptions({ groups: [{ label: "S", options: ["a", "b"] }] })).toEqual(["a", "b"]);
+  });
+  it("legacy {choices:[...]} does not crash and yields the options", () => {
+    expect(flattenOptions({ choices: ["todo", "done"] } as never)).toEqual(["todo", "done"]);
+  });
+  it("malformed groups entries are skipped, junk yields []", () => {
+    expect(flattenOptions({ groups: [{ label: "x" }, { options: ["k"] }] } as never)).toEqual(["k"]);
+    expect(flattenOptions({ foo: 1 } as never)).toEqual([]);
+  });
+});

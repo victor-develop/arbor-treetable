@@ -18,6 +18,7 @@ import {
   type Snapshot,
   type SnapshotColumn,
   type SnapshotNode,
+  type UserRow,
 } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -192,6 +193,18 @@ function ConnectedShell({
       setActivityRefreshKey((k) => k + 1);
     }
   }, [refreshCRs, refreshNotifications, refreshRoles, snap]);
+  // Admin modal — Users tab (platform-admin console). The account list loads
+  // lazily when the modal opens (optional-guarded: a client without the
+  // standalone arbor.admin.* face just shows an empty tab). setUser / create /
+  // update role funnel through the client then refresh the affected view(s).
+  const [adminUsers, setAdminUsers] = useState<UserRow[]>([]);
+  const refreshUsers = useCallback(() => {
+    if (!client.listUsers) return;
+    client
+      .listUsers()
+      .then(setAdminUsers)
+      .catch(() => setAdminUsers([]));
+  }, [client]);
   // Every role mutation funnels through dispatch then refreshes the role views
   // (and the snapshot, since a grant can change the viewer's ACL affordances).
   const roleOp = (action: string, params: Record<string, unknown>) => {
@@ -367,6 +380,11 @@ function ConnectedShell({
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
+  // Load the account list only when the Admin modal actually opens (admin-only
+  // surface; a client without listUsers is a no-op and the Users tab stays empty).
+  useEffect(() => {
+    if (rolesOpen && isAdmin) refreshUsers();
+  }, [rolesOpen, isAdmin, refreshUsers]);
   // Comments (Feature: comments). The open cell {node,column,label} | null and the
   // loaded thread. The drawer sits below the agent popup (z 40 vs 60) and is inert
   // in Proposed preview (readOnly). Opening loads the cell's thread; every write
@@ -824,7 +842,7 @@ function ConnectedShell({
       );
     }
     if (!whoami.authenticated) {
-      return <LoginScreen onAuthenticated={() => void whoami.refetch()} />;
+      return <LoginScreen onAuthenticated={() => void whoami.refetch()} ssoUrl={whoami.redirectTo} />;
     }
   }
 
@@ -1262,6 +1280,19 @@ function ConnectedShell({
                 onApprove={(p) => roleOp("approveRoleApplication", p)}
                 onReject={(p) => roleOp("rejectRoleApplication", p)}
                 onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+                users={adminUsers}
+                selfEmail={effectiveUser}
+                onCreateRole={(p) => {
+                  // Standalone admin face (arbor.admin.*), not a capability —
+                  // call the client directly, then refresh the role catalog.
+                  if (client.createRole) void client.createRole(p).then(refreshRoles).catch(() => {});
+                }}
+                onUpdateRole={(p) => {
+                  if (client.updateRole) void client.updateRole(p).then(refreshRoles).catch(() => {});
+                }}
+                onSetUser={(p) => {
+                  if (client.setUser) void client.setUser(p).then(refreshUsers).catch(() => {});
+                }}
               />
             </ErrorBoundary>
           )}

@@ -18,6 +18,14 @@ export type WhoamiState = {
   impersonating: boolean;
   // false for a Guest / unresolved / failed whoami — drives the login gate.
   authenticated: boolean;
+  // Platform-admin flag of the EFFECTIVE identity (standalone whoami carries it;
+  // the frappe envelope omits it → false). Gates snapshot-less admin entries
+  // (e.g. the home page's Admin button).
+  isAdmin: boolean;
+  // The server's login hint for an unauthenticated session (e.g. /auth/login,
+  // which starts the SSO redirect on the standalone backend). null when
+  // authenticated or unknown.
+  redirectTo: string | null;
   loading: boolean;
   // Re-run whoami (after login, begin/end impersonation, or a manual refresh).
   refetch: () => Promise<void>;
@@ -28,6 +36,8 @@ export function useWhoami(client: ArborClient): WhoamiState {
   const [realUser, setRealUser] = useState<string | null>(null);
   const [impersonating, setImpersonating] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [redirectTo, setRedirectTo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // Guards against a stale in-flight whoami resolving after a newer one.
   const reqId = useRef(0);
@@ -49,6 +59,8 @@ export function useWhoami(client: ArborClient): WhoamiState {
           setRealUser(null);
           setImpersonating(false);
           setAuthenticated(false);
+          setIsAdmin(false);
+          setRedirectTo(null);
         }
         return;
       }
@@ -58,6 +70,8 @@ export function useWhoami(client: ArborClient): WhoamiState {
       setRealUser(w.real_user ?? null);
       setImpersonating(Boolean(w.impersonating));
       setAuthenticated(Boolean(w.authenticated));
+      setIsAdmin(Boolean(w.is_admin));
+      setRedirectTo(w.redirect_to ?? null);
     } catch {
       // Fail closed: a whoami error is treated as "not authenticated" so the
       // shell falls back to the login gate rather than leaking a stale identity.
@@ -66,6 +80,8 @@ export function useWhoami(client: ArborClient): WhoamiState {
       setRealUser(null);
       setImpersonating(false);
       setAuthenticated(false);
+      setIsAdmin(false);
+      setRedirectTo(null);
     } finally {
       if (id === reqId.current) setLoading(false);
     }
@@ -77,5 +93,5 @@ export function useWhoami(client: ArborClient): WhoamiState {
     void refetch();
   }, [refetch]);
 
-  return { user, real_user: realUser, impersonating, authenticated, loading, refetch };
+  return { user, real_user: realUser, impersonating, authenticated, isAdmin, redirectTo, loading, refetch };
 }

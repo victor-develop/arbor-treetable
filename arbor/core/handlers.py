@@ -121,13 +121,47 @@ def create_sheet_handler(params: dict[str, Any], actor: Actor, repo: Repository)
 
 
 # --- meta — schema ----------------------------------------------------------
+def normalize_select_options(options: Any) -> Any:
+    """Coerce a loosely-shaped select ``options`` payload into the ONE canonical
+    stored shape ``{"groups": [{"label": str, "options": [str, ...]}, ...]}``.
+
+    The addColumn schema deliberately types ``options`` as a loose object, and
+    LLM callers invent close-but-wrong shapes (``{"choices": [...]}`` /
+    ``{"options": [...]}`` / a bare list). Storing those raw crashed every
+    reader that assumed ``options.groups`` — so the WRITE path (this one
+    handler, shared by both adapters) normalizes. Unknown shapes fall back to
+    None (no options) rather than persisting junk."""
+    if options is None:
+        return None
+    # Bare list of option strings.
+    if isinstance(options, list):
+        opts = [str(o) for o in options if isinstance(o, (str, int, float))]
+        return {"groups": [{"label": "Options", "options": opts}]} if opts else None
+    if not isinstance(options, dict):
+        return None
+    # Canonical (or nearly): keep only well-formed groups, cleaned.
+    if isinstance(options.get("groups"), list):
+        groups = []
+        for g in options["groups"]:
+            if not isinstance(g, dict) or not isinstance(g.get("options"), list):
+                continue
+            opts = [str(o) for o in g["options"] if isinstance(o, (str, int, float))]
+            groups.append({"label": str(g.get("label") or "Options"), "options": opts})
+        return {"groups": groups} if groups else None
+    # Common LLM inventions: {"choices": [...]} / {"options": [...]} / {"values": [...]}.
+    for key in ("choices", "options", "values"):
+        if isinstance(options.get(key), list):
+            return normalize_select_options(options[key])
+    return None
+
+
 def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
     spec = {
         "field": params["field"],
         "label": params["label"],
         "type": params["type"],
-        "options": params.get("options"),
+        "options": normalize_select_options(params.get("options")),
         "column_owner": params.get("column_owner") or actor.user,
         "is_label": params.get("is_label", False),
     }
@@ -141,9 +175,13 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
 def update_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
     column = repo.get_column(sheet, params["column"])
-    repo.update_column(sheet, column.name, params.get("patch") or {})
+    patch = dict(params.get("patch") or {})
+    if "options" in patch:
+        # Same normalization as add: the ONE write path keeps stored options canonical.
+        patch["options"] = normalize_select_options(patch["options"])
+    repo.update_column(sheet, column.name, patch)
     return HandlerResult(
-        event_payload={"op": "update", "column": column.name, "patch": params.get("patch") or {}},
+        event_payload={"op": "update", "column": column.name, "patch": patch},
         data={"column": column.name},
     )
 

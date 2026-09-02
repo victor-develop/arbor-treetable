@@ -7,9 +7,20 @@
 // server supplies the catalog.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api as defaultClient, type ArborClient, type SheetSummary } from "../api";
+import {
+  api as defaultClient,
+  type ArborClient,
+  type RoleApplicationView,
+  type RoleGrantView,
+  type RoleView,
+  type SheetSummary,
+  type UserRow,
+} from "../api";
+import { useWhoami } from "../hooks/useWhoami";
 import { AgentDock } from "./AgentDock";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { LoginScreen } from "./LoginScreen";
+import { RolesModal } from "./RolesModal";
 
 export function SheetList({
   client,
@@ -32,12 +43,43 @@ export function SheetList({
   // The last sheet the workspace agent created this session, surfaced as an
   // "open <sheet>" CTA. Cleared when the user opens it.
   const [createdSheet, setCreatedSheet] = useState<string | null>(null);
+  // Global Admin entry (roles are SITE-WIDE, so the natural home is the home
+  // page, not a sheet header). Data loads lazily when the modal opens.
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [roles, setRoles] = useState<RoleView[]>([]);
+  const [roleGrants, setRoleGrants] = useState<RoleGrantView[]>([]);
+  const [roleApplications, setRoleApplications] = useState<RoleApplicationView[]>([]);
+  const [adminUsers, setAdminUsers] = useState<UserRow[]>([]);
 
   const navigate =
     onNavigate ??
     ((sheet: string) => {
       window.location.search = `?sheet=${encodeURIComponent(sheet)}`;
     });
+
+  const refreshRoles = useCallback(() => {
+    if (c.listRoles) c.listRoles().then(setRoles).catch(() => setRoles([]));
+    if (c.listRoleApplications)
+      c.listRoleApplications("proposed").then(setRoleApplications).catch(() => setRoleApplications([]));
+    if (c.listRoleGrants) c.listRoleGrants().then(setRoleGrants).catch(() => setRoleGrants([]));
+  }, [c]);
+  const refreshUsers = useCallback(() => {
+    if (c.listUsers) c.listUsers().then(setAdminUsers).catch(() => setAdminUsers([]));
+  }, [c]);
+  useEffect(() => {
+    if (adminOpen) {
+      refreshRoles();
+      refreshUsers();
+    }
+  }, [adminOpen, refreshRoles, refreshUsers]);
+  // Role lifecycle ops go through the ONE executeAction funnel (same as App.tsx's
+  // roleOp, sans snapshot refetch — the home page has no snapshot).
+  const roleOp = (action: string, params: Record<string, unknown>) => {
+    void c
+      .executeAction(action, params)
+      .then(() => refreshRoles())
+      .catch(() => {});
+  };
 
   const createSheet = () => {
     const name = newName.trim();
@@ -46,10 +88,18 @@ export function SheetList({
     setCreateError(null);
     c.createSheet(name)
       .then((res) => navigate(res.sheet))
-      .catch(() => {
-        // A duplicate name (or any server error) surfaces inline instead of
-        // navigating — the user can rename and retry.
-        setCreateError(`Could not create "${name}" — that name may already be taken.`);
+      .catch((err: unknown) => {
+        // Surface the REAL failure inline instead of navigating — the user can
+        // rename (409) or sign in (401) and retry. The generic fallback stays
+        // for anything unrecognized.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("401")) {
+          setCreateError("You are signed out — sign in and try again.");
+        } else if (msg.includes("409")) {
+          setCreateError(`Could not create "${name}" — that name is already taken.`);
+        } else {
+          setCreateError(`Could not create "${name}" — ${msg}`);
+        }
       })
       .finally(() => setCreating(false));
   };
@@ -89,6 +139,24 @@ export function SheetList({
     return q ? rows.filter((s) => s.name.toLowerCase().includes(q)) : rows;
   }, [sheets, filter]);
 
+  // AUTH GATE — the exact mirror of App.tsx's (the sheet route). The home page
+  // previously rendered for guests, so "create sheet" silently 401'd with a
+  // misleading duplicate-name error. Splash while whoami resolves; LoginScreen
+  // for a guest; clients without a whoami surface (unit tests) pass through.
+  const whoami = useWhoami(c);
+  if (typeof c.whoami === "function") {
+    if (whoami.loading) {
+      return (
+        <main className="arbor-app arbor-splash" data-testid="auth-splash">
+          <p>Loading…</p>
+        </main>
+      );
+    }
+    if (!whoami.authenticated) {
+      return <LoginScreen onAuthenticated={() => void whoami.refetch()} ssoUrl={whoami.redirectTo} />;
+    }
+  }
+
   return (
     <main className="arbor-app arbor-sheet-list-page">
       <header className="arbor-header">
@@ -98,7 +166,45 @@ export function SheetList({
             <span>Governed, API-first, agent-native tree tables.</span>
           </div>
         </div>
+        {whoami.isAdmin && (
+          <button
+            type="button"
+            data-testid="home-admin-button"
+            aria-expanded={adminOpen}
+            onClick={() => setAdminOpen(true)}
+          >
+            Admin
+          </button>
+        )}
       </header>
+
+      {whoami.isAdmin && adminOpen && (
+        <ErrorBoundary label="roles-modal-home">
+          <RolesModal
+            isAdmin
+            roles={roles}
+            grants={roleGrants}
+            applications={roleApplications}
+            onClose={() => setAdminOpen(false)}
+            onAssign={(p) => roleOp("assignRole", p)}
+            onRevoke={(p) => roleOp("revokeRole", p)}
+            onApprove={(p) => roleOp("approveRoleApplication", p)}
+            onReject={(p) => roleOp("rejectRoleApplication", p)}
+            onWithdraw={(p) => roleOp("withdrawRoleApplication", p)}
+            users={adminUsers}
+            selfEmail={whoami.user ?? ""}
+            onCreateRole={(p) => {
+              if (c.createRole) void c.createRole(p).then(refreshRoles).catch(() => {});
+            }}
+            onUpdateRole={(p) => {
+              if (c.updateRole) void c.updateRole(p).then(refreshRoles).catch(() => {});
+            }}
+            onSetUser={(p) => {
+              if (c.setUser) void c.setUser(p).then(refreshUsers).catch(() => {});
+            }}
+          />
+        </ErrorBoundary>
+      )}
 
       <section className="arbor-sheet-list-zone">
         <div className="arbor-sheet-list-toolbar">
