@@ -363,7 +363,7 @@ def auth_login(request: Request, redirect: str = "/"):
         from authlib.integrations.requests_client import OAuth2Session  # lazy
 
         meta = _oidc_metadata(cfg["issuer"])
-        # PKCE (S256) unconditionally: employee-SSO public clients (admin-portal)
+        # PKCE (S256) unconditionally: many IdP public clients
         # REQUIRE it ("Missing parameter: code_challenge_method" otherwise), and a
         # confidential client simply ignores the extra challenge.
         code_verifier = secrets.token_urlsafe(48)
