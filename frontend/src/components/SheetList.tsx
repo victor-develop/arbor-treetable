@@ -153,7 +153,7 @@ export function SheetList({
       );
     }
     if (!whoami.authenticated) {
-      return <LoginScreen onAuthenticated={() => void whoami.refetch()} />;
+      return <LoginScreen onAuthenticated={() => void whoami.refetch()} ssoUrl={whoami.redirectTo} />;
     }
   }
 

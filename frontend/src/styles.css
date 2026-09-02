@@ -4660,3 +4660,21 @@ body {
   border-color: transparent;
   opacity: 1;
 }
+/* LoginScreen SSO entry (standalone OIDC): a prominent link-button above the
+   password form; the divider keeps the fallback form visually secondary. */
+.arbor-login-sso {
+  display: block;
+  text-align: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent, #2d6cdf);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+}
+.arbor-login-divider {
+  text-align: center;
+  font-size: 11px;
+  color: var(--ink-muted, #8a8a86);
+  margin: 10px 0;
+}

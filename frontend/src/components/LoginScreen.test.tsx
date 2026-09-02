@@ -108,3 +108,17 @@ describe("LoginScreen", () => {
     expect(screen.queryByTestId("login-error")).toBeNull();
   });
 });
+
+// SSO entry (standalone OIDC): when the shell passes whoami.redirect_to as
+// ssoUrl, a provider-agnostic "Sign in with SSO" link renders above the form.
+describe("SSO entry", () => {
+  it("renders the SSO link when ssoUrl is provided", () => {
+    render(<LoginScreen onAuthenticated={vi.fn()} ssoUrl="/auth/login" />);
+    const a = screen.getByTestId("login-sso");
+    expect(a).toHaveAttribute("href", "/auth/login");
+  });
+  it("no SSO link without ssoUrl", () => {
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+    expect(screen.queryByTestId("login-sso")).toBeNull();
+  });
+});

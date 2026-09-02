@@ -16,10 +16,15 @@ import { useState } from "react";
 // injectable for tests; it defaults to the global fetch in the browser.
 export function LoginScreen({
   onAuthenticated,
+  ssoUrl,
   fetchImpl = (...args: Parameters<typeof fetch>) => fetch(...args),
 }: {
   // Called after a successful login; the shell re-checks whoami and mounts the app.
   onAuthenticated: () => void;
+  // The server's login entry (whoami.redirect_to). When present, an SSO
+  // link-button renders above the password form — on the standalone backend it
+  // starts the IdP redirect; provider-agnostic wording keeps this OSS-clean.
+  ssoUrl?: string | null;
   fetchImpl?: typeof fetch;
 }): JSX.Element {
   const [usr, setUsr] = useState("");
@@ -61,6 +66,14 @@ export function LoginScreen({
         }}
       >
         <h1 className="arbor-login-title">Sign in</h1>
+        {ssoUrl && (
+          <>
+            <a className="arbor-login-sso" data-testid="login-sso" href={ssoUrl}>
+              Sign in with SSO
+            </a>
+            <div className="arbor-login-divider">or use a password</div>
+          </>
+        )}
         <label className="arbor-field">
           <span className="arbor-field-label">Username</span>
           <input

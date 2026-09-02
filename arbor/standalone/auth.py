@@ -338,14 +338,14 @@ def _safe_redirect(path: Optional[str]) -> str:
     """Clamp the post-login redirect to a local path (no open redirects)."""
     if path and path.startswith("/") and not path.startswith("//"):
         return path
-    return "/app"
+    return "/"
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @router.get("/api/method/arbor.auth.login_url")
-def login_url(redirect: str = "/app") -> dict[str, Any]:
+def login_url(redirect: str = "/") -> dict[str, Any]:
     """Where the frontend should send an unauthenticated browser. Always OUR
     ``/auth/login`` (which then bounces to the IdP or renders the dev form),
     so the frontend stays provider-agnostic — same contract as the frappe
@@ -355,7 +355,7 @@ def login_url(redirect: str = "/app") -> dict[str, Any]:
 
 
 @router.get("/auth/login")
-def auth_login(request: Request, redirect: str = "/app"):
+def auth_login(request: Request, redirect: str = "/"):
     """Start a login: redirect to the IdP (OIDC) or render the dev form."""
     redirect = _safe_redirect(redirect)
     cfg = _oidc_config()
@@ -363,19 +363,28 @@ def auth_login(request: Request, redirect: str = "/app"):
         from authlib.integrations.requests_client import OAuth2Session  # lazy
 
         meta = _oidc_metadata(cfg["issuer"])
+        # PKCE (S256) unconditionally: employee-SSO public clients (admin-portal)
+        # REQUIRE it ("Missing parameter: code_challenge_method" otherwise), and a
+        # confidential client simply ignores the extra challenge.
+        code_verifier = secrets.token_urlsafe(48)
         client = OAuth2Session(
             cfg["client_id"],
             cfg["client_secret"],
             scope="openid email profile",
             redirect_uri=_redirect_uri(cfg, request),
+            code_challenge_method="S256",
         )
-        uri, state = client.create_authorization_url(meta["authorization_endpoint"])
+        uri, state = client.create_authorization_url(
+            meta["authorization_endpoint"], code_verifier=code_verifier
+        )
         response = RedirectResponse(uri, status_code=302)
-        # State rides a signed short-lived cookie (the stateless analog of the
-        # frappe provider's cache stash); verified + consumed in the callback.
+        # State + PKCE verifier ride a signed short-lived cookie (the stateless
+        # analog of the frappe provider's cache stash); consumed in the callback.
         response.set_cookie(
             STATE_COOKIE,
-            _serializer("arbor-oidc-state").dumps({"state": state, "redirect": redirect}),
+            _serializer("arbor-oidc-state").dumps(
+                {"state": state, "redirect": redirect, "verifier": code_verifier}
+            ),
             max_age=STATE_MAX_AGE,
             httponly=True,
             samesite="lax",
@@ -487,9 +496,12 @@ def auth_callback(request: Request, code: Optional[str] = None, state: Optional[
         cfg["client_secret"],
         redirect_uri=_redirect_uri(cfg, request),
         state=state,
+        code_challenge_method="S256",
     )
     try:
-        token = client.fetch_token(meta["token_endpoint"], code=code)
+        token = client.fetch_token(
+            meta["token_endpoint"], code=code, code_verifier=stash.get("verifier") or None
+        )
         claims = _oidc_claims(cfg, meta, token)
     except Exception:
         logger.exception("OIDC code exchange failed")
