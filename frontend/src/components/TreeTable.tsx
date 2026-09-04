@@ -83,6 +83,13 @@ export type TreeTableProps = {
   // In preview, was this node relocated by an open move CR? Drives the row's
   // "moved · proposed" tag.
   movedNode?: (node: string) => boolean;
+  // Quick-add column (the ghost column): called with the LABEL only — the host
+  // derives the field key and lets the server default type/owner. Presence turns
+  // on the right-edge ghost stub + the per-row hover "+" cell.
+  onCreateColumn?: (label: string) => void;
+  // Monotonic signal from the toolbar "+ Column" button: each bump opens the
+  // ghost header's inline editor (and scrolls it into view).
+  createColumnSignal?: number;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -112,10 +119,41 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     preview,
     proposedCell,
     movedNode,
+    onCreateColumn,
+    createColumnSignal,
   } = props;
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
+  // Ghost-column inline creator state. Activated by the header stub, a row's
+  // hover "+" cell, or the toolbar signal; Enter submits the label (everything
+  // else defaults), Esc/blur cancels.
+  const [ghostEditing, setGhostEditing] = useState(false);
+  const [ghostLabel, setGhostLabel] = useState("");
+  const ghostInputRef = useRef<HTMLInputElement | null>(null);
+  const openGhost = () => {
+    setGhostLabel("");
+    setGhostEditing(true);
+  };
+  useEffect(() => {
+    if (createColumnSignal && onCreateColumn) {
+      setGhostLabel("");
+      setGhostEditing(true);
+    }
+  }, [createColumnSignal, onCreateColumn]);
+  useEffect(() => {
+    if (ghostEditing && ghostInputRef.current) {
+      ghostInputRef.current.focus();
+      // Optional call: jsdom (vitest) has no scrollIntoView.
+      ghostInputRef.current.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
+  }, [ghostEditing]);
+  const submitGhost = () => {
+    const label = ghostLabel.trim();
+    setGhostEditing(false);
+    setGhostLabel("");
+    if (label && onCreateColumn) onCreateColumn(label);
+  };
   // Live drop indicator: which row the drag is currently over + where it would
   // land (before / inside / after), so a horizontal line (or "drop-into" tint)
   // shows the destination clearly instead of leaving the user guessing.
@@ -231,6 +269,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         {dataColumns.map((c) => (
           <col key={c.name} style={{ width: colWidth(c) }} />
         ))}
+        {onCreateColumn && <col className="arbor-col-ghost" style={{ width: ghostEditing ? 180 : 44 }} />}
       </colgroup>
       <thead>
         <tr>
@@ -261,6 +300,43 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               </span>
             </th>
           ))}
+          {onCreateColumn && (
+            <th className="arbor-ghost-head" data-testid="ghost-col-head">
+              {ghostEditing ? (
+                <input
+                  ref={ghostInputRef}
+                  data-testid="ghost-col-input"
+                  className="arbor-ghost-input"
+                  placeholder="Column label…"
+                  aria-label="New column label"
+                  value={ghostLabel}
+                  onChange={(e) => setGhostLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitGhost();
+                    if (e.key === "Escape") {
+                      setGhostEditing(false);
+                      setGhostLabel("");
+                    }
+                  }}
+                  onBlur={() => {
+                    setGhostEditing(false);
+                    setGhostLabel("");
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="arbor-ghost-open"
+                  data-testid="ghost-col-open"
+                  title="Add column"
+                  aria-label="Add column"
+                  onClick={openGhost}
+                >
+                  +
+                </button>
+              )}
+            </th>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -298,6 +374,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             preview={preview}
             proposedCell={proposedCell}
             moved={preview ? movedNode?.(row.node.name) : undefined}
+            onGhostColumn={onCreateColumn ? openGhost : undefined}
           />
         ))}
       </tbody>

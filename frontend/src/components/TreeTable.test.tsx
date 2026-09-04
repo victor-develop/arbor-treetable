@@ -312,3 +312,62 @@ describe("TreeTable drag-and-drop → moveNode", () => {
     expect(p2).not.toHaveAttribute("data-drop");
   });
 });
+
+describe("ghost column quick-add", () => {
+  it("renders no ghost stub without onCreateColumn", () => {
+    renderTable();
+    expect(screen.queryByTestId("ghost-col-head")).toBeNull();
+    expect(screen.queryByTestId("ghost-add-R")).toBeNull();
+  });
+
+  it("header stub opens the inline editor; Enter submits the label only", () => {
+    const onCreateColumn = vi.fn();
+    renderTable({ onCreateColumn });
+    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    const input = screen.getByTestId("ghost-col-input");
+    fireEvent.change(input, { target: { value: "  Due Date  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onCreateColumn).toHaveBeenCalledWith("Due Date");
+    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+  });
+
+  it("Escape cancels without creating; empty label submits nothing", () => {
+    const onCreateColumn = vi.fn();
+    renderTable({ onCreateColumn });
+    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Escape" });
+    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Enter" });
+    expect(onCreateColumn).not.toHaveBeenCalled();
+  });
+
+  it("a row's hover + cell opens the same editor", () => {
+    const onCreateColumn = vi.fn();
+    renderTable({ onCreateColumn });
+    fireEvent.click(screen.getByTestId("ghost-add-R"));
+    expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
+  });
+
+  it("bumping createColumnSignal opens the editor (toolbar entry point)", () => {
+    const onCreateColumn = vi.fn();
+    const { rerender, snap } = renderTable({ onCreateColumn, createColumnSignal: 0 });
+    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+    rerender(
+      <TreeTable
+        columns={snap.columns}
+        nodes={snap.nodes}
+        labelColumn={snap.label_column}
+        collapsed={new Set<string>()}
+        onToggle={vi.fn()}
+        pendingCell={() => false}
+        isPendingMove={() => false}
+        onCommitCell={vi.fn()}
+        onMove={vi.fn()}
+        onCreateColumn={onCreateColumn}
+        createColumnSignal={1}
+      />,
+    );
+    expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
+  });
+});

@@ -4678,3 +4678,21 @@ body {
   color: var(--ink-muted, #8a8a86);
   margin: 10px 0;
 }
+/* Ghost column (quick-add): a quiet right-edge stub. The header shows a "+"
+   that swaps to an inline label input; body cells reveal a faint "+" on row
+   hover. Everything else about the new column defaults (type text, owner=me). */
+.arbor-ghost-head { background: var(--paper-muted, #fafaf9); text-align: center; }
+.arbor-ghost-open {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-muted, #8a8a86); font-size: 15px; line-height: 1;
+  width: 100%; padding: 6px 0;
+}
+.arbor-ghost-open:hover { color: var(--accent, #2d6cdf); }
+.arbor-ghost-input { width: 100%; font-size: 12px; padding: 4px 6px; }
+.arbor-ghost-cell { text-align: center; background: var(--paper-muted, #fafaf9); }
+.arbor-ghost-row-add {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-muted, #8a8a86); font-size: 14px; line-height: 1;
+  opacity: 0; padding: 2px 6px;
+}
+tr:hover .arbor-ghost-row-add, .arbor-ghost-row-add:focus { opacity: 1; }

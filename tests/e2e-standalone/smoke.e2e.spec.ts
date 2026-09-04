@@ -38,12 +38,24 @@ test("guest is gated, signs in, creates a sheet, lands in the grid", async ({ pa
   //    the sheet, so the OWNER affordances (Add column / Add node) render.
   await expect(page).toHaveURL(new RegExp(`sheet=${name}`));
   await expect(page.getByText("No nodes yet.")).toBeVisible();
-  await expect(page.getByRole("button", { name: /add column/i })).toBeVisible();
+  // (testid, not accessible name: the ghost-column stub and per-row "+" share
+  //  the "Add column" name, so a role query would be strict-mode ambiguous)
+  await expect(page.getByTestId("add-column-button")).toBeVisible();
 
   // 6. Add the first row — the empty state yields to the grid (a governed write
   //    that must come back "executed" for the owner, not "suggested").
   await page.getByRole("button", { name: /add node/i }).click();
   await expect(page.getByText("No nodes yet.")).toHaveCount(0);
+
+  // 6b. Quick-add a column via the ghost flow: the toolbar "+ Column" button
+  //     opens the right-edge inline editor; a label-only Enter creates the
+  //     column with defaults (field slug, type text, owner = creator).
+  await page.getByTestId("add-column-button").click();
+  const ghostInput = page.getByTestId("ghost-col-input");
+  await expect(ghostInput).toBeVisible();
+  await ghostInput.fill("Due Date");
+  await ghostInput.press("Enter");
+  await expect(page.getByRole("columnheader", { name: /due date/i })).toBeVisible();
 
   // 7. Toggle Live (the app lands in Proposed) — the editable grid must render,
   //    not the tree-table error boundary. Regression: a loosely-shaped select

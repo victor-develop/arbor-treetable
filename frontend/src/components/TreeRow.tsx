@@ -29,6 +29,7 @@ export function TreeRow({
   dropPosition,
   onDrop,
   onAddChild,
+  onGhostColumn,
   onAddSibling,
   onEdit,
   onDelete,
@@ -77,6 +78,10 @@ export function TreeRow({
   // (a non-owner click files a CR, same as "Suggest column") — NOT gated on
   // can_change_structure, unlike delete.
   onAddChild?: (node: SnapshotNode) => void;
+  // Ghost-column quick add: renders a trailing hover-revealed "+" cell that
+  // opens the table's inline column creator (a table-wide op surfaced per-row
+  // so "I'm looking at this row and it needs a field" has a zero-travel entry).
+  onGhostColumn?: () => void;
   // Add a SIBLING of this node (a new node under the same parent). Optional;
   // rendered for EVERYONE when supplied (a non-owner click files a CR), exactly
   // like add-child — NOT gated on can_change_structure.
@@ -332,6 +337,21 @@ export function TreeRow({
             </td>
           );
         })}
+      {onGhostColumn && (
+        <td className="arbor-ghost-cell">
+          <button
+            type="button"
+            className="arbor-ghost-row-add"
+            data-testid={`ghost-add-${node.name}`}
+            title="Add column"
+            aria-label="Add column"
+            onClick={onGhostColumn}
+            tabIndex={-1}
+          >
+            +
+          </button>
+        </td>
+      )}
     </tr>
   );
 }
