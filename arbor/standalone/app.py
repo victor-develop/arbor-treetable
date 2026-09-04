@@ -2434,11 +2434,21 @@ A 401 means the token is missing/invalid/expired/revoked; a 403 means the
 token's scope forbids the call."""
 
 
+def _public_base(request: Request) -> str:
+    """The externally-reachable origin. TLS terminates at the platform proxy,
+    so ``request.base_url`` says http:// — honor X-Forwarded-Proto the way the
+    OIDC redirect override does, or external agents get told the wrong scheme."""
+    base = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base
+
+
 @app.get("/api/method/arbor.skill_md")
 def skill_md(request: Request):
     """Public (guest-allowed): the doc describes the API SHAPE + capability
     catalog only, never tenant data. Raw ``text/markdown``."""
-    base = str(request.base_url).rstrip("/")
+    base = _public_base(request)
     return PlainTextResponse(
         render_skill_md(base, auth_section=_STANDALONE_AUTH_SECTION),
         media_type="text/markdown",
@@ -2516,7 +2526,7 @@ def issue_agent_token(
     )
     session.add(row)
     session.flush()
-    base = str(request.base_url).rstrip("/")
+    base = _public_base(request)
     return _msg(
         {
             "token_id": row.name,

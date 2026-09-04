@@ -186,3 +186,15 @@ def test_invalid_revoked_tokens_are_401_and_tokens_cannot_mint_tokens(client):
         agent.get("/api/method/arbor.get_sheet_snapshot", params={"sheet": "s1"}).status_code
         == 401
     )
+
+
+def test_forwarded_proto_yields_https_base(client):
+    resp = client.get("/llm/skill.md", headers={"X-Forwarded-Proto": "https"})
+    assert "https://testserver" in resp.text and "http://testserver" not in resp.text
+    login(client, ALICE)
+    resp = client.post(
+        "/api/method/arbor.issue_agent_token",
+        json={},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+    assert "https://testserver" in msg(resp)["bootstrap_prompt"]
