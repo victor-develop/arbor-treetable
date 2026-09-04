@@ -138,12 +138,28 @@ def _catalog(caps: dict[str, Capability]) -> str:
     return "\n".join(out)
 
 
-def render_skill_md(base_url: Optional[str] = None) -> str:
+_FRAPPE_AUTH_SECTION = f"""Authenticate with the credentials from your bootstrap prompt. Two headers:
+
+1. Frappe API key (identifies the acting user):
+   `Authorization: token <api_key>:<api_secret>`
+2. Arbor Agent Token (optional down-scope — read-only vs read-write, and which
+   sheets): `X-Arbor-Agent-Token: {TOKEN_PREFIX}...`
+
+Do NOT paste passwords, cookies, or a browser JWT — those are for the first-party
+web app, not for you. If a call returns 401, the API key is missing/expired; 403
+means either the Agent Token's scope forbids it or (for a control action) you
+lack authority."""
+
+
+def render_skill_md(base_url: Optional[str] = None, auth_section: Optional[str] = None) -> str:
     """Render the full ``skill.md`` contract from the registry.
 
     ``base_url`` (the deployment origin, no trailing slash) is woven into the
     endpoint + examples; it defaults to a placeholder so the doc is renderable
-    bench-free and in tests.
+    bench-free and in tests. ``auth_section`` replaces the body of the
+    "## Authentication" chapter — each adapter's credential story differs
+    (frappe: API key + optional down-scope token; standalone: ONE token that
+    both identifies and scopes) while everything else is shared.
     """
     base = (base_url or _DEFAULT_BASE_URL).rstrip("/")
     exposed = {c.id: c for c in all_capabilities() if c.is_exposed_to_llm}
@@ -187,17 +203,7 @@ The response is a stable envelope:
 
 ## Authentication
 
-Authenticate with the credentials from your bootstrap prompt. Two headers:
-
-1. Frappe API key (identifies the acting user):
-   `Authorization: token <api_key>:<api_secret>`
-2. Arbor Agent Token (optional down-scope — read-only vs read-write, and which
-   sheets): `X-Arbor-Agent-Token: {TOKEN_PREFIX}...`
-
-Do NOT paste passwords, cookies, or a browser JWT — those are for the first-party
-web app, not for you. If a call returns 401, the API key is missing/expired; 403
-means either the Agent Token's scope forbids it or (for a control action) you
-lack authority.
+{auth_section or _FRAPPE_AUTH_SECTION}
 
 ## Governance you must understand
 

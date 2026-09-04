@@ -33,6 +33,21 @@ rewritten to `mysql+pymysql://`). Schema bootstraps idempotently at startup.
 | `ARBOR_AGENT_MODEL` / `_API_KEY` / `_API_BASE` / `_MAX_STEPS` | the in-app LLM agent (LiteLLM model ref, e.g. `anthropic/...` or `openai/...` against an OpenAI-compatible gateway) |
 | `ARBOR_NO_BACKGROUND=1` | disable the in-process retry/SLA threads (tests) |
 
+## External LLM agents
+
+The crawlable contract is served at `GET /llm/skill.md` (and
+`arbor.skill_md`). Mint a scoped token while logged in:
+
+```
+POST /api/method/arbor.issue_agent_token {"label": "my bot", "mode": "read", "sheets": ["s1"], "ttl_days": 30}
+```
+
+The response includes the plaintext token (shown once) and a `bootstrap_prompt`
+to paste into any external agent. The agent sends `X-Arbor-Agent-Token` on every
+call — the ONE header is both identity and scope. `arbor.list_agent_tokens` /
+`arbor.revoke_agent_token` manage the fleet. See
+[EXTERNAL-AGENTS](EXTERNAL-AGENTS.md).
+
 ## Test lanes
 
 ```bash

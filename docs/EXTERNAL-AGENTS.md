@@ -12,13 +12,28 @@ model and how it authenticates* — both reach the identical capability + ACL pa
 |---|---|---|
 | Where the model runs | Inside Arbor (server-side Re-Act, ARCHITECTURE §8) | Outside Arbor — ChatGPT / Claude / the user's own agent |
 | Entry point | `POST /api/method/arbor.agent.chat` | `POST /api/method/arbor.execute_action` (+ named shims) |
-| Auth | The live web session (SSO/JWT), verbatim | **Frappe API key** + an optional **Arbor Agent Token** down-scope |
+| Auth | The live web session (SSO/JWT), verbatim | frappe lane: **Frappe API key** + optional **Arbor Agent Token** down-scope; standalone lane: **ONE Arbor Agent Token** (identity + scope) |
 | How it learns the API | Compiled in (`registry.get_llm_tools()`) | Crawls the generated **`skill.md`** contract |
 | Code path to the executor | `core.executor.execute_action` directly | adapter `api._dispatch` → `core.executor` |
 
 The design goal is that you can paste **one bootstrap prompt** into any external
 agent and it can operate your data safely, without ever handling a password,
 cookie, or browser JWT.
+
+### Standalone adapter: one token, both tiers
+
+The standalone (frappe-free) adapter has no Frappe API key to pair with, so the
+two tiers collapse into ONE header: `X-Arbor-Agent-Token` alone authenticates
+the request as the token's issuing user (`actor_type=agent`, never admin, never
+impersonating) AND carries the scope ceiling (read-only vs read-write, sheet
+allow-list). Semantics otherwise identical: bad/revoked/expired token → hard
+401; scope violation → hard 403, never a Change Request. Endpoints:
+
+- `GET /llm/skill.md` (alias of `arbor.skill_md`) — the public contract
+- `POST arbor.issue_agent_token` `{label?, mode, sheets?, ttl_days?}` — session
+  auth ONLY (a token cannot mint tokens); returns the plaintext ONCE plus a
+  ready-to-paste `bootstrap_prompt`
+- `GET arbor.list_agent_tokens` / `POST arbor.revoke_agent_token`
 
 ---
 

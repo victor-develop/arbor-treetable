@@ -42,6 +42,7 @@ import logging
 import os
 import re
 import secrets
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -51,9 +52,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..core.agent_scope import hash_token
 from ..core.types import Actor, ActorType
 from . import db
-from .models import User
+from .models import AgentToken, User
 
 logger = logging.getLogger(__name__)
 
@@ -251,13 +253,54 @@ def _actor_for_user(session: Session, real_user: str) -> Actor:
     return Actor(user=real_user, actor_type=ActorType.HUMAN, is_admin=real_is_admin)
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now (matches the models' DATETIME columns; app._utcnow twin)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _agent_token_secret() -> Optional[str]:
+    """Same key derivation as the dispatch-lane scope gate (app._token_secret)."""
+    return os.environ.get("ARBOR_TOKEN_SECRET") or os.environ.get("SECRET_KEY")
+
+
+def _actor_from_agent_token(request: Request) -> Optional[Actor]:
+    """Header-token identity for EXTERNAL agents (no session cookie).
+
+    ``X-Arbor-Agent-Token`` alone authenticates the request as the token's
+    OWNER with ``actor_type=AGENT`` — the frappe pair "API key identifies,
+    Agent Token down-scopes" collapsed into ONE header (standalone has no
+    second credential to hand out). A present-but-bad token is a hard 401,
+    never an anonymous fallthrough. The read-only / sheet-allow-list scope is
+    enforced downstream by the dispatch gate, which reads the same header.
+    Agent actors are never admin and never see an impersonation overlay.
+    """
+    raw = request.headers.get("X-Arbor-Agent-Token")
+    if not raw:
+        return None
+    token_hash = hash_token(raw, secret=_agent_token_secret())
+    with _sessions()() as session:
+        row = session.query(AgentToken).filter_by(token_hash=token_hash).first()
+        if row is None:
+            raise HTTPException(status_code=401, detail="Invalid Arbor Agent Token")
+        if row.revoked or (row.expires_on is not None and row.expires_on <= _utcnow()):
+            raise HTTPException(status_code=401, detail="Arbor Agent Token is revoked or expired")
+        row.last_used_at = _utcnow()
+        user = row.user
+        session.commit()
+    return Actor(user=user, actor_type=ActorType.AGENT, is_admin=False)
+
+
 def get_current_actor(request: Request) -> Actor:
     """The acting identity for this request — session cookie + impersonation
-    overlay + ``is_admin`` from the users row. Raises HTTP 401 when there is
-    no (valid) session. This is the standalone twin of the frappe ``_actor()``
-    and the ONE function the API layer should call per request."""
+    overlay + ``is_admin`` from the users row, or (absent a session) an Arbor
+    Agent Token identifying an external agent. Raises HTTP 401 when neither
+    credential is present/valid. This is the standalone twin of the frappe
+    ``_actor()`` and the ONE function the API layer should call per request."""
     user = read_session_user(request)
     if not user:
+        agent = _actor_from_agent_token(request)
+        if agent is not None:
+            return agent
         raise HTTPException(status_code=401, detail="Authentication required")
     with _sessions()() as session:
         actor = _actor_for_user(session, user)

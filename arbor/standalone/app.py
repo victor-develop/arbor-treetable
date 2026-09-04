@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import sqlalchemy as sa
@@ -67,7 +67,13 @@ from arbor.arbor.dispatch.webhook import WebhookDispatcher
 from arbor.core import executor
 from arbor.core import process as process_machine
 from arbor.core.acl import can_read_column, resolve_column_approvers
-from arbor.core.agent_scope import AgentScope, ScopeError, authorize_scope, hash_token
+from arbor.core.agent_scope import (
+    AgentScope,
+    ScopeError,
+    authorize_scope,
+    generate_token,
+    hash_token,
+)
 from arbor.core.change_request import (
     _column_editor_approvers,
     _reresolve_approver,
@@ -2412,12 +2418,157 @@ def agent_chat(
 
 
 # ---- the crawlable external-agent contract ---------------------------------------------
+#: Standalone auth story for skill.md: there is no frappe API key here — the
+#: Arbor Agent Token alone both IDENTIFIES the caller (as its issuing user,
+#: actor_type=agent) and carries the scope ceiling. One header, spent only on
+#: real API calls (the contract itself is public).
+_STANDALONE_AUTH_SECTION = """Authenticate with the Arbor Agent Token from your bootstrap prompt. ONE header
+on every request:
+
+    X-Arbor-Agent-Token: arbor_pat_...
+
+The token both identifies you (you act as the user who minted it) and carries
+your scope (read-only vs read-write, and which sheets). Do NOT paste passwords,
+cookies, or a browser JWT — those are for the first-party web app, not for you.
+A 401 means the token is missing/invalid/expired/revoked; a 403 means the
+token's scope forbids the call."""
+
+
 @app.get("/api/method/arbor.skill_md")
 def skill_md(request: Request):
     """Public (guest-allowed): the doc describes the API SHAPE + capability
     catalog only, never tenant data. Raw ``text/markdown``."""
     base = str(request.base_url).rstrip("/")
-    return PlainTextResponse(render_skill_md(base), media_type="text/markdown")
+    return PlainTextResponse(
+        render_skill_md(base, auth_section=_STANDALONE_AUTH_SECTION),
+        media_type="text/markdown",
+    )
+
+
+@app.get("/llm/skill.md")
+def skill_md_pretty(request: Request):
+    """The crawl-friendly alias external agents are told to fetch (declared
+    before the ``/`` static mount so it wins the route)."""
+    return skill_md(request)
+
+
+def _bootstrap_prompt(base: str, token: str, mode: str, sheets: list[str] | None) -> str:
+    """The ready-to-paste prompt handing an external agent everything it needs
+    (frappe's twin minus the API-key line — here the ONE token authenticates)."""
+    scope_note = (
+        "You have READ-ONLY access."
+        if mode == "read"
+        else "You may read and write; a write you aren't authorized for becomes a Change Request (not an error)."
+    )
+    sheet_note = f" You are limited to these sheets: {', '.join(sheets)}." if sheets else ""
+    return (
+        f"You can operate my Arbor data through its HTTP API. "
+        f"First read the contract: {base}/llm/skill.md\n"
+        f"API base: {base}/api/method/arbor.\n"
+        f"On every request send header  X-Arbor-Agent-Token: {token}\n"
+        f"{scope_note}{sheet_note}\n"
+        f"Begin by calling arbor.list_sheets, then follow the discovery flow in skill.md."
+    )
+
+
+@app.post("/api/method/arbor.issue_agent_token")
+def issue_agent_token(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Mint an Arbor Agent Token for the CURRENT user; plaintext returned ONCE.
+
+    Session-auth only: a request authenticated BY a token must not mint tokens
+    (403) — no self-propagating credentials. Mirrors the frappe issuer's
+    payload: ``{label?, mode: read|write, sheets?: [..], ttl_days?: 30}``."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    if actor.actor_type is not ActorType.HUMAN:
+        raise HTTPException(status_code=403, detail="An agent token cannot mint tokens")
+
+    mode = str(payload.get("mode") or "write")
+    if mode not in ("read", "write"):
+        raise HTTPException(status_code=400, detail="mode must be 'read' or 'write'")
+    raw_sheets = payload.get("sheets")
+    if isinstance(raw_sheets, str):
+        sheets_list: list[str] | None = [raw_sheets]
+    elif isinstance(raw_sheets, list) and raw_sheets:
+        sheets_list = [str(x) for x in raw_sheets]
+    else:
+        sheets_list = None
+    ttl_days = payload.get("ttl_days", 30)
+    try:
+        ttl_days = int(ttl_days)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="ttl_days must be an integer")
+    expires_on = _utcnow() + timedelta(days=ttl_days) if ttl_days else None
+
+    # Issue for the REAL principal — never the impersonated overlay.
+    user = actor.real_user or actor.user
+    plaintext = generate_token()
+    row = m.AgentToken(
+        label=str(payload.get("label") or "external agent"),
+        user=user,
+        mode=mode,
+        sheets=json.dumps(sheets_list) if sheets_list else None,
+        token_hash=hash_token(plaintext, secret=_token_secret()),
+        expires_on=expires_on,
+    )
+    session.add(row)
+    session.flush()
+    base = str(request.base_url).rstrip("/")
+    return _msg(
+        {
+            "token_id": row.name,
+            "token": plaintext,  # shown ONCE; not recoverable
+            "mode": mode,
+            "sheets": sheets_list,
+            "expires_on": expires_on.isoformat() if expires_on else None,
+            "bootstrap_prompt": _bootstrap_prompt(base, plaintext, mode, sheets_list),
+        }
+    )
+
+
+@app.post("/api/method/arbor.revoke_agent_token")
+def revoke_agent_token(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Revoke one Agent Token (the issuer or an admin). Immediate kill."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    row = session.get(m.AgentToken, str(payload.get("token_id") or ""))
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such token")
+    if row.user != (actor.real_user or actor.user) and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="not your token")
+    row.revoked = True
+    return _msg({"token_id": row.name, "revoked": True})
+
+
+@app.get("/api/method/arbor.list_agent_tokens")
+def list_agent_tokens(request: Request, session: Session = Depends(get_db)):
+    """The CURRENT user's tokens (metadata only — never a hash or plaintext)."""
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    user = actor.real_user or actor.user
+    rows = session.scalars(
+        sa.select(m.AgentToken).where(m.AgentToken.user == user).order_by(m.AgentToken.creation.desc())
+    ).all()
+    return _msg(
+        [
+            {
+                "token_id": r.name,
+                "label": r.label,
+                "mode": r.mode,
+                "sheets": _parse_token_sheets(r.sheets),
+                "expires_on": r.expires_on.isoformat() if r.expires_on else None,
+                "revoked": bool(r.revoked),
+                "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            }
+            for r in rows
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
