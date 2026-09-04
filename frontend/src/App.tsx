@@ -381,9 +381,8 @@ function ConnectedShell({
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
-  // Ghost-column quick add: monotonic signal opens TreeTable's inline creator;
-  // the submit derives the field key and lets the server default type/owner.
-  const [createColumnSignal, setCreateColumnSignal] = useState(0);
+  // Ghost-column quick add (entry: hover "+" on the last column header): the
+  // submit derives the field key and lets the server default type/owner.
   const quickAddColumn = (label: string) => {
     const field = uniqueField((snap?.columns ?? []).map((c) => c.field), label);
     void sheet.dispatch("addColumn", { sheet: sheetName, field, label, type: "text" }).then((o) => {
@@ -1056,19 +1055,6 @@ function ConnectedShell({
         <div className="arbor-body">
           <section className="arbor-main">
             <div className="arbor-toolbar">
-              {/* Quick-add column: the toolbar button just opens the grid's
-                  right-edge ghost-column inline creator (one field — the label;
-                  everything else defaults). The FULL form (type/owner/options
-                  up front) lives in Settings → Columns. */}
-              <button
-                type="button"
-                className="arbor-ac-toggle"
-                data-testid="add-column-button"
-                aria-label="Add column"
-                onClick={() => setCreateColumnSignal((k) => k + 1)}
-              >
-                + Column
-              </button>
               {/* Feature 2 — presentation-only view controls (hide/reorder/
                   resize). Lists ONLY the read-ACL-filtered snapshot columns and
                   emits a SheetView; zero executeAction calls. */}
@@ -1127,7 +1113,6 @@ function ConnectedShell({
                 editSignal={editSignal}
                 onAddNode={() => addNode(null)}
                 onCreateColumn={quickAddColumn}
-                createColumnSignal={createColumnSignal}
                 // Read-only Proposed preview: static cells, no drag, no row
                 // actions; proposed cells + relocated rows are styled distinctly.
                 preview={preview}

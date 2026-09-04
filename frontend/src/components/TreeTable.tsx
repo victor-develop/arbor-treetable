@@ -85,11 +85,9 @@ export type TreeTableProps = {
   movedNode?: (node: string) => boolean;
   // Quick-add column (the ghost column): called with the LABEL only — the host
   // derives the field key and lets the server default type/owner. Presence turns
-  // on the right-edge ghost stub + the per-row hover "+" cell.
+  // on a hover-revealed "+" on the LAST column header; the ghost column itself
+  // exists only while the inline label editor is open (no reserved blank column).
   onCreateColumn?: (label: string) => void;
-  // Monotonic signal from the toolbar "+ Column" button: each bump opens the
-  // ghost header's inline editor (and scrolls it into view).
-  createColumnSignal?: number;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -120,14 +118,13 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     proposedCell,
     movedNode,
     onCreateColumn,
-    createColumnSignal,
   } = props;
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
-  // Ghost-column inline creator state. Activated by the header stub, a row's
-  // hover "+" cell, or the toolbar signal; Enter submits the label (everything
-  // else defaults), Esc/blur cancels.
+  // Ghost-column inline creator state. Activated by the hover "+" on the last
+  // column header; Enter submits the label (everything else defaults), Esc/blur
+  // cancels — and the ghost column vanishes with the editor.
   const [ghostEditing, setGhostEditing] = useState(false);
   const [ghostLabel, setGhostLabel] = useState("");
   const ghostInputRef = useRef<HTMLInputElement | null>(null);
@@ -135,20 +132,6 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     setGhostLabel("");
     setGhostEditing(true);
   };
-  // Open ONCE per signal bump. onCreateColumn is a fresh closure on every host
-  // render (the post-create refetch re-renders the App), so keying the effect on
-  // it would reopen the editor right after a successful create — track the
-  // last-seen signal instead.
-  const lastColumnSignal = useRef(createColumnSignal ?? 0);
-  useEffect(() => {
-    const sig = createColumnSignal ?? 0;
-    if (sig === lastColumnSignal.current) return;
-    lastColumnSignal.current = sig;
-    if (sig && onCreateColumn) {
-      setGhostLabel("");
-      setGhostEditing(true);
-    }
-  }, [createColumnSignal, onCreateColumn]);
   useEffect(() => {
     if (ghostEditing && ghostInputRef.current) {
       ghostInputRef.current.focus();
@@ -277,14 +260,26 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         {dataColumns.map((c) => (
           <col key={c.name} style={{ width: colWidth(c) }} />
         ))}
-        {onCreateColumn && <col className="arbor-col-ghost" style={{ width: ghostEditing ? 180 : 44 }} />}
+        {onCreateColumn && ghostEditing && <col className="arbor-col-ghost" style={{ width: 180 }} />}
       </colgroup>
       <thead>
         <tr>
           <th className="arbor-label-head">
             {labelColumn ? columns.find((c) => c.name === labelColumn)?.label : "Name"}
+            {onCreateColumn && !ghostEditing && dataColumns.length === 0 && (
+              <button
+                type="button"
+                className="arbor-ghost-hover"
+                data-testid="ghost-col-open"
+                title="Add column"
+                aria-label="Add column"
+                onClick={openGhost}
+              >
+                +
+              </button>
+            )}
           </th>
-          {dataColumns.map((c) => (
+          {dataColumns.map((c, i) => (
             <th
               key={c.name}
               data-testid={`col-head-${c.name}`}
@@ -306,12 +301,23 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
                   </button>
                 )}
               </span>
+              {onCreateColumn && !ghostEditing && i === dataColumns.length - 1 && (
+                <button
+                  type="button"
+                  className="arbor-ghost-hover"
+                  data-testid="ghost-col-open"
+                  title="Add column"
+                  aria-label="Add column"
+                  onClick={openGhost}
+                >
+                  +
+                </button>
+              )}
             </th>
           ))}
-          {onCreateColumn && (
+          {onCreateColumn && ghostEditing && (
             <th className="arbor-ghost-head" data-testid="ghost-col-head">
-              {ghostEditing ? (
-                <input
+              <input
                   ref={ghostInputRef}
                   data-testid="ghost-col-input"
                   className="arbor-ghost-input"
@@ -330,19 +336,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
                     setGhostEditing(false);
                     setGhostLabel("");
                   }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="arbor-ghost-open"
-                  data-testid="ghost-col-open"
-                  title="Add column"
-                  aria-label="Add column"
-                  onClick={openGhost}
-                >
-                  +
-                </button>
-              )}
+              />
             </th>
           )}
         </tr>
@@ -382,7 +376,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             preview={preview}
             proposedCell={proposedCell}
             moved={preview ? movedNode?.(row.node.name) : undefined}
-            onGhostColumn={onCreateColumn ? openGhost : undefined}
+            ghostPad={Boolean(onCreateColumn && ghostEditing)}
           />
         ))}
       </tbody>

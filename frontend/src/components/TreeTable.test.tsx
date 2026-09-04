@@ -312,15 +312,23 @@ describe("TreeTable drag-and-drop → moveNode", () => {
     expect(p2).not.toHaveAttribute("data-drop");
   });
 });
-
 describe("ghost column quick-add", () => {
-  it("renders no ghost stub without onCreateColumn", () => {
+  it("renders no ghost affordance without onCreateColumn", () => {
     renderTable();
+    expect(screen.queryByTestId("ghost-col-open")).toBeNull();
     expect(screen.queryByTestId("ghost-col-head")).toBeNull();
-    expect(screen.queryByTestId("ghost-add-R")).toBeNull();
   });
 
-  it("header stub opens the inline editor; Enter submits the label only", () => {
+  it("idle state reserves NO blank column — only the hover + on the last header", () => {
+    renderTable({ onCreateColumn: vi.fn() });
+    expect(screen.queryByTestId("ghost-col-head")).toBeNull();
+    // Exactly one opener, and it lives inside the last data column's header.
+    const opener = screen.getByTestId("ghost-col-open");
+    const lastHead = screen.getAllByTestId(/^col-head-/).at(-1)!;
+    expect(lastHead).toContainElement(opener);
+  });
+
+  it("the hover + opens the inline editor; Enter submits the trimmed label", () => {
     const onCreateColumn = vi.fn();
     renderTable({ onCreateColumn });
     fireEvent.click(screen.getByTestId("ghost-col-open"));
@@ -328,75 +336,26 @@ describe("ghost column quick-add", () => {
     fireEvent.change(input, { target: { value: "  Due Date  " } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onCreateColumn).toHaveBeenCalledWith("Due Date");
-    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+    // Editor + its transient column dissolve after submit.
+    expect(screen.queryByTestId("ghost-col-head")).toBeNull();
   });
 
-  it("Escape cancels without creating; empty label submits nothing", () => {
+  it("Escape dissolves the ghost column without creating; empty label creates nothing", () => {
     const onCreateColumn = vi.fn();
     renderTable({ onCreateColumn });
     fireEvent.click(screen.getByTestId("ghost-col-open"));
     fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Escape" });
-    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+    expect(screen.queryByTestId("ghost-col-head")).toBeNull();
     fireEvent.click(screen.getByTestId("ghost-col-open"));
     fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Enter" });
     expect(onCreateColumn).not.toHaveBeenCalled();
   });
 
-  it("a row's hover + cell opens the same editor", () => {
-    const onCreateColumn = vi.fn();
-    renderTable({ onCreateColumn });
-    fireEvent.click(screen.getByTestId("ghost-add-R"));
-    expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
-  });
-
-  it("bumping createColumnSignal opens the editor (toolbar entry point)", () => {
-    const onCreateColumn = vi.fn();
-    const { rerender, snap } = renderTable({ onCreateColumn, createColumnSignal: 0 });
-    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
-    rerender(
-      <TreeTable
-        columns={snap.columns}
-        nodes={snap.nodes}
-        labelColumn={snap.label_column}
-        collapsed={new Set<string>()}
-        onToggle={vi.fn()}
-        pendingCell={() => false}
-        isPendingMove={() => false}
-        onCommitCell={vi.fn()}
-        onMove={vi.fn()}
-        onCreateColumn={onCreateColumn}
-        createColumnSignal={1}
-      />,
-    );
-    expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
-  });
-
-  it("does NOT reopen when the host re-renders with the same signal (post-create refetch)", () => {
-    const snap = loginAs("D");
-    const table = (onCreateColumn: (l: string) => void, signal: number) => (
-      <TreeTable
-        columns={snap.columns}
-        nodes={snap.nodes}
-        labelColumn={snap.label_column}
-        collapsed={new Set<string>()}
-        onToggle={vi.fn()}
-        pendingCell={() => false}
-        isPendingMove={() => false}
-        onCommitCell={vi.fn()}
-        onMove={vi.fn()}
-        onCreateColumn={onCreateColumn}
-        createColumnSignal={signal}
-      />
-    );
-    const cb = vi.fn();
-    const { rerender } = render(table(cb, 0));
-    rerender(table(cb, 1)); // toolbar bump → editor opens
-    const input = screen.getByTestId("ghost-col-input");
-    fireEvent.change(input, { target: { value: "Due" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
-    // Host refetch re-render: NEW callback identity, SAME signal — must stay closed.
-    rerender(table(vi.fn(), 1));
-    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+  it("while editing, each row gains one alignment pad cell", () => {
+    const { container } = renderTable({ onCreateColumn: vi.fn() });
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    const rows = screen.getAllByTestId(/^row-/);
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(rows.length);
   });
 });
