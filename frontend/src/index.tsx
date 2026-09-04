@@ -70,10 +70,11 @@ function rootForRoute(route: Route): JSX.Element {
         </main>
       );
     case "sheet":
-      // Land in the Proposed (pending-overlaid) view on entry; toggle to Live to edit.
+      // "auto": anyone with edit rights on any column lands in Live; pure
+      // readers land in the Proposed (pending-overlaid) preview.
       return (
         <ErrorBoundary label="route-sheet">
-          <App sheetName={route.sheet} initialViewMode="proposed" />
+          <App sheetName={route.sheet} initialViewMode="auto" />
         </ErrorBoundary>
       );
     case "home":

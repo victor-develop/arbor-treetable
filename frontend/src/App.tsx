@@ -4,7 +4,7 @@
 // executeAction (ARCHITECTURE §4.1(a)); the UI re-derives no ACL — affordances
 // come from snapshot hints. Taste mirrors github.com/victor-develop/React-TreeTable-Demo.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api as defaultClient,
   type ArborClient,
@@ -69,10 +69,12 @@ export type AppProps = {
   sheetName?: string;
   client?: ArborClient;
   snapshot?: Snapshot;
-  // Which view mode to land in. The app entry points pass "proposed" so a viewer
-  // sees the proposed (pending-overlaid) state on entry; defaults to "live" so
-  // tests (and the seeded standalone shell) keep the editable view.
-  initialViewMode?: ViewMode;
+  // Which view mode to land in. "live" / "proposed" force that mode; "auto"
+  // (what the app entry points pass) resolves from the viewer's ACL once the
+  // snapshot arrives — edit rights on ANY column land in Live (they came to
+  // work), pure readers land in Proposed. Defaults to "live" so tests (and the
+  // seeded standalone shell) keep the editable view.
+  initialViewMode?: ViewMode | "auto";
 };
 
 export default function App({ sheetName, client, snapshot, initialViewMode }: AppProps = {}): JSX.Element {
@@ -109,7 +111,7 @@ function ConnectedShell({
 }: {
   client: ArborClient;
   sheetName: string;
-  initialViewMode?: ViewMode;
+  initialViewMode?: ViewMode | "auto";
 }): JSX.Element {
   // Feature 2 — parse the shared ?v= token ONCE on mount (a malformed/oversize/
   // unknown-version token decodes to null → the default view). useSheet seeds its
@@ -349,7 +351,23 @@ function ConnectedShell({
   // untouched); "proposed" is a READ-ONLY preview overlaying every pending
   // proposed change (cell suggestions + open move CRs) so the user SEES the
   // hypothetical state instead of only red dots. The overlay is a pure lib.
-  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode ?? "live");
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    initialViewMode === "auto" ? "proposed" : (initialViewMode ?? "live"),
+  );
+  // "auto" resolves ONCE from the first snapshot: any can_edit column → Live.
+  // The pre-resolution state is Proposed, which is invisible in practice (the
+  // grid doesn't render until that same snapshot arrives). A later refetch
+  // never re-resolves, and a manual toggle is never overridden.
+  const viewModeResolved = useRef(initialViewMode !== "auto");
+  useEffect(() => {
+    if (viewModeResolved.current || !snap) return;
+    viewModeResolved.current = true;
+    setViewMode(snap.columns.some((c) => c.can_edit) ? "live" : "proposed");
+  }, [snap]);
+  const changeViewMode = useCallback((m: ViewMode) => {
+    viewModeResolved.current = true;
+    setViewMode(m);
+  }, []);
   // Compute the proposed overlay only when previewing (pure; cheap either way).
   // In "live" mode nothing is overlaid and the real sheet.nodes render as today.
   const overlay = useMemo(
@@ -937,7 +955,7 @@ function ConnectedShell({
             {/* Live | Proposed segmented control. "Proposed" overlays every
                 pending change as a READ-ONLY preview (cell suggestions + open
                 move CRs); "Live" restores today's editable view. */}
-            <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+            <ViewModeToggle mode={viewMode} onChange={changeViewMode} />
             <SubscriptionControl
               sheet={sheetName}
               subscribed={snap.viewer?.subscribed ?? false}

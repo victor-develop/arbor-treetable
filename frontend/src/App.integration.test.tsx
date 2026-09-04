@@ -732,3 +732,36 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     expect(screen.getByTestId("nav-dashboard").getAttribute("href")).toContain("dashboard=1");
   });
 });
+
+describe("App — auto view mode (edit rights → Live, readers → Proposed)", () => {
+  it("a viewer with edit rights on ANY column lands in Live", async () => {
+    // B owns col:name/col:notes and edits col:status.
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" initialViewMode="auto" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a pure reader (no can_edit anywhere) lands in Proposed", async () => {
+    const { client } = mockClient({ snapshot: loginAs("E") });
+    render(<App client={client} sheetName="S" initialViewMode="auto" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.getByTestId("view-mode-proposed").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("an explicit initialViewMode is NOT auto-resolved (forced Proposed stays)", async () => {
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" initialViewMode="proposed" />);
+    await screen.findByTestId("tree-table");
+    expect(screen.getByTestId("view-mode-proposed").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a manual toggle is never overridden by later snapshot refreshes", async () => {
+    const { client } = mockClient({ snapshot: loginAs("E") });
+    render(<App client={client} sheetName="S" initialViewMode="auto" />);
+    await screen.findByTestId("tree-table");
+    // Reader auto-landed in Proposed; they explicitly switch to Live.
+    fireEvent.click(screen.getByTestId("view-mode-live"));
+    expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("true");
+  });
+});
