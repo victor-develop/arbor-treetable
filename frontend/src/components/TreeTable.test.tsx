@@ -370,4 +370,33 @@ describe("ghost column quick-add", () => {
     );
     expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
   });
+
+  it("does NOT reopen when the host re-renders with the same signal (post-create refetch)", () => {
+    const snap = loginAs("D");
+    const table = (onCreateColumn: (l: string) => void, signal: number) => (
+      <TreeTable
+        columns={snap.columns}
+        nodes={snap.nodes}
+        labelColumn={snap.label_column}
+        collapsed={new Set<string>()}
+        onToggle={vi.fn()}
+        pendingCell={() => false}
+        isPendingMove={() => false}
+        onCommitCell={vi.fn()}
+        onMove={vi.fn()}
+        onCreateColumn={onCreateColumn}
+        createColumnSignal={signal}
+      />
+    );
+    const cb = vi.fn();
+    const { rerender } = render(table(cb, 0));
+    rerender(table(cb, 1)); // toolbar bump → editor opens
+    const input = screen.getByTestId("ghost-col-input");
+    fireEvent.change(input, { target: { value: "Due" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+    // Host refetch re-render: NEW callback identity, SAME signal — must stay closed.
+    rerender(table(vi.fn(), 1));
+    expect(screen.queryByTestId("ghost-col-input")).toBeNull();
+  });
 });

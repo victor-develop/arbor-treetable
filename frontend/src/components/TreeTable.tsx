@@ -135,8 +135,16 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     setGhostLabel("");
     setGhostEditing(true);
   };
+  // Open ONCE per signal bump. onCreateColumn is a fresh closure on every host
+  // render (the post-create refetch re-renders the App), so keying the effect on
+  // it would reopen the editor right after a successful create — track the
+  // last-seen signal instead.
+  const lastColumnSignal = useRef(createColumnSignal ?? 0);
   useEffect(() => {
-    if (createColumnSignal && onCreateColumn) {
+    const sig = createColumnSignal ?? 0;
+    if (sig === lastColumnSignal.current) return;
+    lastColumnSignal.current = sig;
+    if (sig && onCreateColumn) {
       setGhostLabel("");
       setGhostEditing(true);
     }
