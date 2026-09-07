@@ -153,7 +153,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     const label = ghostLabel.trim();
     const after = ghost?.after ?? null;
     closeGhost();
-    if (label && onCreateColumn) onCreateColumn(label, after);
+    if (label && createColumn) createColumn(label, after);
   };
   // Live drop indicator: which row the drag is currently over + where it would
   // land (before / inside / after), so a horizontal line (or "drop-into" tint)
@@ -187,6 +187,15 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
 
   const rows = buildVisibleRows(nodes, collapsed);
   const dataColumns = columns.filter((c) => !c.is_label);
+  // Proposed preview is READ-ONLY (same reason the per-row cluster is withheld
+  // below): no per-header "+", so the preview offers no way to write.
+  const createColumn = preview ? undefined : onCreateColumn;
+  // Where the ghost header / `<col>` / row pad go, clamped to the columns that
+  // exist right now. `ghost.index` is captured at click time; if the sheet lost
+  // a column since, an unclamped index renders none of the three and `ghost`
+  // stays set — every "+" is gated on `!ghost`, so quick add would disappear
+  // until a remount. Clamping degrades to "ghost at the end" instead.
+  const ghostIndex = ghost ? Math.min(ghost.index, dataColumns.length) : null;
 
   // Predictable per-type column widths (a user-resized width from the view wins).
   // With table-layout:fixed + a horizontal-scroll viewport, the table grows as
@@ -291,11 +300,11 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         <col className="arbor-col-label" />
         {dataColumns.map((c, i) => (
           <Fragment key={c.name}>
-            {ghost?.index === i && <col className="arbor-col-ghost" style={{ width: 180 }} />}
+            {ghostIndex === i && <col className="arbor-col-ghost" style={{ width: 180 }} />}
             <col style={{ width: colWidth(c) }} />
           </Fragment>
         ))}
-        {ghost?.index === dataColumns.length && (
+        {ghostIndex === dataColumns.length && (
           <col className="arbor-col-ghost" style={{ width: 180 }} />
         )}
       </colgroup>
@@ -303,7 +312,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
         <tr>
           <th className="arbor-label-head">
             {labelColumn ? columns.find((c) => c.name === labelColumn)?.label : "Name"}
-            {onCreateColumn && !ghost && dataColumns.length === 0 && (
+            {createColumn && !ghost && dataColumns.length === 0 && (
               <button
                 type="button"
                 className="arbor-ghost-hover"
@@ -318,7 +327,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
           </th>
           {dataColumns.map((c, i) => (
             <Fragment key={c.name}>
-              {ghost?.index === i && ghostHead}
+              {ghostIndex === i && ghostHead}
               <th
                 data-testid={`col-head-${c.name}`}
                 className={c.type === "number" ? "is-numeric" : undefined}
@@ -344,7 +353,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
                     last column that IS an append, and naming it keeps the
                     promise literal even if the sheet gained a column since
                     this render. */}
-                {onCreateColumn && !ghost && (
+                {createColumn && !ghost && (
                   <button
                     type="button"
                     className="arbor-ghost-hover"
@@ -363,7 +372,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               </th>
             </Fragment>
           ))}
-          {ghost?.index === dataColumns.length && ghostHead}
+          {ghostIndex === dataColumns.length && ghostHead}
         </tr>
       </thead>
       <tbody>
@@ -401,7 +410,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             preview={preview}
             proposedCell={proposedCell}
             moved={preview ? movedNode?.(row.node.name) : undefined}
-            ghostPadIndex={ghost ? ghost.index : null}
+            ghostPadIndex={ghostIndex}
           />
         ))}
       </tbody>

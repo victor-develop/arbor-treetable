@@ -159,30 +159,66 @@ def _resolve_after_column(sheet: str, after: Any, repo: Repository) -> str:
     """Resolve the ``after`` anchor of addColumn to a column ID in ``sheet``.
 
     ``after`` may name the anchor by its ``field`` key (all the LLM contract
-    exposes) or by its column id; both go through the repositories' shared
-    name-then-field lookup. Resolved HERE, once, so the three adapters only ever
-    receive an id they already own and can never drift on which spellings work.
+    exposes) or by its column id; both spellings resolve HERE, once, so the
+    three adapters only ever receive an id they already own and can never drift
+    on which spellings work.
 
-    A miss is a bad PARAM, not a missing row: it raises ``ValueError`` (the
-    codebase's bad-param signal, 400 at the API seam) rather than letting the
-    repo's KeyError surface as a 404. It happens inside the handler, i.e. AFTER
-    authorization, so a nonsense anchor from an authorized caller fails loudly
-    instead of quietly becoming a Change Request nobody can apply.
+    Deliberately resolved by scanning ``list_columns`` rather than by calling
+    ``get_column`` and catching its miss: a miss is signalled by a DIFFERENT
+    exception type in each adapter (frappe raises ``frappe.DoesNotExistError``,
+    which is not a ``KeyError``, so an ``except KeyError`` here silently never
+    fired on a bench and the anchor miss surfaced as a 404 instead of the 400
+    the schema promises). ``list_columns`` returns rows, never raises, and is
+    already sheet-scoped — so the decision is the CORE's on every adapter, and
+    an anchor belonging to another sheet is a miss for free.
+
+    A miss is a bad PARAM, not a missing row: ``ValueError`` is this codebase's
+    bad-param signal (400 at both API seams).
     """
+    for c in repo.list_columns(sheet):
+        if after in (c.name, c.field):
+            return c.name
+    raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
+
+
+def resolve_add_column_params(params: dict[str, Any], repo: Repository) -> dict[str, Any]:
+    """addColumn's pre-pass: rewrite ``after`` to a resolved in-sheet column id.
+
+    Runs in ``execute_action`` BEFORE the authorize-or-suggest branch, which is
+    the whole point. Validating the anchor inside the handler only covered the
+    authorized branch: an unauthorized caller's nonsense anchor was stored in a
+    Change Request instead, and approving it then raised from the handler — 400
+    on every retry, leaving the CR stuck in PROPOSED with Reject as the only
+    exit. Rejecting the anchor here makes the schema's "not in the sheet is a
+    validation error (400), never a suggestion" true on BOTH branches, and the
+    CR that does get stored carries an id rather than a field key.
+    """
+    after = params.get("after")
+    if not after:
+        return params
+    return dict(params, after=_resolve_after_column(params["sheet"], after, repo))
+
+
+def _after_for_write(sheet: str, after: Any, repo: Repository) -> Any:
+    """The anchor to hand the repository, or None to append last.
+
+    The pre-pass already rejected an unresolvable anchor on the way in, so on a
+    direct call this only re-reads the id it produced. A Change Request is
+    applied LATER, though, and replay skips the pre-pass: by approval time the
+    anchor column may have been deleted. Failing hard there would trap the CR
+    (approve 400s forever), so a vanished anchor degrades to an append — the
+    column the approver agreed to still lands, just last.
+    """
+    if not after:
+        return None
     try:
-        target = repo.get_column(sheet, after)
-    except KeyError as exc:
-        raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)") from exc
-    # get_column resolves a bare id without a sheet filter, so re-check here:
-    # an anchor from ANOTHER sheet is as invalid as one that does not exist.
-    if target.sheet != sheet:
-        raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
-    return target.name
+        return _resolve_after_column(sheet, after, repo)
+    except ValueError:
+        return None
 
 
 def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
-    after = params.get("after")
     spec = {
         "field": params["field"],
         "label": params["label"],
@@ -190,8 +226,8 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
         "options": normalize_select_options(params.get("options")),
         "column_owner": params.get("column_owner") or actor.user,
         "is_label": params.get("is_label", False),
-        # Position, already resolved to a column id (None => append last).
-        "after": _resolve_after_column(sheet, after, repo) if after else None,
+        # Position, resolved to a column id (None => append last).
+        "after": _after_for_write(sheet, params.get("after"), repo),
     }
     column = repo.create_column(sheet, spec)
     return HandlerResult(

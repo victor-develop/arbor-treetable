@@ -414,6 +414,53 @@ def test_wrong_typed_param_400(seeded):
     assert _status() == 400
 
 
+def test_unknown_after_anchor_is_400_on_both_branches(seeded):
+    """addColumn ``after`` naming no column of the sheet is a BAD PARAM — 400 —
+    on the frappe lane exactly as on the standalone one
+    (tests/standalone/test_add_column_endpoint.py), via the named method and via
+    generic dispatch, for an authorized caller AND an unauthorized one.
+
+    The four assertions are the parity this lane alone can prove. Resolving the
+    anchor off an adapter exception type gave a 404 here (frappe signals a miss
+    with ``DoesNotExistError``, not ``KeyError``), and resolving it inside the
+    handler let the non-owner's bogus anchor become an unapprovable CR.
+    """
+    api = _api()
+    for user in ("A", "C"):  # A owns the sheet's structure; C does not
+        _as(user)
+        with pytest.raises(frappe.ValidationError):
+            api.add_column(sheet=seeded["sheet"], field="n1", label="N", type="text", after="nope")
+        assert _status() == 400
+        _as(user)
+        with pytest.raises(frappe.ValidationError):
+            api.execute_action(
+                action_id="addColumn",
+                params={
+                    "sheet": seeded["sheet"], "field": "n2", "label": "N",
+                    "type": "text", "after": "nope",
+                },
+            )
+        assert _status() == 400
+
+
+def test_add_column_after_via_named_method_inserts_right_of_the_anchor(seeded):
+    """The named method accepts every schema param the generic dispatch does —
+    ``after`` included — so the two REST spellings really are parity."""
+    api = _api()
+    _as("A")
+    out = api.add_column(
+        sheet=seeded["sheet"], field="notes", label="Notes", type="text", after="status"
+    )
+    assert out["kind"] == "executed"
+    fields = [
+        c["field"]
+        for c in api.execute_action(
+            action_id="getSheetDefinition", params={"sheet": seeded["sheet"]}
+        )["data"]["columns"]
+    ]
+    assert fields[fields.index("status") + 1] == "notes"
+
+
 def test_unknown_action_id_404(seeded):
     """API-142: unknown capability via generic dispatch → 404."""
     api = _api()

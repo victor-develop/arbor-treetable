@@ -578,6 +578,9 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="sheet.structural_owner (column_creation policy)",
         emits=("COLUMN_CONFIG_UPDATED",),
         handler=handlers.add_column_handler,
+        # `after` is resolved (and a bad anchor refused) before the executor's
+        # authorize-or-suggest branch, so the 400 below holds for every caller.
+        resolve_params=handlers.resolve_add_column_params,
     ),
     Capability(
         id="updateColumn",

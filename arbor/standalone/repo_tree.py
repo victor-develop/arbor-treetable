@@ -374,7 +374,10 @@ class TreeRepoMixin:
             return len(rows) + 1
         anchor = next((r for r in rows if r.name == after), None)
         if anchor is None:
-            raise NotFoundError(f"No column {after!r} in sheet {sheet!r}")
+            # Defensive: the handler resolved this id against list_columns just
+            # now. ValueError (not NotFoundError, which is a 404) so all three
+            # repositories agree a bad anchor is a bad param — 400.
+            raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
         slot = anchor.idx + 1
         for row in rows:
             if row.idx >= slot:

@@ -23,6 +23,7 @@ from arbor.core.testing import InMemoryRepository, RecordingEventSink
 from arbor.core.types import Actor, ActorType
 
 OWNER = "owner@example.com"
+OUTSIDER = "nobody@example.com"
 
 
 def _sheet_with(*fields: str):
@@ -119,6 +120,78 @@ def test_after_a_column_of_another_sheet_is_a_validation_error():
     with pytest.raises(ValueError):
         _add(repo, sink, actor, "notes", after=foreign)
     assert _fields(repo) == ["title", "status"]
+
+
+def test_after_null_is_the_same_as_omitting_it():
+    # The schema types `after` as ["string","null"], so a caller (or an LLM) may
+    # send the key explicitly as null; it has to survive validate_schema and
+    # mean "append", not "anchor named None".
+    repo, sink, actor = _sheet_with("status")
+    _add(repo, sink, actor, "notes", after=None)
+    assert _fields(repo) == ["title", "status", "notes"]
+
+
+def test_after_the_empty_string_appends():
+    # "" passes the schema's string branch but names no column. It appends
+    # rather than 400s — identically on all three repositories, and documented
+    # here so the behavior is a decision rather than an accident.
+    repo, sink, actor = _sheet_with("status")
+    _add(repo, sink, actor, "notes", after="")
+    assert _fields(repo) == ["title", "status", "notes"]
+
+
+# --- validation applies to the SUGGEST branch too -----------------------------
+# `after` is resolved BEFORE authorize-or-suggest, so an unauthorized caller
+# gets the same 400 an owner does. Validating it inside the handler (which only
+# runs once authorized) instead let a non-owner file a Change Request whose
+# approval raised forever: 400 on every retry, CR pinned in PROPOSED, Reject the
+# only way out. Any actor with suggest rights could plant those.
+def test_an_unauthorized_caller_cannot_suggest_an_unknown_after():
+    repo, sink, _ = _sheet_with("status")
+    outsider = Actor(OUTSIDER, ActorType.HUMAN)
+    params = {"sheet": "S", "field": "notes", "label": "Notes", "type": "text", "after": "nope"}
+    with pytest.raises(ValueError):
+        execute_action("addColumn", params, outsider, repo, sink)
+    assert _fields(repo) == ["title", "status"]
+    assert repo.change_requests == {}
+
+
+def test_a_suggested_insert_stores_the_resolved_id_and_applies_on_approval():
+    repo, sink, owner = _sheet_with("status", "due")
+    outsider = Actor(OUTSIDER, ActorType.HUMAN)
+    anchor = repo.get_column("S", "status").name
+    out = execute_action(
+        "addColumn",
+        {"sheet": "S", "field": "notes", "label": "Notes", "type": "text", "after": "status"},
+        outsider,
+        repo,
+        sink,
+    )
+    assert out.kind == "suggested"
+    # The CR carries the resolved column id, not the field key the caller sent —
+    # replay never has to re-resolve a spelling.
+    assert repo.change_requests[out.change_request]["payload"]["after"] == anchor
+    execute_action("approveChange", {"change_request": out.change_request}, owner, repo, sink)
+    assert _fields(repo) == ["title", "status", "notes", "due"]
+
+
+def test_approving_an_insert_whose_anchor_was_deleted_appends_instead_of_wedging():
+    # A CR is applied later than it is filed, and replay skips the pre-pass. If a
+    # vanished anchor raised at approval time the CR would be unapprovable, so it
+    # degrades to an append: the column the approver agreed to still lands.
+    repo, sink, owner = _sheet_with("status", "due")
+    outsider = Actor(OUTSIDER, ActorType.HUMAN)
+    out = execute_action(
+        "addColumn",
+        {"sheet": "S", "field": "notes", "label": "Notes", "type": "text", "after": "status"},
+        outsider,
+        repo,
+        sink,
+    )
+    assert out.kind == "suggested"
+    execute_action("deleteColumn", {"sheet": "S", "column": "status"}, owner, repo, sink)
+    execute_action("approveChange", {"change_request": out.change_request}, owner, repo, sink)
+    assert _fields(repo) == ["title", "due", "notes"]
 
 
 # --- migration: columns that predate positioning -----------------------------

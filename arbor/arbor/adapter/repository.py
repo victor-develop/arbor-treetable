@@ -671,7 +671,10 @@ class FrappeRepository:
         if not after:
             return len(names) + 1
         if after not in names:
-            raise frappe.DoesNotExistError(f"No column {after!r} in sheet {sheet!r}")
+            # Defensive: the handler resolved this id against list_columns just
+            # now. ValueError (not DoesNotExistError, which _dispatch turns into
+            # a 404) so all three repositories agree a bad anchor is a 400.
+            raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
         slot = names.index(after) + 2  # anchor's 1-based idx, + 1
         for i, name in enumerate(names[slot - 1 :], start=slot + 1):
             frappe.db.set_value(DT_COLUMN, name, "idx", i, update_modified=False)

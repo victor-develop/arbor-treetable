@@ -127,6 +127,14 @@ def execute_action(
     if validate:
         validate_schema(params, cap.params_schema)  # 2. validate params
 
+    if cap.resolve_params is not None:
+        # 2b. resolve reference params against the repo (addColumn.after today).
+        # BEFORE the branch below on purpose: whatever the handler would refuse
+        # has to be refused on the suggest branch too, or an unauthorized caller
+        # files a Change Request whose approval raises forever (400 on every
+        # retry, CR pinned in PROPOSED, Reject the only exit).
+        params = cap.resolve_params(params, repo)
+
     if action_id in _CONTROL:
         return _dispatch_control(cap, params, actor, repo, sink)
 

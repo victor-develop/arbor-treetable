@@ -268,8 +268,10 @@ class InMemoryRepository:
     def list_columns(self, sheet: str) -> list[_Column]:
         cols = [c for c in self.columns.values() if c.sheet == sheet]
         # Stored order = idx, insertion order as the tiebreak. sorted() is
-        # stable and ``self.columns`` is insertion-ordered, so this is exactly
-        # the SQL lane's ``ORDER BY idx, creation, name``.
+        # stable and ``self.columns`` is insertion-ordered, which matches the
+        # SQL lane's ``ORDER BY idx, creation, name`` as long as creation order
+        # IS insertion order — it is on both real adapters (microsecond
+        # timestamps), so ``name`` only ever breaks a tie that cannot happen.
         return sorted(cols, key=lambda c: c.idx)
 
     def get_node(self, node: str) -> _Node:
@@ -431,7 +433,10 @@ class InMemoryRepository:
             return len(ordered) + 1
         anchor = next((c for c in ordered if c.name == after), None)
         if anchor is None:
-            raise KeyError(f"no column {after!r} in {sheet!r}")
+            # Defensive: the handler resolved this id against list_columns just
+            # now. ValueError (not KeyError) so all three repositories agree the
+            # anchor is a bad param — 400 — and none of them can turn it into a 404.
+            raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
         for c in ordered:
             if c.idx > anchor.idx:
                 c.idx += 1
@@ -440,7 +445,12 @@ class InMemoryRepository:
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None:
         c = self.get_column(sheet, column)
         for k, v in patch.items():
-            if hasattr(c, k):
+            # ``idx`` is the stored presentation order, owned by create_column's
+            # positioning pass. BOTH real adapters drop it from a column patch
+            # (their scalar allow-lists exclude it), so the oracle must too —
+            # otherwise an ordering test could go green here and be a no-op in
+            # production, on the exact field this feature depends on.
+            if k != "idx" and hasattr(c, k):
                 setattr(c, k, v)
 
     def delete_column(self, sheet: str, column: str) -> None:

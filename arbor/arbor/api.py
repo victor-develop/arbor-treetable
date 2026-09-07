@@ -912,7 +912,8 @@ def delete_node(sheet, node, cascade=True):
 
 
 @frappe.whitelist()
-def add_column(sheet, field, label, type, options=None, column_owner=None, is_label=False):
+def add_column(sheet, field, label, type, options=None, column_owner=None, is_label=False,
+               after=None):
     return _dispatch(
         "addColumn",
         {
@@ -922,6 +923,10 @@ def add_column(sheet, field, label, type, options=None, column_owner=None, is_la
             "type": type,
             "options": _coerce(options),
             "column_owner": column_owner,
+            # Insert position (a column of the same sheet, by field key or id).
+            # Named methods must accept every schema param the generic dispatch
+            # does, or the two REST spellings are not the parity api.md claims.
+            "after": after,
             "is_label": frappe.utils.cint(is_label) == 1
             if isinstance(is_label, (str, int)) else bool(is_label),
         },

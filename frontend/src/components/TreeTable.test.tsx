@@ -418,4 +418,46 @@ describe("ghost column quick-add (insert to the right)", () => {
     // No anchor exists yet, so the new column can only be appended.
     expect(onCreateColumn).toHaveBeenCalledWith("Status", null);
   });
+
+  it("keeps the open ghost visible when the sheet loses a column under it", () => {
+    // `ghost.index` is captured at click time. Unclamped, a shrunk column list
+    // renders no ghost <th>/<col>/pad while `ghost` stays set — and since every
+    // "+" is gated on !ghost, quick add would disappear until a remount.
+    const snap = loginAs("D");
+    const table = (columns: typeof snap.columns) => (
+      <TreeTable
+        columns={columns}
+        nodes={snap.nodes}
+        labelColumn={snap.label_column}
+        collapsed={new Set<string>()}
+        onToggle={vi.fn()}
+        pendingCell={() => false}
+        isPendingMove={() => false}
+        onCommitCell={vi.fn()}
+        onMove={vi.fn()}
+        onCreateColumn={vi.fn()}
+      />
+    );
+    const { container, rerender } = render(table(snap.columns));
+    const last = snap.columns.filter((c) => !c.is_label).at(-1)!;
+    fireEvent.click(screen.getByTestId(`ghost-col-open-${last.field}`));
+    expect(headOrder(container).at(-1)).toBe("ghost-col-head");
+    rerender(table(snap.columns.filter((c) => c.name !== last.name)));
+    expect(headOrder(container).at(-1)).toBe("ghost-col-head");
+    expect(container.querySelectorAll("colgroup col.arbor-col-ghost")).toHaveLength(1);
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(
+      screen.getAllByTestId(/^row-/).length,
+    );
+  });
+
+  it("preview is read-only: no + on any header, label header included", () => {
+    // Same rule as the per-row cluster above. Before this gate the Proposed
+    // preview offered one "+" per data column — every one of them a write.
+    const onCreateColumn = vi.fn();
+    renderTable({ onCreateColumn, preview: true });
+    expect(screen.queryByTestId(/^ghost-col-open/)).toBeNull();
+    const labelOnly = loginAs("D").columns.filter((c) => c.is_label);
+    renderTable({ onCreateColumn, preview: true, columns: labelOnly });
+    expect(screen.queryByTestId("ghost-col-open-label")).toBeNull();
+  });
 });
