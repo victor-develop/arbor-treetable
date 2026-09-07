@@ -7,7 +7,7 @@
 // click, and a server refusal is shown verbatim instead of swallowed.
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { loginAs, mockClient } from "../test/fixture";
 import type { AgentTokenMinted, AgentTokenView, ArborClient } from "../api";
@@ -86,6 +86,24 @@ async function openTokens() {
   fireEvent.click(await screen.findByTestId("agent-tokens-button"));
   await screen.findByTestId("agent-token-list");
 }
+
+// navigator.clipboard is UNDEFINED in jsdom — and on any non-secure origin, which
+// is why the copy feedback has to be exercised in all three states rather than
+// only in the one the test env happens to give us.
+function stubClipboard(clipboard: unknown) {
+  const had = Object.prototype.hasOwnProperty.call(navigator, "clipboard");
+  const prev = (navigator as { clipboard?: unknown }).clipboard;
+  Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
+  restoreClipboard = () => {
+    if (had) Object.defineProperty(navigator, "clipboard", { value: prev, configurable: true });
+    else delete (navigator as { clipboard?: unknown }).clipboard;
+  };
+}
+let restoreClipboard: (() => void) | null = null;
+afterEach(() => {
+  restoreClipboard?.();
+  restoreClipboard = null;
+});
 
 describe("AgentTokensModal — the viewer's own agent credentials", () => {
   it("renders the viewer's tokens with mode, scope, expiry, last use and state", async () => {
@@ -264,6 +282,112 @@ describe("AgentTokensModal — the viewer's own agent credentials", () => {
 
     const err = await screen.findByTestId("agent-token-error");
     expect(err).toHaveTextContent("Not permitted (401)");
+  });
+
+  it("says COPY BLOCKED when there is no clipboard API at all (never a false 'Copied')", async () => {
+    // The failure this pins: an optional chain (`navigator.clipboard?.writeText`)
+    // resolves to undefined WITHOUT throwing, so a missing API used to report
+    // success — the user reads "Copied", clicks Done, and the only copy of the
+    // secret is gone. jsdom has no clipboard, and neither does a non-secure origin.
+    stubClipboard(undefined);
+    const { client } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    await screen.findByTestId("agent-token-reveal");
+
+    fireEvent.click(screen.getByTestId("agent-token-copy-secret"));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-token-copy-secret")).toHaveTextContent(/copy blocked/i),
+    );
+    // and the secret is still on screen to select by hand
+    expect(screen.getByTestId("agent-token-secret")).toHaveTextContent(
+      "arbor_plaintext_secret_xyz",
+    );
+  });
+
+  it("says COPY BLOCKED when writeText rejects (permission denied)", async () => {
+    stubClipboard({ writeText: vi.fn(async () => Promise.reject(new Error("denied"))) });
+    const { client } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    await screen.findByTestId("agent-token-reveal");
+
+    fireEvent.click(screen.getByTestId("agent-token-copy-prompt"));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-token-copy-prompt")).toHaveTextContent(/copy blocked/i),
+    );
+  });
+
+  it("says Copied only when the clipboard actually took the text", async () => {
+    const writeText = vi.fn(async () => {});
+    stubClipboard({ writeText });
+    const { client } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    await screen.findByTestId("agent-token-reveal");
+
+    fireEvent.click(screen.getByTestId("agent-token-copy-secret"));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-token-copy-secret")).toHaveTextContent("Copied"),
+    );
+    expect(writeText).toHaveBeenCalledWith("arbor_plaintext_secret_xyz");
+  });
+
+  it("a backdrop click while the secret is on screen does NOT destroy it", async () => {
+    // Selecting the token by hand (what the copy-blocked message asks for) ends
+    // its click on the backdrop, and any stray click lands there too. Closing
+    // here would drop the only copy of the plaintext with no confirmation.
+    const { client } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    await screen.findByTestId("agent-token-reveal");
+
+    fireEvent.click(screen.getByTestId("agent-tokens-modal"));
+
+    expect(screen.getByTestId("agent-tokens-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-token-secret")).toHaveTextContent(
+      "arbor_plaintext_secret_xyz",
+    );
+  });
+
+  it("the ✕ is withheld while the secret is on screen — Done is the only exit", async () => {
+    const { client } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    await screen.findByTestId("agent-token-reveal");
+    expect(screen.queryByTestId("agent-tokens-close")).toBeNull();
+
+    // Acknowledging the reveal hands the ✕ back, and it closes as usual.
+    fireEvent.click(screen.getByTestId("agent-token-reveal-dismiss"));
+    fireEvent.click(screen.getByTestId("agent-tokens-close"));
+    expect(screen.queryByTestId("agent-tokens-modal")).toBeNull();
+  });
+
+  it("an absurd TTL blocks the mint (the issuer's date arithmetic would overflow)", async () => {
+    const { client, calls } = tokenClient();
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+    await openTokens();
+
+    fireEvent.change(screen.getByTestId("agent-token-ttl"), { target: { value: "999999999" } });
+    expect(screen.getByTestId("agent-token-mint")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("agent-token-mint"));
+    expect(calls.some((c) => c.method === "issue")).toBe(false);
   });
 
   it("the close button dismisses the modal", async () => {

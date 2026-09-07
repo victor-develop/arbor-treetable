@@ -534,6 +534,57 @@ describe("agent-token client", () => {
     );
   });
 
+  it("a frappe refusal is dug out of the doubly-encoded _server_messages", async () => {
+    // frappe.throw packs the user-facing message as a JSON array of JSON strings
+    // — the most fragile parse on this surface, so pin it.
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          json: async () => ({
+            _server_messages: JSON.stringify([JSON.stringify({ message: "not your token" })]),
+          }),
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.revokeAgentToken!("AT-9")).rejects.toThrow(/not your token \(403\)/);
+  });
+
+  it("a malformed _server_messages falls back to the status, it does not blow up", async () => {
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          json: async () => ({ _server_messages: "[not json" }),
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.revokeAgentToken!("AT-9")).rejects.toThrow(
+      /arbor\.revoke_agent_token failed: 403/,
+    );
+  });
+
+  it("a non-JSON `sheets` string is shown as the one scope it names", async () => {
+    // The doctype's Small Text also accepts a bare sheet name (what
+    // _parse_token_sheets tolerates server-side) — display it, don't drop it.
+    mockFetch([
+      {
+        name: "AT-7",
+        label: null,
+        mode: "read",
+        sheets: "Sheet One",
+        expires_on: null,
+        revoked: 0,
+        last_used_at: null,
+      },
+    ]);
+    const out = await api.listAgentTokens!();
+    expect(out[0].sheets).toEqual(["Sheet One"]);
+    expect(out[0].revoked).toBe(false);
+  });
+
   it("a refusal with no readable body still throws the status fallback", async () => {
     const impl = vi.fn(
       async () =>

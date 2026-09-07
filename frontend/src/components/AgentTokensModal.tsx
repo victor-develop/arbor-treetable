@@ -24,12 +24,17 @@ import type { AgentTokenMinted, AgentTokenMode, AgentTokenView, ArborClient } fr
 // every sheet the issuer can reach (the server's absent-`sheets` meaning).
 type TokenScope = "sheet" | "all";
 
-// Copy without assuming a clipboard: jsdom and a non-secure origin both lack
-// navigator.clipboard, and a failed copy must never take the reveal panel down
-// with it (that would destroy the only copy of the secret).
+// Copy without assuming a clipboard, and FAIL CLOSED when there isn't one:
+// jsdom and any non-secure origin (a self-hosted instance on plain http, the
+// frappe dev site) leave navigator.clipboard undefined. An optional chain here
+// would make that case indistinguishable from a real copy — `await undefined`
+// does not throw — so the button would say "Copied" while the only copy of the
+// secret was never taken anywhere. Absent API => false, same as a rejection.
 async function copyText(text: string): Promise<boolean> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") return false;
   try {
-    await navigator.clipboard?.writeText(text);
+    await clipboard.writeText(text);
     return true;
   } catch {
     return false;
@@ -49,11 +54,16 @@ function dayOf(ts: string | null): string {
   return /^\d{4}-\d{2}-\d{2}/.test(ts) ? ts.slice(0, 10) : ts;
 }
 
-// A whole positive number of days. The server treats ttl_days=0 as "never
-// expires", so an emptied field (Number("") === 0) must not be able to mint a
-// non-expiring credential by accident.
+// Ten years. Upper bound only so the guard is symmetric: the issuer computes
+// now + timedelta(days=N), which overflows `datetime` for an absurd N and comes
+// back as a bare 500 rather than a refusal the user can read.
+const TTL_MAX_DAYS = 3650;
+
+// A whole positive number of days, in range. The server treats ttl_days=0 as
+// "never expires", so an emptied field (Number("") === 0) must not be able to
+// mint a non-expiring credential by accident.
 function ttlValid(days: number): boolean {
-  return Number.isInteger(days) && days >= 1;
+  return Number.isInteger(days) && days >= 1 && days <= TTL_MAX_DAYS;
 }
 
 export function AgentTokensModal({
@@ -162,20 +172,29 @@ export function AgentTokensModal({
       data-testid="agent-tokens-modal"
       onClick={(e) => {
         // Backdrop click (outside the panel) closes the modal — mirrors RolesModal.
-        if (e.target === e.currentTarget) onClose();
+        // EXCEPT while the one-time reveal is up: closing drops the only copy of
+        // the plaintext, and a backdrop click is far too easy to make by accident.
+        // A selection drag that ends outside the panel lands its `click` on the
+        // nearest common ancestor — this backdrop — so without this guard the
+        // very gesture the copy-blocked message asks for would destroy the secret.
+        if (e.target === e.currentTarget && !minted) onClose();
       }}
     >
       <div className="arbor-modal arbor-agent-tokens-modal">
         <header className="arbor-modal-head">
           <span>Agent tokens</span>
-          <button
-            type="button"
-            data-testid="agent-tokens-close"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            ✕
-          </button>
+          {/* Same reason: while the secret is on screen the ONLY exit is the
+              explicit "Done — I have copied it" in the reveal panel. */}
+          {!minted && (
+            <button
+              type="button"
+              data-testid="agent-tokens-close"
+              aria-label="Close"
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          )}
         </header>
         <div className="arbor-agent-tokens-body">
           {/* Server refusals (401/403/404) land here verbatim, aria-live so the
@@ -348,6 +367,7 @@ export function AgentTokensModal({
               <input
                 type="number"
                 min={1}
+                max={TTL_MAX_DAYS}
                 data-testid="agent-token-ttl"
                 value={ttlDays}
                 onChange={(e) => setTtlDays(Number(e.target.value))}
@@ -356,7 +376,7 @@ export function AgentTokensModal({
             <button
               type="submit"
               data-testid="agent-token-mint"
-              disabled={minting || !ttlValid(ttlDays)}
+              disabled={minting || !ttlValid(ttlDays) || !client.issueAgentToken}
             >
               {minting ? "Minting…" : "Mint token"}
             </button>
