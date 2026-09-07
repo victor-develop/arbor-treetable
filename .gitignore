@@ -15,3 +15,6 @@ demo/hyperframes/*/out/
 *.mp4
 /package-lock.json
 *.db
+
+# Agent worktrees created by tooling (never part of the project)
+.claude/worktrees/
