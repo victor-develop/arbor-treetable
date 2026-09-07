@@ -30,6 +30,7 @@ import { useWhoami } from "./hooks/useWhoami";
 import { ChangeRequestPanel } from "./components/ChangeRequestPanel";
 import { GovernancePanel } from "./components/GovernancePanel";
 import { RolesModal } from "./components/RolesModal";
+import { AgentTokensModal } from "./components/AgentTokensModal";
 import { RequestRoleControl } from "./components/RequestRoleControl";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { DraftReviewBar } from "./components/DraftReviewBar";
@@ -399,6 +400,10 @@ function ConnectedShell({
   // Global Roles admin modal (admin-only, header-launched). Open/close lives here
   // so the header button toggles it and the modal renders only when open.
   const [rolesOpen, setRolesOpen] = useState(false);
+  // Agent Tokens modal (Feature: agent tokens) — NOT admin-gated: a token is
+  // minted for the viewer's own identity, so every authenticated user gets the
+  // button. Same header-launched, mounted-only-when-open shape as rolesOpen.
+  const [agentTokensOpen, setAgentTokensOpen] = useState(false);
   // Ghost-column quick add (entry: hover "+" on the last column header): the
   // submit derives the field key and lets the server default type/owner.
   const quickAddColumn = (label: string) => {
@@ -1016,6 +1021,20 @@ function ConnectedShell({
                 )}
               </button>
             )}
+            {/* Agent tokens (Feature: agent tokens). Sits next to Roles but is
+                NOT admin-gated: the token carries the VIEWER's own identity and
+                scope, so issuing one is a self-service act. */}
+            <button
+              type="button"
+              className="arbor-agent-tokens-btn"
+              data-testid="agent-tokens-button"
+              aria-haspopup="dialog"
+              aria-expanded={agentTokensOpen}
+              title="Agent tokens"
+              onClick={() => setAgentTokensOpen(true)}
+            >
+              Agent tokens
+            </button>
             {/* ImportExport moves out of the main stack into a collapsible "Data"
                 disclosure here — reclaims the prime post-table slot for governance.
                 The ImportExport API is unchanged; only its mount point moves. */}
@@ -1309,6 +1328,18 @@ function ConnectedShell({
                 onSetUser={(p) => {
                   if (client.setUser) void client.setUser(p).then(refreshUsers).catch(() => {});
                 }}
+              />
+            </ErrorBoundary>
+          )}
+          {/* Agent Tokens modal — self-service, mounted only when open. It owns
+              its own token list (client.listAgentTokens) and passes the sheet in
+              view so a minted token defaults to that sheet alone. */}
+          {agentTokensOpen && (
+            <ErrorBoundary label="agent-tokens-modal">
+              <AgentTokensModal
+                sheet={sheetName}
+                client={client}
+                onClose={() => setAgentTokensOpen(false)}
               />
             </ErrorBoundary>
           )}

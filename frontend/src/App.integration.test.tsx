@@ -731,6 +731,22 @@ describe("App — ProcessConfigPanel wiring (Feature: process)", () => {
     expect(screen.getByTestId("nav-inbox").getAttribute("href")).toBe("?inbox=1");
     expect(screen.getByTestId("nav-dashboard").getAttribute("href")).toContain("dashboard=1");
   });
+
+  it("the Agent tokens header button opens the modal (self-service — no admin gate)", async () => {
+    // B is neither the structural owner nor an admin: a token carries the
+    // viewer's OWN identity, so the entry is available to every user.
+    const { client } = mockClient({ snapshot: loginAs("B") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    const btn = await screen.findByTestId("agent-tokens-button");
+    // Not mounted until the button is clicked.
+    expect(screen.queryByTestId("agent-tokens-modal")).toBeNull();
+
+    fireEvent.click(btn);
+    const modal = await screen.findByTestId("agent-tokens-modal");
+    expect(within(modal).getByTestId("agent-token-mint-form")).toBeInTheDocument();
+  });
 });
 
 describe("App — auto view mode (edit rights → Live, readers → Proposed)", () => {

@@ -579,6 +579,114 @@ export type WebhookDeliveryView = {
   last_response: string | null;
 };
 
+// ---- Arbor Agent Tokens (Feature: agent tokens) ----------------------------
+// One of the viewer's OWN tokens as returned by arbor.list_agent_tokens —
+// METADATA ONLY. The secret is hashed server-side and is never returned again by
+// any endpoint, so there is deliberately no `token` field here.
+//
+// A token is BOTH identity and scope: the single `X-Arbor-Agent-Token` header
+// authenticates as the issuing user AND caps what that request may do — `mode`
+// read-vs-write, plus `sheets` as an optional allow-list (null/[] = every sheet
+// the issuer can reach).
+export type AgentTokenView = {
+  token_id: string;
+  label: string | null;
+  mode: AgentTokenMode;
+  sheets: string[] | null;
+  expires_on: string | null;
+  revoked: boolean;
+  last_used_at: string | null;
+};
+
+export type AgentTokenMode = "read" | "write";
+
+// The mint result — the ONLY time the plaintext `token` and the ready-to-paste
+// `bootstrap_prompt` (which embeds it) ever exist client-side. Nothing may cache
+// them: once the reveal panel is dismissed the secret is gone for good.
+export type AgentTokenMinted = {
+  token_id: string;
+  token: string;
+  mode: AgentTokenMode;
+  sheets: string[] | null;
+  expires_on: string | null;
+  bootstrap_prompt: string;
+};
+
+// The two adapters spell a token row slightly differently (the frappe face
+// returns the doctype's `name` and its raw JSON `sheets` string / 0-1 `revoked`;
+// the standalone face already returns `token_id` + a parsed list). Normalize
+// HERE so the component sees one shape and neither adapter has to move.
+function normalizeAgentToken(raw: Record<string, unknown>): AgentTokenView {
+  const sheets = raw.sheets;
+  let parsed: string[] | null = null;
+  if (Array.isArray(sheets)) parsed = sheets.map(String);
+  else if (typeof sheets === "string" && sheets.trim() !== "") {
+    try {
+      const j: unknown = JSON.parse(sheets);
+      if (Array.isArray(j)) parsed = j.map(String);
+      else parsed = [sheets];
+    } catch {
+      parsed = [sheets];
+    }
+  }
+  return {
+    token_id: String(raw.token_id ?? raw.name ?? ""),
+    label: raw.label == null ? null : String(raw.label),
+    mode: raw.mode === "read" ? "read" : "write",
+    sheets: parsed && parsed.length > 0 ? parsed : null,
+    expires_on: raw.expires_on == null ? null : String(raw.expires_on),
+    revoked: Boolean(raw.revoked),
+    last_used_at: raw.last_used_at == null ? null : String(raw.last_used_at),
+  };
+}
+
+// Why this exists next to `post`: on the token surface the REASON for a refusal
+// IS the actionable content — "An agent token cannot mint tokens" (403),
+// "not your token" (403), "No such token" (404). `post`'s "<method> failed:
+// <status>" throws that reason away, and a silently swallowed failure here has
+// already been a real bug in this codebase. So read the body's message (FastAPI
+// `detail`, frappe `message`/`_server_messages`) and keep the status as a
+// fallback. Every other write keeps using `post` unchanged.
+async function postDetailed<T>(method: string, body: unknown): Promise<T> {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(await authHeaderProvider()),
+  };
+  const res = await fetchImpl(`/api/method/${method}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await serverMessage(res, method));
+  return unwrap<T>(await res.json());
+}
+
+// Best-effort human reason for a non-ok response; never throws (a body that is
+// empty or not JSON just falls back to "<method> failed: <status>").
+async function serverMessage(res: Response, method: string): Promise<string> {
+  const fallback = `${method} failed: ${res.status}`;
+  try {
+    const body: unknown = await res.json();
+    if (!body || typeof body !== "object") return fallback;
+    const b = body as Record<string, unknown>;
+    const detail = b.detail ?? b.message ?? b.exception;
+    if (typeof detail === "string" && detail.trim()) return `${detail} (${res.status})`;
+    // frappe packs user-facing throws into a JSON-encoded array of JSON strings.
+    if (typeof b._server_messages === "string") {
+      const msgs: unknown = JSON.parse(b._server_messages);
+      const first = Array.isArray(msgs) ? msgs[0] : null;
+      if (typeof first === "string") {
+        const inner: unknown = JSON.parse(first);
+        const m = (inner as { message?: unknown })?.message;
+        if (typeof m === "string" && m.trim()) return `${m} (${res.status})`;
+      }
+    }
+  } catch {
+    // fall through to the status-only fallback
+  }
+  return fallback;
+}
+
 export type ArborClient = {
   executeAction: (actionId: string, params: Record<string, unknown>) => Promise<Outcome>;
   getSheetSnapshot: (sheet: string) => Promise<Snapshot>;
@@ -724,6 +832,21 @@ export type ArborClient = {
   ) => Promise<WebhookEndpointView>;
   deleteWebhook?: (endpoint: string) => Promise<{ ok: boolean }>;
   testWebhook?: (endpoint: string) => Promise<{ delivery: string | null; status: string | null }>;
+  // Arbor Agent Tokens (Feature: agent tokens) — the viewer's OWN credentials for
+  // an external LLM agent. Session-auth only server-side: a request already
+  // authenticated BY a token gets 403 on issue (no self-propagating credentials).
+  // `issueAgentToken` returns the plaintext secret + bootstrap prompt exactly
+  // ONCE; `listAgentTokens` never returns a secret again, and there is no reveal
+  // or regenerate endpoint — a lost token can only be replaced by minting a new
+  // one. All optional so the many mocked test clients keep type-checking.
+  issueAgentToken?: (params: {
+    label?: string;
+    mode: AgentTokenMode;
+    sheets?: string[];
+    ttl_days?: number;
+  }) => Promise<AgentTokenMinted>;
+  listAgentTokens?: () => Promise<AgentTokenView[]>;
+  revokeAgentToken?: (token_id: string) => Promise<{ token_id: string; revoked: boolean }>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   // `sheet` is nullable: a falsy sheet is a WORKSPACE session (the sheet-less
@@ -1003,6 +1126,28 @@ export const api: ArborClient = {
   deleteWebhook: (endpoint) => post<{ ok: boolean }>("arbor.delete_webhook", { endpoint }),
   testWebhook: (endpoint) =>
     post<{ delivery: string | null; status: string | null }>("arbor.test_webhook", { endpoint }),
+
+  // Agent tokens — the writes go through postDetailed (the refusal REASON is the
+  // point on this surface); list is a GET mirroring the listRoles header pattern.
+  // Only send `sheets` when the token is sheet-scoped: an omitted key means "all
+  // sheets" server-side, and an empty array must not be mistaken for a scope.
+  issueAgentToken: ({ label, mode, sheets, ttl_days }) =>
+    postDetailed<AgentTokenMinted>("arbor.issue_agent_token", {
+      mode,
+      ...(label === undefined ? {} : { label }),
+      ...(sheets === undefined || sheets.length === 0 ? {} : { sheets }),
+      ...(ttl_days === undefined ? {} : { ttl_days }),
+    }),
+
+  listAgentTokens: async () => {
+    const headers = await authHeaderProvider();
+    const res = await fetchImpl(`/api/method/arbor.list_agent_tokens`, { headers });
+    if (!res.ok) throw new Error(await serverMessage(res, "list_agent_tokens"));
+    return unwrap<Record<string, unknown>[]>(await res.json()).map(normalizeAgentToken);
+  },
+
+  revokeAgentToken: (token_id) =>
+    postDetailed<{ token_id: string; revoked: boolean }>("arbor.revoke_agent_token", { token_id }),
 
   agentChat: async (sheet, message, onFrame) => {
     const headers = {
