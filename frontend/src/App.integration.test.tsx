@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import App from "./App";
 import { loginAs, mockClient } from "./test/fixture";
@@ -739,20 +739,33 @@ describe("App — auto view mode (edit rights → Live, readers → Proposed)", 
     const { client } = mockClient({ snapshot: loginAs("B") });
     render(<App client={client} sheetName="S" initialViewMode="auto" />);
     await screen.findByTestId("tree-table");
-    expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("true");
+    // waitFor, not a bare expect: the auto-resolution runs in a passive effect
+    // whose re-render can land after the grid is queryable, so a synchronous
+    // assertion here reads the pre-resolution mode and fails by scheduling luck.
+    await waitFor(() =>
+      expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("true"),
+    );
   });
 
   it("a pure reader (no can_edit anywhere) lands in Proposed", async () => {
     const { client } = mockClient({ snapshot: loginAs("E") });
     render(<App client={client} sheetName="S" initialViewMode="auto" />);
     await screen.findByTestId("tree-table");
+    // Proposed is ALSO the pre-resolution default, so flush the passive effects
+    // first — otherwise this test would pass even if resolution never ran, and
+    // a wrong flip to Live landing one tick later would go unnoticed.
+    await act(async () => {});
     expect(screen.getByTestId("view-mode-proposed").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("false");
   });
 
   it("an explicit initialViewMode is NOT auto-resolved (forced Proposed stays)", async () => {
+    // B has edit rights, so auto WOULD pick Live — the flush is what makes this
+    // a real proof that an explicit mode is never overridden.
     const { client } = mockClient({ snapshot: loginAs("B") });
     render(<App client={client} sheetName="S" initialViewMode="proposed" />);
     await screen.findByTestId("tree-table");
+    await act(async () => {});
     expect(screen.getByTestId("view-mode-proposed").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -760,8 +773,11 @@ describe("App — auto view mode (edit rights → Live, readers → Proposed)", 
     const { client } = mockClient({ snapshot: loginAs("E") });
     render(<App client={client} sheetName="S" initialViewMode="auto" />);
     await screen.findByTestId("tree-table");
-    // Reader auto-landed in Proposed; they explicitly switch to Live.
+    // Reader auto-landed in Proposed; they explicitly switch to Live. The flush
+    // afterwards is the point: a later snapshot-driven re-resolution must not
+    // drag them back to Proposed.
     fireEvent.click(screen.getByTestId("view-mode-live"));
+    await act(async () => {});
     expect(screen.getByTestId("view-mode-live").getAttribute("aria-pressed")).toBe("true");
   });
 });
