@@ -155,8 +155,34 @@ def normalize_select_options(options: Any) -> Any:
     return None
 
 
+def _resolve_after_column(sheet: str, after: Any, repo: Repository) -> str:
+    """Resolve the ``after`` anchor of addColumn to a column ID in ``sheet``.
+
+    ``after`` may name the anchor by its ``field`` key (all the LLM contract
+    exposes) or by its column id; both go through the repositories' shared
+    name-then-field lookup. Resolved HERE, once, so the three adapters only ever
+    receive an id they already own and can never drift on which spellings work.
+
+    A miss is a bad PARAM, not a missing row: it raises ``ValueError`` (the
+    codebase's bad-param signal, 400 at the API seam) rather than letting the
+    repo's KeyError surface as a 404. It happens inside the handler, i.e. AFTER
+    authorization, so a nonsense anchor from an authorized caller fails loudly
+    instead of quietly becoming a Change Request nobody can apply.
+    """
+    try:
+        target = repo.get_column(sheet, after)
+    except KeyError as exc:
+        raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)") from exc
+    # get_column resolves a bare id without a sheet filter, so re-check here:
+    # an anchor from ANOTHER sheet is as invalid as one that does not exist.
+    if target.sheet != sheet:
+        raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
+    return target.name
+
+
 def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
+    after = params.get("after")
     spec = {
         "field": params["field"],
         "label": params["label"],
@@ -164,6 +190,8 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
         "options": normalize_select_options(params.get("options")),
         "column_owner": params.get("column_owner") or actor.user,
         "is_label": params.get("is_label", False),
+        # Position, already resolved to a column id (None => append last).
+        "after": _resolve_after_column(sheet, after, repo) if after else None,
     }
     column = repo.create_column(sheet, spec)
     return HandlerResult(

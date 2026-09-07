@@ -168,6 +168,20 @@ _S_ADD_COLUMN = {
         "options": {"type": ["object", "null"]},
         "column_owner": {"type": "string"},
         "is_label": {"type": "boolean", "default": False},
+        # Stored position, NOT a per-viewer overlay: the new column lands
+        # immediately to the right of ``after`` for everyone (API + agents
+        # included). Names an existing column of the same sheet by its `field`
+        # key or its column id — the LLM contract only ever sees fields, so
+        # both resolve. Omitted => appended last.
+        "after": {
+            "type": ["string", "null"],
+            "description": (
+                "Insert the new column immediately to the RIGHT of this existing "
+                "column of the same sheet, given by its field key or its column id. "
+                "Omit to append the new column last. A column that is not in the "
+                "sheet is a validation error (400), never a suggestion."
+            ),
+        },
     },
 }
 _S_UPDATE_COLUMN = {

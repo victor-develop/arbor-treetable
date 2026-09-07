@@ -3,7 +3,7 @@
 // (resolved from the is_label column value, WEB_UI-002), and one Cell per
 // column. Drag/drop reports a (position) to the parent which computes moveNode.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { CellCommentSummary, Snapshot, SnapshotColumn, SnapshotNode } from "../api";
 import type { DropPosition, TreeRow as Row } from "../lib/tree";
 import { Cell } from "./cells/Cell";
@@ -29,7 +29,7 @@ export function TreeRow({
   dropPosition,
   onDrop,
   onAddChild,
-  ghostPad,
+  ghostPadIndex,
   onAddSibling,
   onEdit,
   onDelete,
@@ -78,9 +78,11 @@ export function TreeRow({
   // (a non-owner click files a CR, same as "Suggest column") — NOT gated on
   // can_change_structure, unlike delete.
   onAddChild?: (node: SnapshotNode) => void;
-  // True while the table's ghost-column editor is open: pad the row with one
-  // empty trailing cell so the body stays aligned with the transient header.
-  ghostPad?: boolean;
+  // Where the table's ghost-column editor is open, as an index AMONG THE DATA
+  // COLUMNS: the row grows one empty pad cell at that slot so the body stays
+  // aligned with the transient header (which the table splices in at the same
+  // index). null while no editor is open — nothing is reserved when idle.
+  ghostPadIndex?: number | null;
   // Add a SIBLING of this node (a new node under the same parent). Optional;
   // rendered for EVERYONE when supplied (a non-owner click files a CR), exactly
   // like add-child — NOT gated on can_change_structure.
@@ -110,6 +112,9 @@ export function TreeRow({
 
   const labelCol = labelColumn ? columns.find((c) => c.name === labelColumn) : undefined;
   const labelText = labelColumn ? renderLabel(node, labelColumn) : node.name;
+  // Same filter (and therefore the same indexing) the table's header uses, so
+  // `ghostPadIndex` refers to the identical slot in both.
+  const dataColumns = columns.filter((c) => !c.is_label);
 
   return (
     <tr
@@ -295,9 +300,7 @@ export function TreeRow({
         )}
         </div>
       </td>
-      {columns
-        .filter((c) => !c.is_label)
-        .map((c) => {
+      {dataColumns.map((c, i) => {
           const v = node.values[c.name];
           const isSplit =
             c.type === "single-select-split" || c.type === "multi-select-split";
@@ -307,8 +310,9 @@ export function TreeRow({
           // and the parent-vs-leaf hierarchy reads clearly.
           const placeholder = hasChildren && isSplit && empty;
           return (
+            <Fragment key={c.name}>
+            {ghostPadIndex === i && <td className="arbor-ghost-cell" />}
             <td
-              key={c.name}
               className={`arbor-data-cell${c.type === "number" ? " is-numeric" : ""}`}
               data-column={c.name}
             >
@@ -334,9 +338,10 @@ export function TreeRow({
                 />
               )}
             </td>
+            </Fragment>
           );
         })}
-      {ghostPad && <td className="arbor-ghost-cell" />}
+      {ghostPadIndex === dataColumns.length && <td className="arbor-ghost-cell" />}
     </tr>
   );
 }

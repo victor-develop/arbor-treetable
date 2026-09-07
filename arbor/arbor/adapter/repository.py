@@ -653,7 +653,32 @@ class FrappeRepository:
         frappe.delete_doc(DT_NODE, node, force=True, ignore_permissions=True)
         return deleted
 
+    def _position_column(self, sheet: str, after: Optional[str]) -> int:
+        """Make room in the sheet's ``idx`` sequence and return the new slot.
+
+        Columns predating positioning were never given an ``idx`` (only
+        ``creation`` ordered them), so the sheet is FIRST renumbered 1..N in the
+        order ``list_columns`` reports today — positioning against a wall of
+        equal idx values would scramble live sheets. ``after`` is an in-sheet
+        column id (``add_column_handler`` resolved it): the new column takes the
+        slot right after it, everything further right shifts by one. No
+        ``after`` appends last."""
+        names = frappe.get_all(
+            DT_COLUMN, filters={"sheet": sheet}, order_by="idx asc, creation asc", pluck="name"
+        )
+        for i, name in enumerate(names, start=1):
+            frappe.db.set_value(DT_COLUMN, name, "idx", i, update_modified=False)
+        if not after:
+            return len(names) + 1
+        if after not in names:
+            raise frappe.DoesNotExistError(f"No column {after!r} in sheet {sheet!r}")
+        slot = names.index(after) + 2  # anchor's 1-based idx, + 1
+        for i, name in enumerate(names[slot - 1 :], start=slot + 1):
+            frappe.db.set_value(DT_COLUMN, name, "idx", i, update_modified=False)
+        return slot
+
     def create_column(self, sheet: str, spec: dict[str, Any]) -> str:
+        idx = self._position_column(sheet, spec.get("after"))
         doc = frappe.new_doc(DT_COLUMN)
         doc.sheet = sheet
         doc.field = spec["field"]
@@ -663,6 +688,7 @@ class FrappeRepository:
         doc.column_owner = spec.get("column_owner") or ""
         doc.is_label = 1 if spec.get("is_label") else 0
         doc.editable = 1
+        doc.idx = idx
         doc.read_level = spec.get("read_level") or "public"
         for u in spec.get("editors") or []:
             doc.append("editors", {"user": u})
