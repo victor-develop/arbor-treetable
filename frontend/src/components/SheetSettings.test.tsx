@@ -187,3 +187,67 @@ describe("SheetSettings", () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 });
+
+describe("SheetSettings — a failed seed read is recoverable in place", () => {
+  // The seed read is the only thing between an open modal and a usable panel,
+  // and it used to be strictly one-shot: a single transient failure (a rolling
+  // deploy swapping the container mid-click, a VPN blip) left the modal stuck
+  // with no way out but reloading the whole page.
+  function clientThatFailsThenWorks(): { client: ArborClient; calls: number[] } {
+    const base = mockClient();
+    const calls: number[] = [];
+    const client: ArborClient = {
+      ...base.client,
+      getSheetDefinition: async () => {
+        calls.push(calls.length + 1);
+        if (calls.length === 1) throw new Error("get_sheet_definition failed: 502");
+        return DEF;
+      },
+      listWebhooks: async () => [],
+    };
+    return { client, calls };
+  }
+
+  function renderWith(client: ArborClient) {
+    render(
+      <SheetSettings
+        sheet="S"
+        client={client}
+        canConfigProcess
+        onClose={vi.fn()}
+        onDefineProcess={vi.fn()}
+        onEnableProcess={vi.fn()}
+        onDisableProcess={vi.fn()}
+        onAddColumn={vi.fn()}
+        onUpdateColumn={vi.fn()}
+        onDeleteColumn={vi.fn()}
+        onGrantColumn={vi.fn()}
+      />,
+    );
+  }
+
+  it("surfaces the failure verbatim and offers a retry that works", async () => {
+    const { client, calls } = clientThatFailsThenWorks();
+    renderWith(client);
+
+    const banner = await screen.findByTestId("settings-error");
+    expect(banner).toHaveTextContent("502");
+    // The tab strip stays usable while the body is unavailable.
+    expect(screen.getByTestId("settings-tabs")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("settings-retry"));
+
+    await waitFor(() => expect(screen.getByTestId("settings-columns")).toBeInTheDocument());
+    expect(screen.queryByTestId("settings-error")).toBeNull();
+    expect(calls).toEqual([1, 2]); // one failed read, one successful retry
+  });
+
+  it("does not strand the panel on its loading line after a failure", async () => {
+    const { client } = clientThatFailsThenWorks();
+    renderWith(client);
+    await screen.findByTestId("settings-error");
+    // Loading and error are mutually exclusive: a stuck "Loading…" with no
+    // error is the shape that reads as "it crashed" to a user.
+    expect(screen.queryByTestId("settings-loading")).toBeNull();
+  });
+});

@@ -4960,3 +4960,17 @@ th:hover .arbor-ghost-hover, .arbor-ghost-hover:focus-visible { opacity: 1; }
 .arbor-view-share { padding: 2px 2px 6px; }
 .arbor-view-save-order { width: 100%; font-size: 12px; }
 .arbor-view-share-blocked { margin: 0; font-size: 11px; line-height: 1.35; color: var(--ink-subtle); }
+
+/* Settings' seed-read error carries its own retry: the read is the only thing
+   between an open modal and a usable panel, so a transient failure must be
+   recoverable in place rather than by reloading the page. */
+.arbor-settings-retry {
+  margin-left: 10px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
