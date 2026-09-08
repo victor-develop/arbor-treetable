@@ -38,6 +38,8 @@ import os
 import re
 import secrets as _secrets
 import socket
+import asyncio
+import logging
 import threading
 import urllib.error
 import urllib.request
@@ -47,9 +49,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 # PURE (bench-free) lanes reused verbatim — these modules never import frappe
@@ -122,6 +125,7 @@ from .auth import (
 )
 from .db import create_all, make_engine, make_session_factory
 from .errors import ConflictError, StaleMoveError, StaleVersionError
+from .realtime import hub, stream_frames
 from .repository import CellDraft, SheetSavedView, SQLEventSink, SQLRepository
 from .snapshot import build_sheet_snapshot
 
@@ -134,6 +138,9 @@ SessionLocal = make_session_factory(ENGINE)
 # Share ONE engine/pool with the auth lane (its session-cookie login routes +
 # get_current_actor read the same users/impersonation tables).
 configure_auth(SessionLocal)
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -879,6 +886,9 @@ def _sla_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # The realtime hub fans out from worker threads onto THIS loop, so it has to
+    # learn which loop is serving before any publish can reach a subscriber.
+    hub.bind_loop(asyncio.get_running_loop())
     # Background runners (no celery/redis): webhook retries on the core backoff
     # schedule (a 30s tick is fine-grained enough for the 30s slot) and the
     # process SLA sweep (frappe ran both on the per-minute scheduler).
@@ -2025,7 +2035,10 @@ def _can_resolve_comment(repo: SQLRepository, sheet: str, column: str, actor: Ac
 
 @app.post("/api/method/arbor.add_cell_comment")
 def add_cell_comment(
-    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+    request: Request,
+    background: BackgroundTasks,
+    payload: dict | None = Body(None),
+    session: Session = Depends(get_db),
 ):
     """Post a comment (or reply). THIN over the ``addComment`` capability, plus
     the api-layer extras the frappe shim carried: 400 empty body, 404 unknown
@@ -2103,6 +2116,13 @@ def add_cell_comment(
             }
         )
 
+    # Commit BEFORE scheduling the marker: background tasks run ahead of the
+    # session dependency's teardown, so publishing without this would announce
+    # a row no refetch can see yet. The notification rows above only reach
+    # approvers/mentions; the marker reaches everyone watching the stream.
+    session.commit()
+    background.add_task(_publish_comment_signal, sheet, column)
+
     return _msg({"name": comment_name, "thread_root": thread_root, "mentions": mentions})
 
 
@@ -2148,24 +2168,144 @@ def list_cell_comments(
 
 @app.post("/api/method/arbor.resolve_cell_comment")
 def resolve_cell_comment(
-    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+    request: Request,
+    background: BackgroundTasks,
+    payload: dict | None = Body(None),
+    session: Session = Depends(get_db),
 ):
     payload = payload or {}
     want = bool(payload.get("resolved", True))
+    # Read the target BEFORE dispatching: the signal needs the (sheet, column)
+    # this comment lives on, and only the comment id is in the payload.
+    target = session.get(m.CellComment, str(payload.get("comment") or ""))
     outcome = _dispatch(
         request, session, "resolveComment", {"comment": payload.get("comment"), "resolved": want}
     )
     data = outcome.get("data") or {}
+    if target is not None:
+        session.commit()  # see add_cell_comment: the marker must follow the commit
+        background.add_task(_publish_comment_signal, target.sheet, target.column)
     return _msg({"name": data.get("comment"), "resolved": bool(data.get("resolved"))})
 
 
 @app.post("/api/method/arbor.delete_cell_comment")
 def delete_cell_comment(
-    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+    request: Request,
+    background: BackgroundTasks,
+    payload: dict | None = Body(None),
+    session: Session = Depends(get_db),
 ):
     payload = payload or {}
+    # Same reason as resolve: capture (sheet, column) while the row is in hand.
+    target = session.get(m.CellComment, str(payload.get("comment") or ""))
     _dispatch(request, session, "deleteComment", {"comment": payload.get("comment")})
+    if target is not None:
+        session.commit()  # see add_cell_comment: the marker must follow the commit
+        background.add_task(_publish_comment_signal, target.sheet, target.column)
     return _msg({"ok": True, "tombstoned": True})
+
+
+# ---- realtime signals (SSE) ---------------------------------------------------------
+def _publish_comment_signal(sheet: str, column: str) -> None:
+    """Tell this sheet's subscribers that its comments changed.
+
+    Runs as a background task. Background tasks execute BEFORE a plain
+    ``Depends(get_db)`` tears down (measured, not assumed: default scope gives
+    background-then-commit), so each caller commits EXPLICITLY before scheduling
+    this. Publishing against an uncommitted write would push a marker whose data
+    a refetch cannot see yet — and no second marker follows, so the comment
+    would silently never appear, which is the exact bug this feature exists to
+    fix. Committing first also means the per-subscriber ACL queries below run
+    outside the write transaction instead of extending its row locks.
+
+    Opens its own session: the request's may already be closed by the time a
+    background task runs, and it must not share a session across threads.
+
+    The per-subscriber gate is the point: a comment on a column the subscriber
+    cannot read is not delivered at all. Without it the mere timing of a signal
+    would reveal that a column they cannot see exists and is being worked on.
+    A missing column (deleted between write and publish) delivers to nobody,
+    which is the safe direction. The decision is memoized per user for the life
+    of this publish — otherwise every open tab costs its own approver lookup.
+    """
+    try:
+        with SessionLocal() as session:
+            repo = _repo(session)
+            try:
+                col = repo.get_column(sheet, column)
+            except KeyError:
+                return
+            decided: dict[str, bool] = {}
+
+            def can_deliver(actor: Actor) -> bool:
+                cached = decided.get(actor.user)
+                if cached is None:
+                    cached = can_read_column(repo, sheet, col, actor)
+                    decided[actor.user] = cached
+                return cached
+
+            hub.publish(sheet, "comments", can_deliver=can_deliver)
+    except Exception:
+        # A dropped marker costs one stale badge until the next refetch; an
+        # exception escaping a background task would be a 500 on a write that
+        # already succeeded.
+        logger.exception("realtime: failed to publish comment signal for %s", sheet)
+
+
+@app.get("/api/method/arbor.events")
+async def sheet_events(request: Request, sheet: str):
+    """Subscribe to this sheet's realtime signals as an SSE stream.
+
+    Signals carry NO content (see ``realtime`` module docs): each one means
+    "refetch". The gate mirrors ``get_sheet_snapshot`` exactly — an
+    authenticated caller, an existing sheet, AND the agent-token scope — because
+    a live subscription is a read: a sheet-scoped token that could subscribe
+    outside its ceiling would receive a signal per comment there, and the
+    404-vs-200 split alone would let it enumerate sheet names.
+
+    ``async def`` on purpose: the session lane is synchronous SQLAlchemy, so the
+    auth + existence check is pushed to a worker thread and the stream itself
+    holds NO database session. A sync handler here would pin the single worker's
+    event loop for the life of every connection.
+    """
+    def _authorize() -> Actor:
+        with SessionLocal() as session:
+            repo = _repo(session)
+            actor = _actor(request, repo)  # raises 401 without a credential
+            _enforce_agent_scope(request, session, actor, "getSheetSnapshot", {"sheet": sheet})
+            if session.get(m.Sheet, sheet) is None:
+                raise HTTPException(status_code=404, detail=f"No such sheet {sheet}")
+            return actor
+
+    actor = await run_in_threadpool(_authorize)
+
+    async def stream():
+        # Subscribe INSIDE the generator so the subscription and its cleanup
+        # share one lifetime. Subscribing in the handler instead would leak a
+        # subscription on any path where the generator is never started (an
+        # outer layer dropping the response), and each leaked one then costs an
+        # ACL evaluation on every publish, forever.
+        sub = hub.subscribe(sheet, actor)
+        try:
+            async for frame in stream_frames(sub.queue):
+                yield frame
+        finally:
+            # Client disconnect, server shutdown and cancellation all land here.
+            hub.unsubscribe(sub.sid)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            # no-transform stops a proxy from gzipping (and thus buffering) the
+            # stream; X-Accel-Buffering is the nginx-family opt-out. TLS
+            # terminates at a platform proxy here, so both are load-bearing.
+            # NOT Connection: keep-alive — that is a hop-by-hop header an ASGI
+            # app must not set, and it buys nothing on HTTP/1.1.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---- process / SLA reads (Area 3) ---------------------------------------------------
