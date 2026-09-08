@@ -207,3 +207,100 @@ describe("ViewMenu — drag-to-reorder", () => {
     );
   });
 });
+
+// "Save order for everyone" — the ONE explicit promotion of a local arrangement
+// to the shared stored order. ViewMenu still issues zero executeAction: it hands
+// the host the resolved order and the host dispatches setColumnOrder.
+describe("ViewMenu — save order for everyone", () => {
+  it("is not offered when the local order matches the shared (snapshot) order", () => {
+    render(
+      <ViewMenu columns={COLS} view={baseView} onChange={vi.fn()} onSaveSharedOrder={vi.fn()} />,
+    );
+    // Nothing to save — a dead button is worse than no button.
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("is not offered when the host passes no handler at all", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("appears once the local order differs, and emits the COMPLETE resolved order", () => {
+    const executeAction = vi.fn();
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+        client={{ executeAction } as never}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    // ViewMenu never mutates; the HOST dispatches what it is handed.
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("emits hidden columns too (the shared order names every non-label column)", () => {
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: ["col:budget"], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("never emits the label column", () => {
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:name", "col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("is not offered when the override merely names the columns in snapshot order", () => {
+    // A view whose order equals the stored order is not a difference worth a
+    // round-trip, even though `order` is non-empty.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:status", "col:budget"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("hiding a column is NOT a reason to offer the shared-order save", () => {
+    // Visibility is personal; only the ORDER is shareable through this button.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: ["col:budget"], order: [] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+});

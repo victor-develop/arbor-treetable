@@ -934,6 +934,14 @@ def add_column(sheet, field, label, type, options=None, column_owner=None, is_la
 
 
 @frappe.whitelist()
+def set_column_order(sheet, order=None):
+    # ``order`` is the COMPLETE left-to-right ordering of the sheet's non-label
+    # columns (field keys or column ids); _coerce so a form-encoded JSON array
+    # arrives as a real list. A bad list is a 400 from the executor's pre-pass.
+    return _dispatch("setColumnOrder", {"sheet": sheet, "order": _coerce(order) or []})
+
+
+@frappe.whitelist()
 def update_column(sheet, column, patch=None):
     return _dispatch(
         "updateColumn", {"sheet": sheet, "column": column, "patch": _coerce(patch) or {}}

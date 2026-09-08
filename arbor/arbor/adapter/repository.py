@@ -700,6 +700,38 @@ class FrappeRepository:
         doc.insert(ignore_permissions=True)  # (sheet, field) unique + single-label enforced by DocType
         return doc.name
 
+    def reorder_columns(self, sheet: str, ordered_ids: list[str]) -> None:
+        """Rewrite the sheet's stored ``idx`` sequence (see the port docstring).
+
+        One 1..N pass over the whole sheet, which also normalizes a sheet whose
+        columns predate positioning (all ``idx`` equal). ``update_modified`` is
+        left off for the same reason ``_position_column`` does: reordering is a
+        presentation-order write, not a per-column config edit."""
+        rows = frappe.get_all(
+            DT_COLUMN,
+            filters={"sheet": sheet},
+            fields=["name", "is_label"],
+            order_by="idx asc, creation asc",
+        )
+        by_id = {r["name"]: r for r in rows}
+        seen: set[str] = set()
+        for cid in ordered_ids:
+            row = by_id.get(cid)
+            # Defensive: the handler resolved these against list_columns just
+            # now. ValueError (not DoesNotExistError, which _dispatch turns into
+            # a 404) so all three repositories agree a bad entry is a 400.
+            if row is None:
+                raise ValueError(f"unknown column {cid!r} in sheet {sheet!r} (setColumnOrder.order)")
+            if cid in seen:
+                raise ValueError(f"duplicate column {cid!r} (setColumnOrder.order)")
+            if row["is_label"]:
+                raise ValueError(f"the label column {cid!r} is not reorderable (setColumnOrder.order)")
+            seen.add(cid)
+        labels = [r["name"] for r in rows if r["is_label"]]
+        tail = [r["name"] for r in rows if not r["is_label"] and r["name"] not in seen]
+        for i, name in enumerate(labels + list(ordered_ids) + tail, start=1):
+            frappe.db.set_value(DT_COLUMN, name, "idx", i, update_modified=False)
+
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None:
         col = self.get_column(sheet, column)
         doc = frappe.get_doc(DT_COLUMN, col.name)

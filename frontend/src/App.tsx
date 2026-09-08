@@ -45,9 +45,9 @@ import { ImportExport } from "./components/ImportExport";
 import { SubscriptionControl, NotificationItem } from "./components/SubscriptionControl";
 import { GearIcon } from "./components/icons";
 import { DelegationControl } from "./components/DelegationControl";
-import { ViewMenu } from "./components/ViewMenu";
+import { ViewMenu, reorderByDrag } from "./components/ViewMenu";
 import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
-import { decodeView } from "./lib/view";
+import { decodeView, resolveColumnOrder } from "./lib/view";
 import { applyProposedOverlay } from "./lib/overlay";
 
 // Trigger a browser download of `text` as `filename` (the ImportExport component
@@ -417,6 +417,47 @@ function ConnectedShell({
       // Mirror columnOp: executed re-renders the schema; a governed downgrade
       // files a CR (refresh the inbox); both surface in Activity.
       if (o.kind === "executed") void sheet.refetch();
+      refreshCRs();
+      setActivityRefreshKey((k) => k + 1);
+    });
+  };
+  // Drag a column header → reorder MY VIEW only. Presentation state: it emits a
+  // new SheetView (mirrored into ?v=) and dispatches NOTHING. `sheet.columns` is
+  // the already-resolved left-to-right render order, so reorderByDrag — the one
+  // reorder algorithm, shared with the View menu — operates on exactly what the
+  // user sees. Hidden columns keep their place in `view.order`; only the visible
+  // slice is dragged, so the two never fight.
+  const reorderColumnsInView = (from: string, to: string) => {
+    const visible = sheet.columns.filter((c) => !c.is_label).map((c) => c.name);
+    const dragged = reorderByDrag(visible, from, to);
+    // Fold the (possibly hidden) columns the drag never saw back in: walk the
+    // complete order and hand every visible slot to the dragged sequence, so a
+    // hidden column keeps its place instead of being shuffled by a drag that
+    // could not even see it.
+    const complete = resolveColumnOrder(snap?.columns ?? [], sheet.view);
+    const visibleSet = new Set(visible);
+    let k = 0;
+    const next = complete.map((name) => (visibleSet.has(name) ? dragged[k++] : name));
+    sheet.setView({ ...sheet.view, order: next });
+  };
+  // "Save order for everyone": promote the viewer's arrangement to the SHARED
+  // stored order (the one the API and external agents read). The View menu hands
+  // us the complete resolved order; this is the ONLY place a column order is
+  // written, and it is governed like any other write.
+  const saveSharedColumnOrder = (order: string[]) => {
+    void sheet.dispatch("setColumnOrder", { sheet: sheetName, order }).then((o) => {
+      if (o.kind === "executed") {
+        // The shared order now IS this arrangement, so DROP the local override:
+        // leaving a stale one behind would silently mask a later reorder by
+        // someone else (the view would keep pinning the columns we just saved).
+        // Updater form on purpose: the round-trip is async, so a hide/resize the
+        // user made meanwhile must not be clobbered by a stale captured view.
+        sheet.setView((v) => ({ ...v, order: [] }));
+        void sheet.refetch();
+      }
+      // suggested → keep the override, so the user goes on seeing their own
+      // arrangement while the CR is pending; App's banner already says who it
+      // went to (no new banner semantics here).
       refreshCRs();
       setActivityRefreshKey((k) => k + 1);
     });
@@ -1106,6 +1147,9 @@ function ConnectedShell({
                   columns={snap.columns}
                   view={sheet.view}
                   onChange={sheet.setView}
+                  // The one place a column order becomes SHARED. ViewMenu still
+                  // dispatches nothing itself — it hands us the resolved order.
+                  onSaveSharedOrder={saveSharedColumnOrder}
                 />
               </details>
               {/* Row-density control: clamp long-text cells to 2/3 lines or
@@ -1155,6 +1199,8 @@ function ConnectedShell({
                 editSignal={editSignal}
                 onAddNode={() => addNode(null)}
                 onCreateColumn={quickAddColumn}
+                // Header drag = reorder MY view (no round-trip, no approval).
+                onReorderColumns={reorderColumnsInView}
                 // Read-only Proposed preview: static cells, no drag, no row
                 // actions; proposed cells + relocated rows are styled distinctly.
                 preview={preview}

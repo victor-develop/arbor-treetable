@@ -65,6 +65,8 @@ REST_METHODS = {
     "moveNode": "move_node",
     "deleteNode": "delete_node",
     "addColumn": "add_column",
+    # the SHARED stored column order ("save my arrangement for everyone")
+    "setColumnOrder": "set_column_order",
     "updateColumn": "update_column",
     "deleteColumn": "delete_column",
     "suggestChange": "suggest_change",

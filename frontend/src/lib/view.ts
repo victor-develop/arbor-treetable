@@ -72,6 +72,40 @@ function isSheetView(x: unknown): x is SheetView {
   return true;
 }
 
+// PURE. The viewer's COMPLETE left-to-right ordering of the non-label columns:
+// view.order intersected with the columns actually present, then any remaining
+// present column in snapshot order (a column added since the view was made
+// still has a place). HIDDEN columns are included on purpose — this is the
+// ordering of the sheet's columns, not of the ones this viewer renders, so it
+// is exactly what `setColumnOrder` requires ("name every non-label column once")
+// and what a drag has to fold its visible slice back into.
+//
+// Drawn ONLY from `snapshotColumns` (already read-ACL-filtered), so it inherits
+// resolveColumns' reveal-impossibility: a name the view carries but the snapshot
+// does not is dropped, never resurrected.
+export function resolveColumnOrder(
+  snapshotColumns: SnapshotColumn[],
+  view: SheetView | null,
+): string[] {
+  const data = snapshotColumns.filter((c) => !c.is_label);
+  const present = new Set(data.map((c) => c.name));
+  const out: string[] = [];
+  const taken = new Set<string>();
+  for (const name of view?.order ?? []) {
+    if (present.has(name) && !taken.has(name)) {
+      out.push(name);
+      taken.add(name);
+    }
+  }
+  for (const c of data) {
+    if (!taken.has(c.name)) {
+      out.push(c.name);
+      taken.add(c.name);
+    }
+  }
+  return out;
+}
+
 // SECURITY-CRITICAL, PURE. Resolve the columns to render from the (read-ACL
 // filtered) snapshot columns + an optional view. A null view → default
 // (all readable columns in snapshot order). Reveal is structurally impossible:

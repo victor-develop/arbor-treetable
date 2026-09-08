@@ -236,6 +236,85 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
     )
 
 
+def resolve_set_column_order_params(params: dict[str, Any], repo: Repository) -> dict[str, Any]:
+    """setColumnOrder's pre-pass: resolve + fully validate ``order``.
+
+    Same reason addColumn has one (see ``resolve_add_column_params``): the
+    schema promises a bad list is a 400 on EVERY branch, so the check cannot
+    live in the handler — an unauthorized caller would otherwise file a Change
+    Request that raises forever on approval.
+
+    Completeness is required deliberately (the schema says so, and skill.md
+    ships that text to external agents): a partial list has no single obvious
+    meaning, so the contract is "name every non-label column exactly once".
+    The label column is rejected as an entry rather than tolerated — it is
+    always the first grid column, never reorderable, so naming it is a caller
+    bug worth surfacing."""
+    order = params.get("order")
+    if not isinstance(order, list):
+        raise ValueError("setColumnOrder.order must be a list of column names")
+    sheet = params["sheet"]
+    columns = repo.list_columns(sheet)
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for entry in order:
+        # Same dual spelling (and same first-match rule) as addColumn.after, via
+        # the same list_columns scan — see _resolve_after_column for why a scan
+        # rather than get_column: the adapters disagree on the miss exception.
+        c = next((x for x in columns if entry in (x.name, x.field)), None)
+        if c is None:
+            raise ValueError(
+                f"unknown column {entry!r} in sheet {sheet!r} (setColumnOrder.order)"
+            )
+        if c.is_label:
+            raise ValueError(
+                f"the label column {entry!r} is not reorderable (setColumnOrder.order)"
+            )
+        if c.name in seen:
+            raise ValueError(f"duplicate column {entry!r} (setColumnOrder.order)")
+        seen.add(c.name)
+        resolved.append(c.name)
+    missing = [c.field for c in columns if not c.is_label and c.name not in seen]
+    if missing:
+        raise ValueError(
+            "setColumnOrder.order must list every non-label column of sheet "
+            f"{sheet!r}; missing: {', '.join(sorted(missing))}"
+        )
+    return dict(params, order=resolved)
+
+
+def _order_for_write(sheet: str, order: Any, repo: Repository) -> list[str]:
+    """The order to hand the repository: resolved ids, existing columns only.
+
+    On a direct call the pre-pass already produced exactly this. A Change
+    Request is applied LATER though, and replay skips the pre-pass: by approval
+    time a named column may have been deleted, and a column added since is not
+    named at all. Failing hard would trap the CR (approve 400s forever), so
+    replay degrades — unknown entries are dropped, anything unnamed keeps its
+    current relative place after the named ones (the repository appends it).
+    Same precedent as ``_after_for_write``."""
+    columns = repo.list_columns(sheet)
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in order or []:
+        c = next((x for x in columns if entry in (x.name, x.field)), None)
+        if c is None or c.is_label or c.name in seen:
+            continue
+        seen.add(c.name)
+        out.append(c.name)
+    return out
+
+
+def set_column_order_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    sheet = params["sheet"]
+    order = _order_for_write(sheet, params.get("order"), repo)
+    repo.reorder_columns(sheet, order)
+    return HandlerResult(
+        event_payload={"op": "reorder", "order": order},
+        data={"order": order},
+    )
+
+
 def update_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
     column = repo.get_column(sheet, params["column"])

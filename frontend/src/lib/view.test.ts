@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   encodeView,
   decodeView,
+  resolveColumnOrder,
   resolveColumns,
   type SheetView,
 } from "./view";
@@ -234,5 +235,65 @@ describe("resolveColumns — default view (no token / null view)", () => {
   it("an empty view (no hidden/order/width) yields all readable columns in snapshot order", () => {
     const resolved = resolveColumns(SNAPSHOT_COLS, { v: 1, hidden: [], order: [] });
     expect(names(resolved)).toEqual(names(SNAPSHOT_COLS));
+  });
+});
+
+// resolveColumnOrder — the COMPLETE non-label ordering. Shared by three callers:
+// the View menu's list, the grid header drag's fold, and the order handed to
+// setColumnOrder ("save for everyone"), which requires every non-label column
+// exactly once.
+describe("resolveColumnOrder — the complete non-label ordering", () => {
+  it("a null/empty view yields the snapshot order, label excluded", () => {
+    expect(resolveColumnOrder(SNAPSHOT_COLS, null)).toEqual([
+      "col:status",
+      "col:budget",
+      "col:notes",
+    ]);
+    expect(resolveColumnOrder(SNAPSHOT_COLS, { v: 1, hidden: [], order: [] })).toEqual([
+      "col:status",
+      "col:budget",
+      "col:notes",
+    ]);
+  });
+
+  it("follows the view order, then appends columns the view never named", () => {
+    const view: SheetView = { v: 1, hidden: [], order: ["col:notes", "col:status"] };
+    expect(resolveColumnOrder(SNAPSHOT_COLS, view)).toEqual([
+      "col:notes",
+      "col:status",
+      "col:budget",
+    ]);
+  });
+
+  it("INCLUDES hidden columns — the shared order is a property of the sheet", () => {
+    // What this viewer hides is their business; the stored order still has to
+    // name every non-label column, or setColumnOrder rejects it as incomplete.
+    const view: SheetView = { v: 1, hidden: ["col:budget"], order: [] };
+    expect(resolveColumnOrder(SNAPSHOT_COLS, view)).toContain("col:budget");
+  });
+
+  it("drops a name the snapshot does not carry (REVEAL-IMPOSSIBILITY)", () => {
+    // A forwarded token can name a column this viewer cannot read. It must not
+    // appear here either — otherwise "save for everyone" would ship a column id
+    // the viewer was never allowed to see.
+    const view: SheetView = { v: 1, hidden: [], order: ["col:secret", "col:notes"] };
+    const order = resolveColumnOrder(SNAPSHOT_COLS, view);
+    expect(order).not.toContain("col:secret");
+    expect(order).toEqual(["col:notes", "col:status", "col:budget"]);
+  });
+
+  it("ignores a duplicate in the view order (each column appears exactly once)", () => {
+    const view: SheetView = {
+      v: 1,
+      hidden: [],
+      order: ["col:notes", "col:notes", "col:status"],
+    };
+    const order = resolveColumnOrder(SNAPSHOT_COLS, view);
+    expect(order).toEqual(["col:notes", "col:status", "col:budget"]);
+  });
+
+  it("never contains the label column even when the view order names it", () => {
+    const view: SheetView = { v: 1, hidden: [], order: ["col:name", "col:notes"] };
+    expect(resolveColumnOrder(SNAPSHOT_COLS, view)).not.toContain("col:name");
   });
 });

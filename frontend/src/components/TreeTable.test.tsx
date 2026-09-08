@@ -461,3 +461,71 @@ describe("ghost column quick-add (insert to the right)", () => {
     expect(screen.queryByTestId("ghost-col-open-label")).toBeNull();
   });
 });
+
+// Header drag → reorder MY VIEW. The grid already carries two drag surfaces
+// (rows drag by their own grip; every data header has a hover "+" and a gear),
+// so the column grip has to be discoverable WITHOUT swallowing those.
+describe("column-header drag → reorder my view", () => {
+  it("renders no grip without onReorderColumns", () => {
+    renderTable();
+    expect(screen.queryByTestId(/^col-grip-/)).toBeNull();
+  });
+
+  it("puts a draggable grip in EVERY data column header (never on the label)", () => {
+    renderTable({ onReorderColumns: vi.fn() });
+    const dataCols = loginAs("D").columns.filter((c) => !c.is_label);
+    expect(screen.getAllByTestId(/^col-grip-/)).toHaveLength(dataCols.length);
+    dataCols.forEach((c) => {
+      const grip = screen.getByTestId(`col-grip-${c.field}`);
+      expect(grip).toHaveAttribute("draggable", "true");
+      expect(screen.getByTestId(`col-head-${c.name}`)).toContainElement(grip);
+    });
+    // The label header is not reorderable, so it has no grip.
+    expect(screen.getByTestId("col-head-col:status")).toBeInTheDocument();
+    expect(document.querySelector("th.arbor-label-head .arbor-col-grip")).toBeNull();
+  });
+
+  it("dropping a grip on another header emits (from, to) as column IDS", () => {
+    const onReorderColumns = vi.fn();
+    renderTable({ onReorderColumns });
+    fireEvent.dragStart(screen.getByTestId("col-grip-budget"));
+    fireEvent.dragEnter(screen.getByTestId("col-head-col:status"));
+    fireEvent.dragOver(screen.getByTestId("col-head-col:status"));
+    fireEvent.drop(screen.getByTestId("col-head-col:status"));
+    expect(onReorderColumns).toHaveBeenCalledWith("col:budget", "col:status");
+  });
+
+  it("dropping a header on itself emits nothing", () => {
+    const onReorderColumns = vi.fn();
+    renderTable({ onReorderColumns });
+    fireEvent.dragStart(screen.getByTestId("col-grip-budget"));
+    fireEvent.drop(screen.getByTestId("col-head-col:budget"));
+    expect(onReorderColumns).not.toHaveBeenCalled();
+  });
+
+  it("a ROW drag passing over a header is not treated as a column drop", () => {
+    // The two drag surfaces share the same DOM tree; a row drag must reach
+    // onMove, never the column reorder (no dragStart happened on a grip).
+    const onReorderColumns = vi.fn();
+    const { onMove } = renderTable({ onReorderColumns });
+    fireEvent.dragStart(screen.getByTestId("drag-handle-Y"));
+    fireEvent.drop(screen.getByTestId("col-head-col:status"));
+    expect(onReorderColumns).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it("keeps the header + and gear clickable while a grip is present", () => {
+    const onCreateColumn = vi.fn();
+    const onColumnSettings = vi.fn();
+    renderTable({ onReorderColumns: vi.fn(), onCreateColumn, onColumnSettings });
+    fireEvent.click(screen.getByTestId("col-settings-open-col:status"));
+    expect(onColumnSettings).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("ghost-col-open-status"));
+    expect(screen.getByTestId("ghost-col-input")).toBeInTheDocument();
+  });
+
+  it("the read-only Proposed preview offers no grip", () => {
+    renderTable({ onReorderColumns: vi.fn(), preview: true });
+    expect(screen.queryByTestId(/^col-grip-/)).toBeNull();
+  });
+});

@@ -1,7 +1,7 @@
 """The capability registry — the single Python source of truth for everything
 Arbor can do (ARCHITECTURE §4, CAPABILITIES.md).
 
-All 43 capabilities are declared here as ``Capability`` records. Four consumers
+All 44 capabilities are declared here as ``Capability`` records. Four consumers
 read this ONE registry: Web ``executeAction``, auto-exposed REST methods, the
 Tree Event stream (webhooks + notifications), and the LLM agent via
 ``get_llm_tools()`` (filtered by ``is_exposed_to_llm``).
@@ -180,6 +180,31 @@ _S_ADD_COLUMN = {
                 "column of the same sheet, given by its field key or its column id. "
                 "Omit to append the new column last. A column that is not in the "
                 "sheet is a validation error (400), never a suggestion."
+            ),
+        },
+    },
+}
+_S_SET_COLUMN_ORDER = {
+    "type": "object",
+    "required": ["sheet", "order"],
+    "properties": {
+        "sheet": {"type": "string"},
+        # The SHARED baseline order, not a per-viewer overlay: whatever this
+        # writes is what every viewer, the API and every agent reads back from
+        # the column list. Completeness is required on purpose — see the
+        # description (skill.md ships it verbatim to external agents).
+        "order": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "The COMPLETE left-to-right ordering of the sheet's non-label "
+                "columns, each named by its field key or its column id. Every "
+                "non-label column must appear exactly once: an unknown name, a "
+                "duplicate, or a list that omits any of them is a validation "
+                "error (400), never a suggestion — a partial list has no single "
+                "obvious meaning, so the contract is deterministic instead of "
+                "convenient. The label column is always the first column and is "
+                "never reorderable, so naming it here is also a 400."
             ),
         },
     },
@@ -397,7 +422,7 @@ _S_DELETE_COMMENT = {
 
 
 # ---------------------------------------------------------------------------
-# The 43 capabilities.
+# The 44 capabilities.
 # ---------------------------------------------------------------------------
 _CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -581,6 +606,27 @@ _CAPABILITIES: tuple[Capability, ...] = (
         # `after` is resolved (and a bad anchor refused) before the executor's
         # authorize-or-suggest branch, so the 400 below holds for every caller.
         resolve_params=handlers.resolve_add_column_params,
+    ),
+    # The shared column ORDER. A viewer's drag reorders only their own view
+    # (presentation state, zero round-trips); this capability is the explicit
+    # "save it for everyone" — the stored order the API and external agents
+    # read. Gated like addColumn (sheet structural_owner, the column_creation
+    # policy) rather than per-column approvers: the order is a sheet-level
+    # property, so no single column owner can own it.
+    Capability(
+        id="setColumnOrder",
+        name="Set the shared column order",
+        params_schema=_S_SET_COLUMN_ORDER,
+        axis=Axis.META,
+        target_kind=TargetKind.COLUMN_SCHEMA,
+        operation=Operation.UPDATE,
+        is_exposed_to_llm=True,
+        acl_rule="sheet.structural_owner (column_creation policy)",
+        emits=("COLUMN_CONFIG_UPDATED",),
+        handler=handlers.set_column_order_handler,
+        # `order` is resolved (and a bad list refused) before the executor's
+        # authorize-or-suggest branch, so the 400 above holds for every caller.
+        resolve_params=handlers.resolve_set_column_order_params,
     ),
     Capability(
         id="updateColumn",

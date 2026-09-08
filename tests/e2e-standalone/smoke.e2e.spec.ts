@@ -77,6 +77,24 @@ test("guest is gated, signs in, creates a sheet, lands in the grid", async ({ pa
   await page.reload();
   await expect(dataHeaders()).toHaveText(["Due Date", "Stage", "Owner"]);
 
+  // 6d. Rearrange MY view by dragging a column header's grip, then promote that
+  //     arrangement to the SHARED stored order. The drag alone is presentation
+  //     state (no round-trip); "Save order for everyone" is the one governed
+  //     write. Drag "Owner" onto "Due Date" → Owner leads.
+  await page.getByTestId("col-grip-due_date").hover();
+  await page.getByTestId("col-grip-owner").dragTo(page.getByTestId("col-grip-due_date"));
+  await expect(dataHeaders()).toHaveText(["Owner", "Due Date", "Stage"]);
+
+  await page.getByTestId("view-disclosure").getByText("View").click();
+  await page.getByTestId("view-save-order").click();
+  await expect(page.getByTestId("banner")).toContainText("Saved");
+
+  //     The proof: reload WITHOUT the ?v= token. A local override lives in that
+  //     token (and would survive a plain reload), so dropping it is what makes
+  //     this an assertion about the SERVER's stored order.
+  await page.goto(`/?sheet=${name}`);
+  await expect(dataHeaders()).toHaveText(["Owner", "Due Date", "Stage"]);
+
   // 7. Toggle Live (the app lands in Proposed) — the editable grid must render,
   //    not the tree-table error boundary. Regression: a loosely-shaped select
   //    options value crashed exactly this view (flattenOptions on undefined groups).

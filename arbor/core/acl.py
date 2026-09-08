@@ -246,7 +246,11 @@ _PROCESS_META_CAPS = {"defineProcess", "enableProcess", "disableProcess", "start
 
 
 def _resolve_meta_authority(cap, params, actor, repo, sheet) -> Authority:
-    if cap.id == "addColumn":
+    # setColumnOrder rides addColumn's policy: the stored column order is a
+    # SHEET-level property (every viewer and every agent reads it back), so no
+    # single column owner can be its approver — a non-owner's reorder degrades
+    # to a Change Request routed to the structural owner, like a column add.
+    if cap.id in {"addColumn", "setColumnOrder"}:
         # column_creation policy placeholder, default "owner-only" (DECISIONS
         # ADR-002): authority = sheet structural_owner.
         sheet_view = repo.get_sheet(sheet)
