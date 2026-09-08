@@ -109,15 +109,26 @@ export function useSheet(
   // Serialize mutations so rapid commits never interleave (WEB_UI-025).
   const tail = useRef<SerializedMutation>(Promise.resolve({ kind: "read" }));
 
-  const refetch = useCallback(async () => {
+  // `remote: true` means SOMEBODY ELSE's change prompted this refetch (a
+  // realtime signal), not the local user finishing an action. That distinction
+  // is load-bearing: clearing the optimistic box is only safe when the refetch
+  // FOLLOWS the local write it would be discarding. On an executed cell commit
+  // this hook deliberately keeps the optimistic value as the displayed truth
+  // and never self-refetches, so a remote refetch that landed mid-write would
+  // wipe the user's just-saved value back to the pre-edit render (and drop the
+  // base_version overrides with it, producing a spurious VERSION_CONFLICT on
+  // their next edit). A remote refetch therefore refreshes the snapshot only.
+  const refetch = useCallback(async (opts?: { remote?: boolean }) => {
     const snap = await client.getSheetSnapshot(sheetName);
     setSnapshot(snap);
-    // A fresh snapshot is authoritative: clear stale optimistic + pending marks
-    // whose target now matches (WEB_UI-022), and drop folded version overrides
-    // (the snapshot's versions are now the source of truth).
-    setOptimistic({});
-    setPending([]);
-    setVersionOverrides({});
+    if (!opts?.remote) {
+      // A fresh snapshot is authoritative: clear stale optimistic + pending marks
+      // whose target now matches (WEB_UI-022), and drop folded version overrides
+      // (the snapshot's versions are now the source of truth).
+      setOptimistic({});
+      setPending([]);
+      setVersionOverrides({});
+    }
     // Draft flow — RE-HYDRATE (don't clear) the draft box from the server: drafts
     // are server-persisted, so they must survive a refetch / reload / device
     // change. Only a submit (server-side) or an explicit discard removes them.

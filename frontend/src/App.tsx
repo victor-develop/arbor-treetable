@@ -36,6 +36,7 @@ import { BulkActionBar } from "./components/BulkActionBar";
 import { DraftReviewBar } from "./components/DraftReviewBar";
 import { DraftReviewModal, type DraftRow } from "./components/DraftReviewModal";
 import { useSheet, cellKey } from "./hooks/useSheet";
+import { useRealtime } from "./hooks/useRealtime";
 import { useCrSelection } from "./hooks/useCrSelection";
 import { TreeTable } from "./components/TreeTable";
 import { ColumnSettings } from "./components/ColumnConfig";
@@ -627,6 +628,25 @@ function ConnectedShell({
     },
     [snap, loadCommentThread],
   );
+  // Realtime (SSE): a signal is a dirty marker, so answer it with the same
+  // refetches a local write would do — the snapshot for the cell glyphs, and
+  // the open thread if the drawer is showing one. Nothing is trusted from the
+  // wire, so a stale or duplicated signal costs one wasted fetch at worst.
+  const onRealtimeSignal = useCallback(
+    (kind: string) => {
+      if (kind !== "comments") return;
+      // remote: this refetch is driven by someone else's clock, so it must not
+      // clear the local optimistic/pending state a concurrent local write is
+      // still relying on (see useSheet.refetch).
+      void sheet.refetch({ remote: true });
+      if (commentCell) loadCommentThread(commentCell.node, commentCell.column);
+    },
+    [sheet, commentCell, loadCommentThread],
+  );
+  // The idle shell mounts ConnectedShell with the "(none)" placeholder; that is
+  // not a sheet, and subscribing to it would be a guaranteed 404 per mount.
+  useRealtime(sheetName === "(none)" ? null : sheetName, onRealtimeSignal);
+
   const closeComments = useCallback(() => {
     setCommentCell(null);
     setCommentThread([]);
