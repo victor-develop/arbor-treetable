@@ -206,4 +206,32 @@ describe("useRealtime", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("delivers each kind to the callback", () => {
+    const onSignal = vi.fn();
+    renderHook(() => useRealtime("s1", onSignal));
+    act(() => {
+      latest().emit("sheet");
+      latest().emit("crs");
+      vi.advanceTimersByTime(500);
+    });
+    expect(onSignal.mock.calls.map((c) => c[0]).sort()).toEqual(["crs", "sheet"]);
+  });
+
+  it("coalesces PER KIND, so one kind cannot swallow another", () => {
+    // A single shared timer let the last kind to arrive cancel the others, so a
+    // cell edit landing right after a comment silently dropped the comment
+    // refresh.
+    const onSignal = vi.fn();
+    renderHook(() => useRealtime("s1", onSignal));
+    act(() => {
+      latest().emit("comments");
+      latest().emit("comments");
+      latest().emit("sheet");
+      latest().emit("sheet");
+      latest().emit("crs");
+      vi.advanceTimersByTime(500);
+    });
+    expect(onSignal).toHaveBeenCalledTimes(3);
+    expect(onSignal.mock.calls.map((c) => c[0]).sort()).toEqual(["comments", "crs", "sheet"]);
+  });
 });

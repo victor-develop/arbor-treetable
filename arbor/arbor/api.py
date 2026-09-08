@@ -65,6 +65,7 @@ from arbor.core.explore import (
     SheetTooLargeError,
     process_rule_views,
     readable_column_label as _readable_column_label,
+    visible_change_requests,
 )
 from arbor.core.snapshot import serialize_snapshot
 from arbor.core.types import (
@@ -1442,7 +1443,10 @@ def list_change_requests(sheet, status="proposed"):
                 "viewer_is_approver": _viewer_can_decide(cr, actor.user, repo),
             }
         )
-    return out
+    # Read-ACL filter (the ONE pure one, shared with the standalone lane): a CR
+    # payload names its target column and carries the proposed value, so an
+    # unfiltered inbox leaks both to every sheet reader.
+    return visible_change_requests(repo, sheet, actor, out)
 
 
 def _viewer_can_decide(cr, user, repo):

@@ -49,7 +49,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -92,8 +92,10 @@ from arbor.core.change_request import (
 )
 from arbor.core.explore import (
     CellBudgetExceededError,
+    change_request_target_column,
     SheetTooLargeError,
     process_rule_views,
+    visible_change_requests,
 )
 from arbor.core.explore import (
     readable_column_label as _readable_column_label,
@@ -125,7 +127,7 @@ from .auth import (
 )
 from .db import create_all, make_engine, make_session_factory
 from .errors import ConflictError, StaleMoveError, StaleVersionError
-from .realtime import hub, stream_frames
+from .realtime import enqueue as enqueue_signal, hub, stream_frames, take as take_signals
 from .repository import CellDraft, SheetSavedView, SQLEventSink, SQLRepository
 from .snapshot import build_sheet_snapshot
 
@@ -157,8 +159,13 @@ def get_db():
     try:
         yield session
         session.commit()
+        # AFTER the commit, before the session closes: realtime markers must
+        # never announce a write a client's refetch cannot see yet, and the
+        # still-open session is what evaluates their per-subscriber read gate.
+        _flush_realtime(session)
     except BaseException:
         session.rollback()
+        take_signals(session.info)  # a rolled-back write must announce nothing
         raise
     finally:
         session.close()
@@ -560,7 +567,11 @@ def _on_notification_created(session: Session, name: str) -> None:
 def _dispatch_tree_event(session: Session, repo: SQLRepository, ev: Any) -> None:
     """The ``Tree Event after_insert`` trio (mirror of frappe's
     ``on_tree_event_insert``): notifications, webhooks, then the process
-    consumer. None emit a Tree Event, so there is no recursion."""
+    consumer. None emit a Tree Event, so there is no recursion.
+
+    Also where realtime markers are DEFERRED from — this runs inside the
+    transaction, so it can only enqueue; ``get_db`` publishes after commit."""
+    _enqueue_event_signal(session, ev)
     actor_type = ev.actor_type.value if isinstance(ev.actor_type, ActorType) else ev.actor_type
     created_at = None
     if ev.timestamp:
@@ -777,6 +788,7 @@ def _dispatch(
         # structured ``read`` Outcome the FE reads off ``outcome.error``
         # (useSheet.ts) carrying the authoritative current state.
         session.rollback()
+        take_signals(session.info)  # a rolled-back write must announce nothing
         return {
             "kind": "read",
             "error": "VERSION_CONFLICT",
@@ -827,6 +839,7 @@ def _run_webhook_retries() -> None:
         session.commit()
     except Exception:
         session.rollback()
+        take_signals(session.info)  # a rolled-back write must announce nothing
     finally:
         session.close()
 
@@ -870,6 +883,7 @@ def _run_sla_sweep() -> None:
         session.commit()
     except Exception:
         session.rollback()
+        take_signals(session.info)  # a rolled-back write must announce nothing
     finally:
         session.close()
 
@@ -1068,7 +1082,10 @@ def list_change_requests(
                 "viewer_is_approver": _viewer_can_decide(cr, actor.user, repo),
             }
         )
-    return _msg(out)
+    # Read-ACL filter (the ONE pure one, shared with the frappe lane): a CR
+    # payload names its target column and carries the proposed value, so an
+    # unfiltered inbox leaks both to every sheet reader.
+    return _msg(visible_change_requests(repo, sheet, actor, out))
 
 
 # ---- notifications / inbox ----------------------------------------------------
@@ -2035,10 +2052,7 @@ def _can_resolve_comment(repo: SQLRepository, sheet: str, column: str, actor: Ac
 
 @app.post("/api/method/arbor.add_cell_comment")
 def add_cell_comment(
-    request: Request,
-    background: BackgroundTasks,
-    payload: dict | None = Body(None),
-    session: Session = Depends(get_db),
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     """Post a comment (or reply). THIN over the ``addComment`` capability, plus
     the api-layer extras the frappe shim carried: 400 empty body, 404 unknown
@@ -2116,12 +2130,11 @@ def add_cell_comment(
             }
         )
 
-    # Commit BEFORE scheduling the marker: background tasks run ahead of the
-    # session dependency's teardown, so publishing without this would announce
-    # a row no refetch can see yet. The notification rows above only reach
-    # approvers/mentions; the marker reaches everyone watching the stream.
-    session.commit()
-    background.add_task(_publish_comment_signal, sheet, column)
+    # A comment is NOT a Tree Event, so its marker is enqueued by hand here
+    # rather than by the event fan-out. The notification rows above only reach
+    # approvers/mentions; the marker reaches everyone watching the stream whose
+    # read-ACL covers this column.
+    enqueue_signal(session.info, sheet, "comments", column)
 
     return _msg({"name": comment_name, "thread_root": thread_root, "mentions": mentions})
 
@@ -2168,10 +2181,7 @@ def list_cell_comments(
 
 @app.post("/api/method/arbor.resolve_cell_comment")
 def resolve_cell_comment(
-    request: Request,
-    background: BackgroundTasks,
-    payload: dict | None = Body(None),
-    session: Session = Depends(get_db),
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     want = bool(payload.get("resolved", True))
@@ -2183,73 +2193,157 @@ def resolve_cell_comment(
     )
     data = outcome.get("data") or {}
     if target is not None:
-        session.commit()  # see add_cell_comment: the marker must follow the commit
-        background.add_task(_publish_comment_signal, target.sheet, target.column)
+        enqueue_signal(session.info, target.sheet, "comments", target.column)
     return _msg({"name": data.get("comment"), "resolved": bool(data.get("resolved"))})
 
 
 @app.post("/api/method/arbor.delete_cell_comment")
 def delete_cell_comment(
-    request: Request,
-    background: BackgroundTasks,
-    payload: dict | None = Body(None),
-    session: Session = Depends(get_db),
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
 ):
     payload = payload or {}
     # Same reason as resolve: capture (sheet, column) while the row is in hand.
     target = session.get(m.CellComment, str(payload.get("comment") or ""))
     _dispatch(request, session, "deleteComment", {"comment": payload.get("comment")})
     if target is not None:
-        session.commit()  # see add_cell_comment: the marker must follow the commit
-        background.add_task(_publish_comment_signal, target.sheet, target.column)
+        enqueue_signal(session.info, target.sheet, "comments", target.column)
     return _msg({"ok": True, "tombstoned": True})
 
 
 # ---- realtime signals (SSE) ---------------------------------------------------------
-def _publish_comment_signal(sheet: str, column: str) -> None:
-    """Tell this sheet's subscribers that its comments changed.
+def _flush_realtime(session: Session) -> None:
+    """Publish this request's deferred signals (see ``realtime.enqueue``).
 
-    Runs as a background task. Background tasks execute BEFORE a plain
-    ``Depends(get_db)`` tears down (measured, not assumed: default scope gives
-    background-then-commit), so each caller commits EXPLICITLY before scheduling
-    this. Publishing against an uncommitted write would push a marker whose data
-    a refetch cannot see yet — and no second marker follows, so the comment
-    would silently never appear, which is the exact bug this feature exists to
-    fix. Committing first also means the per-subscriber ACL queries below run
-    outside the write transaction instead of extending its row locks.
+    Runs post-commit in the request's own thread with the request's session, so
+    it needs neither a background task nor a second pooled connection.
 
-    Opens its own session: the request's may already be closed by the time a
-    background task runs, and it must not share a session across threads.
-
-    The per-subscriber gate is the point: a comment on a column the subscriber
-    cannot read is not delivered at all. Without it the mere timing of a signal
-    would reveal that a column they cannot see exists and is being worked on.
-    A missing column (deleted between write and publish) delivers to nobody,
-    which is the safe direction. The decision is memoized per user for the life
-    of this publish — otherwise every open tab costs its own approver lookup.
+    The per-subscriber gate is the point of the ``column`` on a signal: a change
+    to a column a subscriber cannot read is not delivered to them at all.
+    Without it the mere timing of a marker would reveal that a column they
+    cannot see exists and is being worked on. A signal with no column is
+    sheet-wide (structure, a column REORDER) and reaches every reader. A column
+    that has since vanished delivers to nobody, which is the safe direction.
     """
-    try:
-        with SessionLocal() as session:
-            repo = _repo(session)
-            try:
-                col = repo.get_column(sheet, column)
-            except KeyError:
-                return
-            decided: dict[str, bool] = {}
+    signals = take_signals(session.info)
+    if not signals:
+        return
+    repo = _repo(session)
+    for signal in signals:
+        # Per signal, not around the loop: one unresolvable marker must not
+        # discard the others, and `take` has already emptied the queue so a
+        # bail-out here would lose them for good.
+        try:
+            gate = None
+            if signal.column is not None:
+                try:
+                    col = repo.get_column(signal.sheet, signal.column)
+                except KeyError:
+                    continue
+                decided: dict[str, bool] = {}
 
-            def can_deliver(actor: Actor) -> bool:
-                cached = decided.get(actor.user)
-                if cached is None:
-                    cached = can_read_column(repo, sheet, col, actor)
-                    decided[actor.user] = cached
-                return cached
+                def gate(actor: Actor, _col=col, _sheet=signal.sheet, _seen=decided) -> bool:
+                    cached = _seen.get(actor.user)
+                    if cached is None:
+                        # Memoized per user for this publish: otherwise every
+                        # open tab costs its own approver lookup.
+                        cached = can_read_column(repo, _sheet, _col, actor)
+                        _seen[actor.user] = cached
+                    return cached
 
-            hub.publish(sheet, "comments", can_deliver=can_deliver)
-    except Exception:
-        # A dropped marker costs one stale badge until the next refetch; an
-        # exception escaping a background task would be a 500 on a write that
-        # already succeeded.
-        logger.exception("realtime: failed to publish comment signal for %s", sheet)
+            hub.publish(signal.sheet, signal.kind, can_deliver=gate)
+        except Exception:
+            # A dropped marker costs one stale view until the next refetch; an
+            # exception here would fail a request whose write already committed.
+            logger.exception("realtime: failed to publish %s on %s", signal.kind, signal.sheet)
+
+
+#: Tree Event type -> what a client must REFETCH because of it. Keyed on the
+#: refetch, not on the change: two events that oblige the same fetch share a
+#: kind, and the client stays free of any per-event-type knowledge.
+#:   sheet -> the snapshot (cell values, structure, column config and order,
+#:            and the per-cell can_edit hints a delegation or role grant moves)
+#:   crs   -> the change-request inbox
+#: SUBSCRIPTION_CHANGED is deliberately absent: it only flips the actor's own
+#: Subscribe button, which their own response already updated, so a marker for
+#: it would wake every other viewer for nothing.
+_EVENT_SIGNAL_KIND = {
+    "NODE_VALUE_UPDATED": "sheet",
+    "NODE_CREATED": "sheet",
+    "NODE_DELETED": "sheet",
+    "NODE_MOVED": "sheet",
+    "COLUMN_CONFIG_UPDATED": "sheet",
+    "DELEGATION_CHANGED": "sheet",
+    "CHANGE_PROPOSED": "crs",
+    "CHANGE_APPROVED": "crs",
+    "CHANGE_REJECTED": "crs",
+}
+
+#: Event types whose read subject is a single column, so their marker is gated
+#: on it. Everything else is sheet-wide.
+#:
+#: Only VALUE changes qualify. A cell write in a column you cannot read must not
+#: even announce itself — the marker's timing would tell you the column exists
+#: and is being worked on. A change to the column SCHEMA is different, and
+#: gating it was actively wrong twice over: deleting a column resolved its gate
+#: AFTER the row was gone, so the marker was dropped and every open client kept
+#: rendering a column that no longer existed; and revoking someone's read access
+#: gated the marker on the NEW acl, so the one viewer who most needed to refetch
+#: was the only one not told. Schema markers are therefore sheet-wide, which
+#: costs a non-reader one refetch that shows them nothing new — the marker
+#: carries no content, and a reorder already announces the same class of change
+#: to everyone.
+_COLUMN_GATED_EVENTS = {"NODE_VALUE_UPDATED"}
+
+
+def _event_read_subject(session: Session, ev: Any) -> Optional[str]:
+    """The column a marker for ``ev`` must be gated on, or None for sheet-wide.
+
+    Resolved HERE, inside the transaction, because a Change Request's location
+    is not on its row: it lives in the payload, whose shape differs by emitter
+    (a direct suggestion carries ``column``, the executor's proposal nests
+    ``params.column``), and a rejection carries only the request id — so the
+    row has to be read back to find out which column it concerned. Doing this
+    after commit would also mean re-reading rows the flush no longer has.
+    """
+    payload = ev.payload if isinstance(ev.payload, dict) else {}
+    event_type = str(ev.type)
+
+    if event_type in _COLUMN_GATED_EVENTS:
+        column = payload.get("column")
+        return column if isinstance(column, str) and column else None
+
+    if _EVENT_SIGNAL_KIND.get(event_type) != "crs":
+        return None
+
+    # A CR marker: gate on the column the request targets, whichever way it is
+    # spelled, falling back to the stored request when the event says only which
+    # request changed.
+    column = change_request_target_column(payload)
+    if column:
+        return column
+    cr_name = payload.get("change_request") or getattr(ev, "change_request", None)
+    if not isinstance(cr_name, str) or not cr_name:
+        return None
+    row = session.get(m.ChangeRequest, cr_name)
+    if row is None:
+        return None
+    for change in row.changes or []:
+        column = change_request_target_column(None, change)
+        if column:
+            return column  # a batch gates on its first column-scoped entry
+    return change_request_target_column(row.payload)
+
+
+def _enqueue_event_signal(session: Session, ev: Any) -> None:
+    """Turn a stored Tree Event into a deferred realtime marker.
+
+    Hooked into the ONE event fan-out point, so every capability emitting a
+    mapped event gets realtime for free — no per-endpoint wiring to forget.
+    """
+    kind = _EVENT_SIGNAL_KIND.get(str(ev.type))
+    if kind is None:
+        return
+    enqueue_signal(session.info, ev.sheet, kind, _event_read_subject(session, ev))
 
 
 @app.get("/api/method/arbor.events")

@@ -23,7 +23,15 @@ const COALESCE_MS = 400;
 // prolonged outage.
 const GIVE_UP_AFTER_MS = 5 * 60 * 1000;
 
-export type RealtimeKind = "comments";
+// Kinds name WHAT THE CLIENT MUST REFETCH, not what changed — two server-side
+// changes that oblige the same fetch share a kind, which keeps this layer free
+// of any per-event-type knowledge.
+//   comments -> the cell comment badges (and the open thread)
+//   sheet    -> the snapshot: cell values, structure, column config and order
+//   crs      -> the change-request inbox
+export type RealtimeKind = "comments" | "sheet" | "crs";
+
+const KINDS: RealtimeKind[] = ["comments", "sheet", "crs"];
 
 export function useRealtime(
   sheet: string | null | undefined,
@@ -68,16 +76,24 @@ export function useRealtime(
     // than a cold start.
     let healthySince: number | null = null;
     let failingSince: number | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    // One timer PER KIND. A single shared timer would let a burst of mixed
+    // kinds cancel each other, so the only refetch that ever happened would be
+    // the last kind to arrive — e.g. a cell edit landing right after a comment
+    // would swallow the comment refresh.
+    const timers = new Map<RealtimeKind, ReturnType<typeof setTimeout>>();
     const url = `/api/method/arbor.events?sheet=${encodeURIComponent(sheet)}`;
     const source = new EventSource(url, { withCredentials: true });
 
     const fire = (kind: RealtimeKind) => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        if (!closed) handler.current(kind);
-      }, COALESCE_MS);
+      const existing = timers.get(kind);
+      if (existing) clearTimeout(existing);
+      timers.set(
+        kind,
+        setTimeout(() => {
+          timers.delete(kind);
+          if (!closed) handler.current(kind);
+        }, COALESCE_MS),
+      );
     };
 
     const markHealthy = () => {
@@ -85,10 +101,12 @@ export function useRealtime(
       failingSince = null;
     };
     source.addEventListener("open", markHealthy);
-    source.addEventListener("comments", () => {
-      markHealthy(); // a delivered signal proves the stream is alive
-      fire("comments");
-    });
+    for (const kind of KINDS) {
+      source.addEventListener(kind, () => {
+        markHealthy(); // a delivered signal proves the stream is alive
+        fire(kind);
+      });
+    }
     source.addEventListener("error", () => {
       const now = Date.now();
       if (failingSince === null) failingSince = healthySince ?? now;
@@ -101,7 +119,8 @@ export function useRealtime(
 
     return () => {
       closed = true;
-      if (timer) clearTimeout(timer);
+      timers.forEach(clearTimeout);
+      timers.clear();
       source.close();
     };
   }, [sheet, generation]);

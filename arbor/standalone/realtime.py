@@ -192,5 +192,52 @@ async def stream_frames(
         yield format_event(message["kind"])
 
 
+# ---------------------------------------------------------------------------
+# Deferred signals: collected during a request, published AFTER it commits.
+# ---------------------------------------------------------------------------
+#: Key under which pending signals ride on a SQLAlchemy ``Session.info`` dict.
+#: A plain dict keeps this module free of any ORM import.
+SESSION_KEY = "arbor_realtime_signals"
+
+
+@dataclass(frozen=True)
+class PendingSignal:
+    """A signal a request wants sent once its transaction commits.
+
+    ``column`` is the read-ACL subject: present means "this change concerns that
+    column", so the publisher gates delivery on it; None means the change is
+    sheet-wide (a structural edit, a column REORDER) and goes to every reader.
+    """
+
+    sheet: str
+    kind: str
+    column: Optional[str] = None
+
+
+def enqueue(info: dict, sheet: str, kind: str, column: Optional[str] = None) -> None:
+    """Defer a signal until after commit.
+
+    Publishing from inside the transaction is the bug this exists to prevent:
+    the marker would reach a client whose refetch cannot see the write yet, and
+    no second marker follows, so the change silently never appears. Every write
+    path therefore enqueues here and ONE place (the session dependency) drains
+    it after the commit.
+
+    Duplicates within a request collapse — a single dispatch can touch the same
+    (sheet, kind, column) several times and one marker says all of it.
+    """
+    if not sheet:
+        return
+    pending = info.setdefault(SESSION_KEY, [])
+    signal = PendingSignal(sheet=sheet, kind=kind, column=column)
+    if signal not in pending:
+        pending.append(signal)
+
+
+def take(info: dict) -> list[PendingSignal]:
+    """Remove and return this request's pending signals."""
+    return info.pop(SESSION_KEY, [])
+
+
 #: The process-wide hub. One app, one loop, one fabric.
 hub = SignalHub()

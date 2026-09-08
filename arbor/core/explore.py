@@ -670,3 +670,67 @@ def get_cells(
         cells[node] = {c: repo.get_value(node, c) for c in ordered_cols}
 
     return {"cells": cells}
+
+
+# ---------------------------------------------------------------------------
+# Change Request read-ACL filter (Feature 3, applied to the review inbox).
+# ---------------------------------------------------------------------------
+def change_request_target_column(payload: Any, change: Any = None) -> Optional[str]:
+    """The column a Change Request (or one entry of a batch) targets, if any.
+
+    The location lives in the PAYLOAD, not on the row, and its shape differs by
+    emitter: a single suggestion carries ``{"column": …}`` while the executor's
+    proposal nests the original call as ``{"params": {"column": …}}``. Both
+    spellings resolve here so no caller has to know which produced it. ``None``
+    means the request targets structure rather than a column value.
+    """
+    for source in (change, payload):
+        if not isinstance(source, dict):
+            continue
+        column = source.get("column")
+        if isinstance(column, str) and column:
+            return column
+        params = source.get("params")
+        if isinstance(params, dict):
+            column = params.get("column")
+            if isinstance(column, str) and column:
+                return column
+    return None
+
+
+def visible_change_requests(
+    repo: Repository, sheet: str, actor: Actor, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Drop from a Change Request listing everything ``actor`` may not read.
+
+    A CR payload names its target column AND carries the proposed value, so an
+    unfiltered inbox hands every sheet reader both the id of a column the
+    read-ACL hides and the value someone wants to put in it — the same leak the
+    snapshot and the saved-view redaction are careful to prevent. A request the
+    actor cannot read is omitted ENTIRELY rather than blanked, so its existence
+    does not reveal that a hidden column is being worked on.
+
+    Batch requests are filtered entry by entry; one whose every entry is
+    unreadable disappears with them. Structure-targeting requests carry no
+    column and are always visible (structure is not column-filtered).
+
+    Pure, and shared by both adapters' inbox endpoints so they cannot diverge on
+    a read-ACL decision.
+    """
+    readable = {c.name for c in _readable_columns(repo, sheet, actor)}
+
+    def visible(column: Optional[str]) -> bool:
+        return column is None or column in readable
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        changes = row.get("changes") or []
+        if changes:
+            kept = [c for c in changes if visible(change_request_target_column(None, c))]
+            if not kept:
+                continue
+            row = {**row, "changes": kept}
+        elif not visible(change_request_target_column(row.get("payload"))):
+            continue
+        out.append(row)
+    return out
