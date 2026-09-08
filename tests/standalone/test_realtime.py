@@ -138,6 +138,11 @@ def login(client: TestClient, email: str) -> None:
     assert client.post("/api/method/login", json={"usr": email, "pwd": "ignored"}).status_code == 200
 
 
+def msg(resp):
+    assert resp.status_code == 200, resp.text
+    return resp.json()["message"]
+
+
 def make_sheet(client: TestClient, sheet: str) -> None:
     resp = client.post(
         "/api/method/arbor.execute_action",
@@ -222,7 +227,7 @@ class _FakeRequest:
 
 
 # ---------------------------------------------------------------------------
-# The publish side: every comment write signals, and only to readers.
+# The publish side: which writes signal, with which kind, and gated by what.
 # ---------------------------------------------------------------------------
 def _seed_cell(client: TestClient, sheet: str) -> tuple[str, str]:
     """A sheet with one node and one data column; returns (node, column)."""
@@ -259,9 +264,14 @@ def captured(monkeypatch):
     return calls
 
 
-def test_each_comment_write_publishes_one_signal(client, captured):
+def kinds(captured) -> list[str]:
+    return [c["kind"] for c in captured]
+
+
+def test_a_comment_write_signals_comments_gated_on_its_column(client, captured):
     login(client, ALICE)
     node, column = _seed_cell(client, "s1")
+    captured.clear()  # drop the seed's own signals
 
     added = client.post(
         "/api/method/arbor.add_cell_comment",
@@ -269,9 +279,11 @@ def test_each_comment_write_publishes_one_signal(client, captured):
     )
     assert added.status_code == 200, added.text
     comment = added.json()["message"]["name"]
-    assert [c["sheet"] for c in captured] == ["s1"]
-    assert captured[0]["kind"] == "comments"
+    assert kinds(captured) == ["comments"]
+    assert captured[0]["sheet"] == "s1"
+    assert captured[0]["can_deliver"] is not None  # column-scoped => gated
 
+    captured.clear()
     assert (
         client.post(
             "/api/method/arbor.resolve_cell_comment",
@@ -285,118 +297,226 @@ def test_each_comment_write_publishes_one_signal(client, captured):
         ).status_code
         == 200
     )
-    # resolve and delete signal too — the badge changes for everyone watching.
-    assert [c["sheet"] for c in captured] == ["s1", "s1", "s1"]
+    # Resolve and delete signal too — the badge changes for everyone watching.
+    assert kinds(captured) == ["comments", "comments"]
 
 
-def test_the_signal_carries_no_content(client, captured):
-    """Regression guard on the whole design: if a payload ever rides along, the
-    push path would have to re-implement read filtering."""
+def test_a_cell_write_signals_sheet_gated_on_its_column(client, captured):
     login(client, ALICE)
     node, column = _seed_cell(client, "s1")
-    client.post(
-        "/api/method/arbor.add_cell_comment",
-        json={"sheet": "s1", "node": node, "column": column, "body": "secret text"},
+    captured.clear()
+
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateCell",
+            "params": {"sheet": "s1", "node": node, "column": column, "value": "v1"},
+        },
     )
-    assert captured
-    assert set(captured[0]) == {"sheet", "kind", "can_deliver"}
-    assert "secret text" not in repr(captured[0])
+    assert resp.status_code == 200, resp.text
+    assert kinds(captured) == ["sheet"]
+    assert captured[0]["can_deliver"] is not None
 
 
-def test_the_gate_it_publishes_with_excludes_a_non_reader(client, captured):
-    """The predicate handed to the hub must answer False for a subscriber who
-    cannot read the commented column — the timing of a signal is itself a leak."""
+def test_a_structural_write_signals_sheet_WITHOUT_a_gate(client, captured):
+    """No column in the payload means the change is sheet-wide, so every reader
+    of the sheet hears it."""
+    login(client, ALICE)
+    make_sheet(client, "s1")
+    captured.clear()
+
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={"action_id": "addNode", "params": {"sheet": "s1", "parent": None, "label": "r"}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert kinds(captured) == ["sheet"]
+    assert captured[0]["can_deliver"] is None
+
+
+def test_a_column_REORDER_is_sheet_wide_not_column_gated(client, captured):
+    """The split that matters: configuring an owner-only column must not hint at
+    its existence, but a reorder changes the layout for everyone."""
+    login(client, ALICE)
+    make_sheet(client, "s1")
+    fields = []
+    for field in ("a", "b"):
+        resp = client.post(
+            "/api/method/arbor.execute_action",
+            json={
+                "action_id": "addColumn",
+                "params": {"sheet": "s1", "field": field, "label": field, "type": "text"},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        fields.append(field)
+    captured.clear()
+
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={"action_id": "setColumnOrder", "params": {"sheet": "s1", "order": ["b", "a"]}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert kinds(captured) == ["sheet"]
+    assert captured[0]["can_deliver"] is None, "a reorder must not be gated on one column"
+
+
+def test_a_change_request_signals_crs(client, captured):
+    """A non-owner's write degrades to a CR, and the inbox has to hear about it."""
     login(client, ALICE)
     node, column = _seed_cell(client, "s1")
-    # Lock the column down to its owner (ALICE), then comment on it.
-    locked = client.post(
+    login(client, BOB)  # BOB owns nothing here
+    captured.clear()
+
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateCell",
+            "params": {"sheet": "s1", "node": node, "column": column, "value": "from bob"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"]["kind"] == "suggested"
+    assert "crs" in kinds(captured)
+
+
+def test_only_mapped_event_types_enqueue_a_marker():
+    """A marker nobody acts on is noise: subscription/delegation changes drive
+    panels that do not listen, so they must not reach the wire. Tested on the
+    mapping directly — it is the thing that decides, and this keeps the test
+    independent of any capability's param shape."""
+    from types import SimpleNamespace
+
+    from arbor.standalone import app as app_module
+    from arbor.standalone.realtime import SESSION_KEY
+
+    def enqueued(event_type: str, payload: dict | None = None):
+        session = SimpleNamespace(info={}, get=lambda *_a, **_k: None)
+        ev = SimpleNamespace(type=event_type, sheet="s1", payload=payload or {})
+        app_module._enqueue_event_signal(session, ev)
+        return session.info.get(SESSION_KEY, [])
+
+    assert enqueued("SUBSCRIPTION_CHANGED") == []
+    assert [x.kind for x in enqueued("NODE_VALUE_UPDATED", {"column": "c1"})] == ["sheet"]
+    assert [x.column for x in enqueued("NODE_VALUE_UPDATED", {"column": "c1"})] == ["c1"]
+    assert [x.column for x in enqueued("NODE_CREATED", {"node": "n1"})] == [None]
+    # The REAL proposal shape nests the original call — asserting an empty
+    # payload here is what let an ungated CR marker ship once.
+    proposed = enqueued("CHANGE_PROPOSED", {"change_request": "cr-1", "params": {"column": "c9"}})
+    assert [x.kind for x in proposed] == ["crs"]
+    assert [x.column for x in proposed] == ["c9"]
+    # Every schema change is sheet-wide, gated on nothing: see
+    # _COLUMN_GATED_EVENTS for why gating these was wrong twice over.
+    for payload in ({"op": "reorder", "order": []}, {"op": "delete", "column": "c1"}):
+        assert [x.column for x in enqueued("COLUMN_CONFIG_UPDATED", payload)] == [None]
+    # A delegation moves per-cell can_edit, so the grid must refetch.
+    assert [x.kind for x in enqueued("DELEGATION_CHANGED", {})] == ["sheet"]
+
+
+def test_enqueue_collapses_duplicates_within_one_request():
+    """One dispatch can touch the same (sheet, kind, column) repeatedly and one
+    marker says all of it. Tested on ``enqueue`` directly: the integration path
+    that used to stand in for this emitted a single event either way, so it
+    passed with the de-duplication deleted."""
+    from arbor.standalone.realtime import enqueue, take
+
+    info: dict = {}
+    enqueue(info, "s1", "sheet", "c1")
+    enqueue(info, "s1", "sheet", "c1")
+    enqueue(info, "s1", "sheet", None)  # different subject => its own marker
+    enqueue(info, "s1", "crs", "c1")
+    enqueue(info, "", "sheet", None)  # no sheet => nothing to address
+    assert [(x.kind, x.column) for x in take(info)] == [
+        ("sheet", "c1"),
+        ("sheet", None),
+        ("crs", "c1"),
+    ]
+    assert take(info) == []
+
+
+def test_deleting_a_column_still_signals(client, captured):
+    """The gate resolves a column AFTER commit, and a deleted column is gone by
+    then — gating this dropped the marker every single time, so every open
+    client kept rendering a column that no longer existed."""
+    login(client, ALICE)
+    _node, column = _seed_cell(client, "s1")
+    captured.clear()
+
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={"action_id": "deleteColumn", "params": {"sheet": "s1", "column": column}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert kinds(captured) == ["sheet"]
+    assert captured[0]["can_deliver"] is None, "a delete cannot be gated on the row it removed"
+
+
+def test_revoking_read_access_signals_the_viewer_who_lost_it(client, captured):
+    """Gating this on the NEW acl told everyone EXCEPT the one viewer who most
+    needed to refetch — their tab kept showing a column they may no longer see."""
+    login(client, ALICE)
+    _node, column = _seed_cell(client, "s1")
+    captured.clear()
+
+    resp = client.post(
         "/api/method/arbor.execute_action",
         json={
             "action_id": "updateColumn",
             "params": {"sheet": "s1", "column": column, "patch": {"read_level": "owner-only"}},
         },
     )
-    assert locked.status_code == 200, locked.text
-    client.post(
-        "/api/method/arbor.add_cell_comment",
-        json={"sheet": "s1", "node": node, "column": column, "body": "private"},
-    )
-    assert captured, "no signal was published"
-    gate = captured[-1]["can_deliver"]
-    assert gate is not None, "a column-scoped change must be published WITH a gate"
-    assert gate(actor(ALICE)) is True
-    assert gate(actor(BOB)) is False
+    assert resp.status_code == 200, resp.text
+    assert kinds(captured) == ["sheet"]
+    gate = captured[0]["can_deliver"]
+    assert gate is None, "the viewer losing access must still be told to refetch"
 
 
-def test_the_marker_is_published_only_AFTER_the_write_commits(client, monkeypatch):
-    """The ordering the whole design rests on, and the one that was broken.
-
-    Background tasks run BEFORE a plain ``Depends(get_db)`` tears down, so a
-    handler that scheduled the publish without committing first announced a row
-    no refetch could see yet — and no second marker follows, so the comment
-    silently never appeared. Proof: count COMMITTED rows from a fresh session at
-    the moment of publish.
-    """
-    from arbor.standalone import app as app_module
-
-    seen: list[int] = []
-
-    def spy(sheet: str, column: str) -> None:
-        with app_module.SessionLocal() as fresh:
-            seen.append(
-                fresh.scalar(
-                    sa.select(sa.func.count()).select_from(app_module.m.CellComment)
-                )
-                or 0
-            )
-
-    monkeypatch.setattr(app_module, "_publish_comment_signal", spy)
+def test_a_change_request_marker_is_gated_on_the_column_it_targets(client, captured):
+    """A CR payload names a column and carries the proposed value, so its marker
+    must not be broadcast to viewers who cannot read that column."""
     login(client, ALICE)
     node, column = _seed_cell(client, "s1")
+    login(client, BOB)  # BOB owns nothing here, so his write degrades to a CR
+    captured.clear()
+
     resp = client.post(
-        "/api/method/arbor.add_cell_comment",
-        json={"sheet": "s1", "node": node, "column": column, "body": "hi"},
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateCell",
+            "params": {"sheet": "s1", "node": node, "column": column, "value": "from bob"},
+        },
     )
     assert resp.status_code == 200, resp.text
-    assert seen == [1], f"publish saw {seen} committed comments; expected the write to be visible"
+    assert resp.json()["message"]["kind"] == "suggested"
+    crs = [c for c in captured if c["kind"] == "crs"]
+    assert crs, f"no crs marker in {kinds(captured)}"
+    assert crs[0]["can_deliver"] is not None, "a column-scoped CR marker must be gated"
 
 
-def test_end_to_end_a_comment_write_reaches_a_subscribers_stream(client):
-    """The whole chain with nothing stubbed: write -> publish -> queue -> frame.
-
-    Every other publish-side test monkeypatches ``hub.publish``, so without this
-    the wiring is only ever exercised in halves.
-    """
-    from arbor.standalone.realtime import hub
-
+def test_a_rolled_back_write_announces_nothing(client, captured):
+    """`enqueue`'s promise is that a marker follows a COMMITTED write. A stale
+    base_version rolls the request back at HTTP 200, so the queue has to be
+    cleared with it."""
     login(client, ALICE)
     node, column = _seed_cell(client, "s1")
+    captured.clear()
 
-    async def scenario():
-        hub.bind_loop(asyncio.get_running_loop())
-        sub = hub.subscribe("s1", actor(ALICE))
-        try:
-            frames = stream_frames(sub.queue, heartbeat=0.02)
-            assert await frames.__anext__() == ": connected\n\n"
-            # The real publisher, reading the real committed row and the real ACL.
-            from arbor.standalone import app as app_module
-
-            await run_in_threadpool(app_module._publish_comment_signal, "s1", column)
-            frame = await asyncio.wait_for(frames.__anext__(), timeout=2)
-            assert frame == "event: comments\ndata: 1\n\n"
-            await frames.aclose()
-        finally:
-            hub.unsubscribe(sub.sid)
-
-    # Seed a real comment first (sync, outside the loop).
-    assert (
-        client.post(
-            "/api/method/arbor.add_cell_comment",
-            json={"sheet": "s1", "node": node, "column": column, "body": "hi"},
-        ).status_code
-        == 200
+    resp = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateCell",
+            "params": {
+                "sheet": "s1",
+                "node": node,
+                "column": column,
+                "value": "v",
+                "base_version": 99,  # nothing is at version 99 => VERSION_CONFLICT
+            },
+        },
     )
-    asyncio.run(scenario())
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"].get("error") == "VERSION_CONFLICT", resp.text
+    assert captured == []
 
 
 def test_publishing_from_another_thread_still_reaches_the_loop():
@@ -408,29 +528,164 @@ def test_publishing_from_another_thread_still_reaches_the_loop():
         hub = SignalHub()
         hub.bind_loop(asyncio.get_running_loop())
         sub = hub.subscribe("s1", actor(ALICE))
-        await run_in_threadpool(hub.publish, "s1", "comments")
+        await run_in_threadpool(hub.publish, "s1", "sheet")
         message = await asyncio.wait_for(sub.queue.get(), timeout=2)
-        assert message == {"kind": "comments", "sheet": "s1"}
+        assert message == {"kind": "sheet", "sheet": "s1"}
 
     asyncio.run(scenario())
 
 
-def test_a_failing_publish_is_logged_not_raised(client, monkeypatch):
-    """A marker is best-effort; an exception escaping it would 500 a write that
-    already succeeded. (This path had a NameError for exactly as long as it had
-    no test.)"""
+def test_the_signal_carries_no_content(client, captured):
+    """Regression guard on the whole design: if a payload ever rides along, the
+    push path would have to re-implement read filtering."""
+    login(client, ALICE)
+    node, column = _seed_cell(client, "s1")
+    captured.clear()
+    client.post(
+        "/api/method/arbor.add_cell_comment",
+        json={"sheet": "s1", "node": node, "column": column, "body": "secret text"},
+    )
+    assert captured
+    assert set(captured[0]) == {"sheet", "kind", "can_deliver"}
+    assert "secret text" not in repr(captured[0])
+
+
+def test_the_gate_excludes_a_non_reader(client, captured):
+    """The predicate handed to the hub must answer False for a subscriber who
+    cannot read the column — the timing of a signal is itself a leak."""
+    login(client, ALICE)
+    node, column = _seed_cell(client, "s1")
+    locked = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateColumn",
+            "params": {"sheet": "s1", "column": column, "patch": {"read_level": "owner-only"}},
+        },
+    )
+    assert locked.status_code == 200, locked.text
+    captured.clear()
+    client.post(
+        "/api/method/arbor.add_cell_comment",
+        json={"sheet": "s1", "node": node, "column": column, "body": "private"},
+    )
+    assert captured, "no signal was published"
+    gate = captured[-1]["can_deliver"]
+    assert gate is not None, "a column-scoped change must be published WITH a gate"
+    assert gate(actor(ALICE)) is True
+    assert gate(actor(BOB)) is False
+
+
+def test_markers_are_published_only_AFTER_the_write_commits(client, monkeypatch):
+    """The ordering the whole design rests on, and the one that was broken once.
+
+    A publish from inside the transaction announces a row no refetch can see
+    yet, and no second marker follows — so the change silently never appears,
+    which is the exact bug this feature exists to fix. Proof: count COMMITTED
+    rows from a FRESH session at the moment of publish.
+    """
     from arbor.standalone import app as app_module
+
+    seen: list[int] = []
+
+    def spy(sheet, kind, can_deliver=None):
+        with app_module.SessionLocal() as fresh:
+            seen.append(
+                fresh.scalar(
+                    sa.select(sa.func.count()).select_from(app_module.m.CellComment)
+                )
+                or 0
+            )
+        return 0
+
+    login(client, ALICE)
+    node, column = _seed_cell(client, "s1")
+    monkeypatch.setattr(app_module.hub, "publish", spy)
+    resp = client.post(
+        "/api/method/arbor.add_cell_comment",
+        json={"sheet": "s1", "node": node, "column": column, "body": "hi"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen == [1], f"publish saw {seen} committed comments; the write must be visible"
+
+
+def test_end_to_end_a_comment_write_reaches_a_subscribers_stream(client):
+    """The whole chain with nothing stubbed: a real HTTP write in a worker
+    thread -> the cross-thread enqueue -> the subscriber's queue -> a frame."""
+    from arbor.standalone.realtime import hub
+
+    login(client, ALICE)
+    node, column = _seed_cell(client, "s1")
+
+    async def scenario():
+        hub.bind_loop(asyncio.get_running_loop())
+        sub = hub.subscribe("s1", actor(ALICE))
+        try:
+            frames = stream_frames(sub.queue, heartbeat=0.05)
+            assert await frames.__anext__() == ": connected\n\n"
+            # The write happens in a worker thread, exactly as under uvicorn.
+            resp = await run_in_threadpool(
+                lambda: client.post(
+                    "/api/method/arbor.add_cell_comment",
+                    json={"sheet": "s1", "node": node, "column": column, "body": "hi"},
+                )
+            )
+            assert resp.status_code == 200, resp.text
+            frame = await asyncio.wait_for(frames.__anext__(), timeout=3)
+            assert frame == "event: comments\ndata: 1\n\n"
+            await frames.aclose()
+        finally:
+            hub.unsubscribe(sub.sid)
+
+    asyncio.run(scenario())
+
+
+def test_a_failing_flush_is_logged_not_raised(client, monkeypatch):
+    """A marker is best-effort; an exception escaping the flush would fail a
+    request whose write already committed. (This path had a NameError for
+    exactly as long as it had no test.)"""
+    from arbor.standalone import app as app_module
+    from arbor.standalone.realtime import enqueue
+
+    login(client, ALICE)
+    _node, column = _seed_cell(client, "s1")
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("event loop is closed")
 
-    monkeypatch.setattr(app_module, "_repo", boom)
-    app_module._publish_comment_signal("s1", "col")  # must not raise
+    monkeypatch.setattr(app_module.hub, "publish", boom)
+    with app_module.SessionLocal() as session:
+        enqueue(session.info, "s1", "comments", column)
+        app_module._flush_realtime(session)  # must swallow, not raise
+
+    # And through a real request: the write must still succeed.
+    resp = client.post(
+        "/api/method/arbor.add_cell_comment",
+        json={"sheet": "s1", "node": _node, "column": column, "body": "hi"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_vanished_column_delivers_to_nobody(client, monkeypatch):
+    """The safe direction: with the column gone there is nothing to evaluate the
+    read gate against, so the marker is dropped rather than sent ungated."""
+    from arbor.standalone import app as app_module
+    from arbor.standalone.realtime import enqueue
+
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        app_module.hub, "publish", lambda *a, **k: published.append((a, k)) or 0
+    )
+    login(client, ALICE)
+    make_sheet(client, "s1")
+    with app_module.SessionLocal() as session:
+        enqueue(session.info, "s1", "comments", "col-that-never-existed")
+        app_module._flush_realtime(session)
+    assert published == []
 
 
 def test_a_sheet_scoped_agent_token_cannot_subscribe_outside_its_scope(client):
     """A live subscription is a read: the token gate has to match the one on
-    get_sheet_snapshot, or a scoped token receives a signal per comment on a
+    get_sheet_snapshot, or a scoped token receives a signal per change on a
     sheet it may not touch (and the 404-vs-200 split enumerates sheet names)."""
     login(client, ALICE)
     make_sheet(client, "s1")
@@ -451,21 +706,83 @@ def test_a_sheet_scoped_agent_token_cannot_subscribe_outside_its_scope(client):
 def test_an_unknown_comment_id_publishes_nothing(client, captured):
     login(client, ALICE)
     make_sheet(client, "s1")
+    captured.clear()
     for method in ("resolve_cell_comment", "delete_cell_comment"):
         client.post(f"/api/method/arbor.{method}", json={"comment": "does-not-exist"})
     assert captured == []
 
 
-def test_a_column_deleted_before_the_publish_delivers_to_nobody(client, monkeypatch):
-    """The safe direction: with the column gone there is nothing to evaluate the
-    read gate against, so the marker is dropped rather than sent ungated."""
-    from arbor.standalone import app as app_module
+# ---------------------------------------------------------------------------
+# The Change Request inbox's own read-ACL filter. Realtime made this urgent:
+# the `crs` marker's safety argument is "the client refetches, so the read
+# endpoint's filtering decides what it sees" — which was false while the inbox
+# returned every payload verbatim.
+# ---------------------------------------------------------------------------
+CAROL = "carol@example.com"
 
-    published: list[tuple] = []
-    monkeypatch.setattr(
-        app_module.hub, "publish", lambda *a, **k: published.append((a, k)) or 0
+
+def test_the_cr_inbox_hides_a_request_targeting_an_unreadable_column(client):
+    """A CR payload names its target column AND carries the proposed value, so
+    an unfiltered inbox handed both to every reader of the sheet — including
+    someone with no involvement at all."""
+    login(client, ALICE)
+    node, column = _seed_cell(client, "s1")
+    locked = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateColumn",
+            "params": {"sheet": "s1", "column": column, "patch": {"read_level": "owner-only"}},
+        },
     )
+    assert locked.status_code == 200, locked.text
+
+    # BOB proposes a change to that column (he cannot execute it directly).
+    login(client, BOB)
+    proposed = client.post(
+        "/api/method/arbor.execute_action",
+        json={
+            "action_id": "updateCell",
+            "params": {"sheet": "s1", "node": node, "column": column, "value": "SECRET-VALUE"},
+        },
+    )
+    assert proposed.status_code == 200, proposed.text
+    assert proposed.json()["message"]["kind"] == "suggested"
+
+    # CAROL is an uninvolved reader: the snapshot correctly hides the column,
+    # and the inbox must not hand it back to her either.
+    login(client, CAROL)
+    snap = msg(client.get("/api/method/arbor.get_sheet_snapshot", params={"sheet": "s1"}))
+    assert column not in [c["name"] for c in snap["columns"]]
+    inbox = msg(client.get("/api/method/arbor.list_change_requests", params={"sheet": "s1"}))
+    assert inbox == [], f"the inbox leaked {inbox}"
+    assert "SECRET-VALUE" not in repr(inbox)
+
+    # The column's owner still sees her own review queue.
+    login(client, ALICE)
+    owner_inbox = msg(client.get("/api/method/arbor.list_change_requests", params={"sheet": "s1"}))
+    assert len(owner_inbox) == 1
+    assert "SECRET-VALUE" in repr(owner_inbox)
+
+
+def test_the_cr_inbox_keeps_structural_requests_visible(client):
+    """Structure is not column-filtered, so a move/add request has no column to
+    hide behind and must stay in everyone's inbox."""
     login(client, ALICE)
     make_sheet(client, "s1")
-    app_module._publish_comment_signal("s1", "col-that-never-existed")
-    assert published == []
+    parent = client.post(
+        "/api/method/arbor.execute_action",
+        json={"action_id": "addNode", "params": {"sheet": "s1", "parent": None, "label": "p"}},
+    )
+    assert parent.status_code == 200, parent.text
+
+    login(client, BOB)  # not the structural owner => suggestion
+    proposed = client.post(
+        "/api/method/arbor.execute_action",
+        json={"action_id": "addNode", "params": {"sheet": "s1", "parent": None, "label": "mine"}},
+    )
+    assert proposed.status_code == 200, proposed.text
+    assert proposed.json()["message"]["kind"] == "suggested"
+
+    login(client, CAROL)
+    inbox = msg(client.get("/api/method/arbor.list_change_requests", params={"sheet": "s1"}))
+    assert len(inbox) == 1

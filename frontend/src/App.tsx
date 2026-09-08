@@ -36,7 +36,7 @@ import { BulkActionBar } from "./components/BulkActionBar";
 import { DraftReviewBar } from "./components/DraftReviewBar";
 import { DraftReviewModal, type DraftRow } from "./components/DraftReviewModal";
 import { useSheet, cellKey } from "./hooks/useSheet";
-import { useRealtime } from "./hooks/useRealtime";
+import { useRealtime, type RealtimeKind } from "./hooks/useRealtime";
 import { useCrSelection } from "./hooks/useCrSelection";
 import { TreeTable } from "./components/TreeTable";
 import { ColumnSettings } from "./components/ColumnConfig";
@@ -633,15 +633,32 @@ function ConnectedShell({
   // the open thread if the drawer is showing one. Nothing is trusted from the
   // wire, so a stale or duplicated signal costs one wasted fetch at worst.
   const onRealtimeSignal = useCallback(
-    (kind: string) => {
-      if (kind !== "comments") return;
-      // remote: this refetch is driven by someone else's clock, so it must not
-      // clear the local optimistic/pending state a concurrent local write is
-      // still relying on (see useSheet.refetch).
-      void sheet.refetch({ remote: true });
-      if (commentCell) loadCommentThread(commentCell.node, commentCell.column);
+    (kind: RealtimeKind) => {
+      // Every branch answers with a REFETCH, never with pushed data — the
+      // signal is a dirty marker, so the read endpoints' ACL filtering stays
+      // the only thing that decides what this viewer may see.
+      //
+      // `remote: true` matters on the snapshot: this refetch is driven by
+      // someone else's clock, so it must not clear the local optimistic and
+      // pending state a concurrent local write is still relying on (see
+      // useSheet.refetch).
+      if (kind === "comments" || kind === "sheet") {
+        void sheet.refetch({ remote: true });
+      }
+      if (kind === "comments" && commentCell) {
+        loadCommentThread(commentCell.node, commentCell.column);
+      }
+      if (kind === "crs") {
+        refreshCRs();
+      }
+      // Only these two add a row to the change history: the comment
+      // capabilities declare emits=() and the activity feed reads Tree Events
+      // only, so refreshing it on a comment marker is a guaranteed no-op fetch.
+      if (kind === "sheet" || kind === "crs") {
+        setActivityRefreshKey((k) => k + 1);
+      }
     },
-    [sheet, commentCell, loadCommentThread],
+    [sheet, commentCell, loadCommentThread, refreshCRs],
   );
   // The idle shell mounts ConnectedShell with the "(none)" placeholder; that is
   // not a sheet, and subscribing to it would be a guaranteed 404 per mount.
