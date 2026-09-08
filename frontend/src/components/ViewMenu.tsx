@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import type { SnapshotColumn, ArborClient } from "../api";
-import type { SheetView } from "../lib/view";
+import { resolveColumnOrder, type SheetView } from "../lib/view";
 
 // Pure reorder helper shared by the drag-and-drop path: move `from` so it lands
 // at `to`'s current slot, returning a NEW array. Factored out so reordering has
@@ -35,33 +35,35 @@ export type ViewMenuProps = {
   // Presence-only: ViewMenu NEVER calls this. Tests pass a spy to prove views
   // are mutation-free.
   client?: ArborClient;
+  // "Save for everyone": promote the viewer's arrangement to the SHARED stored
+  // order. ViewMenu still issues zero executeAction — it hands the host the
+  // resolved left-to-right order (complete, non-label, column ids, exactly what
+  // setColumnOrder requires) and the HOST dispatches. Omitted => no button.
+  onSaveSharedOrder?: (order: string[]) => void;
+  // Server hint `snapshot.viewer.columns_filtered`: the read-ACL dropped at
+  // least one column from `columns`. setColumnOrder's contract is "name every
+  // non-label column of the SHEET", so a filtered viewer cannot satisfy it from
+  // what they can see — including the sheet's own structural owner, who is the
+  // one actor with the authority to make the write. Offering the button then is
+  // offering a permanent 400, so we explain instead. (Nothing here reveals the
+  // hidden column: the hint is a bare boolean.)
+  columnsFiltered?: boolean;
 };
 
 export function ViewMenu(props: ViewMenuProps): JSX.Element {
-  const { columns, view, onChange } = props;
+  const { columns, view, onChange, onSaveSharedOrder, columnsFiltered } = props;
   // Only NON-label, snapshot-present columns are user-configurable (the label is
   // always visible and never reorderable).
   const dataColumns = columns.filter((c) => !c.is_label);
 
   // Render order = the view's order intersected with present data columns, then
   // any remaining data columns in snapshot order (so a newly-appeared column
-  // still shows up to be configured).
+  // still shows up to be configured). resolveColumnOrder is that one rule,
+  // shared with the grid's header drag and with "save for everyone".
   const present = new Map(dataColumns.map((c) => [c.name, c]));
-  const ordered: SnapshotColumn[] = [];
-  const taken = new Set<string>();
-  for (const name of view.order) {
-    const c = present.get(name);
-    if (c && !taken.has(name)) {
-      ordered.push(c);
-      taken.add(name);
-    }
-  }
-  for (const c of dataColumns) {
-    if (!taken.has(c.name)) {
-      ordered.push(c);
-      taken.add(c.name);
-    }
-  }
+  const ordered: SnapshotColumn[] = resolveColumnOrder(columns, view)
+    .map((name) => present.get(name))
+    .filter((c): c is SnapshotColumn => c !== undefined);
 
   const hidden = new Set(view.hidden);
 
@@ -108,8 +110,38 @@ export function ViewMenu(props: ViewMenuProps): JSX.Element {
     onChange({ ...view, width: next });
   };
 
+  // "Save for everyone" is offered ONLY when it would do something: the local
+  // arrangement has to actually differ from the shared (snapshot) order. A dead
+  // button that silently no-ops is worse than no button. `ordered` is the
+  // COMPLETE non-label set (hidden columns included) — the shared order is a
+  // stored property of the sheet, not a function of what this viewer hides.
+  const sharedOrder = dataColumns.map((c) => c.name);
+  const localOrder = orderNames();
+  const differsFromShared = localOrder.some((n, i) => n !== sharedOrder[i]);
+
   return (
     <div className="arbor-view-menu" data-testid="view-menu">
+      {onSaveSharedOrder && differsFromShared && columnsFiltered && (
+        <div className="arbor-view-share">
+          <p className="arbor-view-share-blocked" data-testid="view-save-order-blocked">
+            The shared order covers every column on this sheet, and not all of
+            them are visible to you — so this arrangement stays yours alone.
+          </p>
+        </div>
+      )}
+      {onSaveSharedOrder && differsFromShared && !columnsFiltered && (
+        <div className="arbor-view-share">
+          <button
+            type="button"
+            className="arbor-view-save-order"
+            data-testid="view-save-order"
+            title="Make this column order the one everyone sees"
+            onClick={() => onSaveSharedOrder(localOrder)}
+          >
+            Save order for everyone
+          </button>
+        </div>
+      )}
       <ul className="arbor-view-cols">
         {ordered.map((c, i) => (
           <li

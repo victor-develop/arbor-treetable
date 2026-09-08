@@ -256,6 +256,29 @@ class Repository(Protocol):
         would scramble them."""
         ...
 
+    def reorder_columns(self, sheet: str, ordered_ids: list[str]) -> None:
+        """Rewrite the sheet's STORED column order (``setColumnOrder``).
+
+        ``ordered_ids`` is the complete left-to-right ordering of the sheet's
+        NON-label columns, as resolved column ids (the handler already mapped
+        field keys and refused anything unknown/duplicated/missing). The LABEL
+        column is never part of it: it is always the first grid column, so it
+        keeps the leading slot(s) here — the written order is
+        ``[label columns, in their current relative order] + ordered_ids``,
+        which is exactly what the UI renders and what ``addColumn.after`` then
+        positions against.
+
+        Defensive contract, identical in all three adapters: an id that is not a
+        column of ``sheet``, a duplicate, or a LABEL column raises ``ValueError``
+        (this codebase's bad-param signal — 400, never a 404); a non-label column
+        of the sheet that ``ordered_ids`` omits is appended after the named ones
+        rather than left with a colliding position.
+
+        Adapters that persist the order in an integer position field assign it
+        SEQUENTIALLY over the whole sheet (1..N), which also normalizes rows
+        created before positioning existed — see ``create_column``."""
+        ...
+
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None: ...
     def delete_column(self, sheet: str, column: str) -> None: ...
 

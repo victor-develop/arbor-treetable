@@ -124,6 +124,18 @@ def serialize_snapshot(
             "can_add_column": bool(acl_hints.get("can_add_column", False)),
             # Platform-admin hint — gates the admin Roles panel (Feature: roles).
             "is_admin": bool(acl_hints.get("is_admin", False)),
+            # True when the read-ACL dropped at least one column from
+            # ``columns`` above. Deliberately a BOOLEAN and nothing more — no
+            # name, no field key, no count — so REVEAL-IMPOSSIBILITY holds; it
+            # says only "this is not the whole schema".
+            #
+            # It exists because setColumnOrder's contract is "name every
+            # non-label column of the sheet", which a filtered viewer cannot
+            # satisfy by construction. Without the hint the UI offered "save
+            # order for everyone" to the sheet's own structural owner and the
+            # call 400'd every time, permanently, for the one actor with the
+            # authority to make it. The FE suppresses the affordance on this.
+            "columns_filtered": bool(acl_hints.get("columns_filtered", False)),
             "subscribed": bool(acl_hints.get("subscribed", False)),
             "subscription": acl_hints.get("subscription"),
             # active branch delegations on this sheet (for the delegation control);

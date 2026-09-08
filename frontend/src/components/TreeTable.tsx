@@ -90,6 +90,12 @@ export type TreeTableProps = {
   // data column header; the ghost column itself exists only while the inline
   // label editor is open (no reserved blank column).
   onCreateColumn?: (label: string, after: string | null) => void;
+  // Drag a column header to reorder MY VIEW: called with the dragged column's
+  // id and the id of the column it was dropped on. Presentation only — the host
+  // reorders its SheetView and dispatches NOTHING (promoting an arrangement to
+  // the shared stored order is a separate, explicit action). Omitted => headers
+  // are not draggable.
+  onReorderColumns?: (from: string, to: string) => void;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -120,6 +126,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     proposedCell,
     movedNode,
     onCreateColumn,
+    onReorderColumns,
   } = props;
 
   const dragged = useRef<SnapshotNode | null>(null);
@@ -190,6 +197,23 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
   // Proposed preview is READ-ONLY (same reason the per-row cluster is withheld
   // below): no per-header "+", so the preview offers no way to write.
   const createColumn = preview ? undefined : onCreateColumn;
+  // Reordering my own view is presentation state, not a write — but the
+  // Proposed preview is read-only in every respect, so it stays static there.
+  const reorderColumns = preview ? undefined : onReorderColumns;
+
+  // Column-header drag state: the column id being dragged and the header
+  // currently hovered (drives the drop-indicator border). Kept entirely
+  // separate from the ROW drag (`dragged`, a grip-handle drag on a TreeRow) —
+  // the two never interleave because each has its own dedicated grip.
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const [overCol, setOverCol] = useState<string | null>(null);
+  const dropOntoColumn = (target: string): void => {
+    const from = dragCol;
+    setDragCol(null);
+    setOverCol(null);
+    if (!from || from === target || !reorderColumns) return;
+    reorderColumns(from, target);
+  };
   // Where the ghost header / `<col>` / row pad go, clamped to the columns that
   // exist right now. `ghost.index` is captured at click time; if the sheet lost
   // a column since, an unclamped index renders none of the three and `ghost`
@@ -330,9 +354,84 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               {ghostIndex === i && ghostHead}
               <th
                 data-testid={`col-head-${c.name}`}
-                className={c.type === "number" ? "is-numeric" : undefined}
+                className={
+                  [
+                    c.type === "number" ? "is-numeric" : "",
+                    dragCol === c.name ? "is-dragging-col" : "",
+                    overCol === c.name && dragCol && dragCol !== c.name
+                      ? "is-col-drop-target"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
                 style={{ width: c.width }}
+                // The whole header is the DROP target (a wide, forgiving
+                // landing zone); only the grip below starts a drag, so the "+"
+                // and the gear keep their clicks.
+                // Only a COLUMN drag marks a drop target. A row drag crossing
+                // the header used to set it and nothing cleared it, so the next
+                // column drag flashed a stale border before its first dragEnter.
+                onDragEnter={
+                  reorderColumns
+                    ? () => {
+                        if (dragCol) setOverCol(c.name);
+                      }
+                    : undefined
+                }
+                onDragOver={
+                  reorderColumns
+                    ? (e) => {
+                        if (!dragCol) return; // a ROW drag passing over the head
+                        e.preventDefault();
+                        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                      }
+                    : undefined
+                }
+                onDrop={
+                  reorderColumns
+                    ? (e) => {
+                        if (!dragCol) return;
+                        e.preventDefault();
+                        dropOntoColumn(c.name);
+                      }
+                    : undefined
+                }
               >
+                {/* The drag affordance is its OWN grip, hover-revealed like
+                    the "+": making the whole header draggable would swallow the
+                    "+"/gear clicks (and fight the row drag). It sits OUTSIDE
+                    .arbor-col-head so that span's text stays the bare label.
+                    Keyboard users reorder from the View menu's ↑/↓ instead, so
+                    the glyph is aria-hidden rather than a fake button. */}
+                {reorderColumns && (
+                  <span
+                    className="arbor-col-grip"
+                    // Keyed on `field` for the same reason the "+" is: the
+                    // column id is a random server autoname, so an e2e that
+                    // just created a column could not address its grip.
+                    data-testid={`col-grip-${c.field}`}
+                    draggable
+                    aria-hidden="true"
+                    title={`Drag to reorder ${c.label} (your view only)`}
+                    onDragStart={(e) => {
+                      setDragCol(c.name);
+                      // dataTransfer is absent under jsdom; guard so the
+                      // handler never throws.
+                      if (e.dataTransfer) {
+                        e.dataTransfer.effectAllowed = "move";
+                        // Firefox refuses to start a drag without payload.
+                        e.dataTransfer.setData("text/plain", c.name);
+                      }
+                    }}
+                    onDragEnd={() => {
+                      setDragCol(null);
+                      setOverCol(null);
+                    }}
+                  >
+                    ⠿
+                  </span>
+                )}
                 <span className="arbor-col-head">
                   {c.label}
                   {onColumnSettings && (

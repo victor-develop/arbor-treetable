@@ -553,7 +553,8 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     # building values/hints. Because serialize_snapshot + the values loop iterate
     # the passed columns, a forbidden column drops from headers AND every node's
     # cells together — no cell can leak.
-    columns = visible_columns(repo, sheet_view, actor, repo.list_columns(sheet))
+    all_columns = repo.list_columns(sheet)
+    columns = visible_columns(repo, sheet_view, actor, all_columns)
     nodes = repo.list_nodes(sheet)
 
     # Per-cell values + parallel versions, keyed by (node, column). Feature 1:
@@ -597,6 +598,10 @@ def get_sheet_snapshot(sheet: str, actor: Optional[Actor] = None) -> dict[str, A
     comments = _cell_comment_marks(sheet, {c.name for c in columns}, node_names)
 
     acl_hints = _acl_hints(actor, repo, sheet, columns, nodes)
+    # Boolean-only "your column list is not the whole schema" hint (see
+    # core.snapshot.serialize_snapshot). Computed HERE, next to the filter
+    # itself, so the two can never disagree about what was dropped.
+    acl_hints["columns_filtered"] = len(columns) != len(all_columns)
     snap = serialize_snapshot(
         sheet_view, columns, nodes, values, acl_hints, versions=versions, pending=pending
     )
@@ -939,6 +944,14 @@ def add_column(sheet, field, label, type, options=None, column_owner=None, is_la
             if isinstance(is_label, (str, int)) else bool(is_label),
         },
     )
+
+
+@frappe.whitelist()
+def set_column_order(sheet, order=None):
+    # ``order`` is the COMPLETE left-to-right ordering of the sheet's non-label
+    # columns (field keys or column ids); _coerce so a form-encoded JSON array
+    # arrives as a real list. A bad list is a 400 from the executor's pre-pass.
+    return _dispatch("setColumnOrder", {"sheet": sheet, "order": _coerce(order) or []})
 
 
 @frappe.whitelist()

@@ -133,11 +133,17 @@ class Capability:
     acl_rule: str  # human-readable name of the resolver branch that decides
     emits: tuple[str, ...]  # Tree Event type(s) emitted on success
     handler: Optional[Any] = None  # callable(params, actor, repo) -> HandlerResult
-    # Optional param pre-pass: callable(params, repo) -> params. Runs in
+    # Optional param pre-pass: callable(params, repo, actor) -> params. Runs in
     # execute_action after schema validation and BEFORE the authorize-or-suggest
     # branch, so a param the handler would reject is rejected identically on
     # both branches (an unauthorized caller cannot file a Change Request whose
     # approval can only ever fail).
+    #
+    # ``actor`` is passed because the pre-pass runs before ANY authority check:
+    # every caller reaches it, including one with no relationship to the sheet.
+    # Anything it puts in an error message is therefore disclosed to strangers,
+    # so a pre-pass that talks about rows must filter what it names through the
+    # read-ACL itself (see ``handlers.resolve_set_column_order_params``).
     resolve_params: Optional[Any] = None
 
     @property

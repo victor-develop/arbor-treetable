@@ -28,6 +28,7 @@ from arbor.arbor.api import (  # noqa: F401  explicit re-export of the callables
     move_node,
     reject_change,
     revoke_delegation,
+    set_column_order,
     subscribe,
     suggest_change,
     unsubscribe,
