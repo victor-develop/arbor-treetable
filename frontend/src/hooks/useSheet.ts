@@ -76,9 +76,14 @@ export function useSheet(
   const [view, setView] = useState<SheetView>(
     () => initialView ?? { v: 1, hidden: [], order: [] },
   );
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(initialView?.collapsed ?? []),
-  );
+  // Feature 2 + saved views — collapse is a FACET OF THE VIEW, not a sibling
+  // state. It used to be its own `useState` seeded from the ?v= token and then
+  // owned by `toggle`, which made `view.collapsed` a write-once mount seed: the
+  // ?v= token never carried a collapse the user performed, and a saved view
+  // stored whatever the seed was rather than what was on screen. Deriving it
+  // means every consumer of `view` — the URL token, "Save current as…",
+  // "Update" — sees the live arrangement with no extra plumbing.
+  const collapsed = useMemo(() => new Set(view.collapsed ?? []), [view.collapsed]);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [pending, setPending] = useState<PendingMark[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -151,26 +156,25 @@ export function useSheet(
     void refetch();
   }, [refetch]);
 
+  // Collapsing a subtree edits the view overlay, so it lands in the ?v= token
+  // and in whatever a saved view captures — presentation only, zero backend.
   const toggle = useCallback((node: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
+    setView((prev) => {
+      const next = new Set(prev.collapsed ?? []);
       if (next.has(node)) next.delete(node);
       else next.add(node);
-      return next;
+      return { ...prev, collapsed: [...next] };
     });
   }, []);
 
-  // Feature: saved views — apply a WHOLE view at once. `setView` alone would
-  // leave the tree's expand/collapse where it was, because `collapsed` is its
-  // own state (seeded from the ?v= link on mount and then owned by `toggle`) —
-  // so a saved view's collapsed seed would be silently dropped. Applying a view
-  // is the one moment both halves must move together. Reveal-impossibility is
-  // untouched: this only writes the overlay, and `resolveColumns` still starts
-  // from the read-ACL-filtered snapshot columns.
-  const applyView = useCallback((next: SheetView) => {
-    setView(next);
-    setCollapsed(new Set(next.collapsed ?? []));
-  }, []);
+  // Feature: saved views — applying a saved arrangement IS setting the view,
+  // now that collapse is a facet of it. Kept as its own name because the call
+  // site means something different from ViewMenu's incremental edits: a view is
+  // applied WHOLE, so a saved view that carries no `collapsed` expands
+  // everything rather than leaving the previous view's collapse behind.
+  // Reveal-impossibility is untouched: this only writes the overlay, and
+  // `resolveColumns` still starts from the read-ACL-filtered snapshot columns.
+  const applyView = useCallback((next: SheetView) => setView(next), []);
 
   // The shared dispatch: runs executeAction, applies the Outcome contract, and
   // serializes against the previous in-flight mutation.
@@ -521,8 +525,9 @@ export function useSheet(
     columns,
     view,
     setView,
-    // Feature: saved views — view + collapsed in one move (see applyView).
+    // Feature: saved views — apply a whole stored arrangement (see applyView).
     applyView,
+    // Derived from view.collapsed — see the `collapsed` memo.
     collapsed,
     banner,
     error,

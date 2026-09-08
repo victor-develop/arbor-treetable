@@ -2156,6 +2156,7 @@ def _require_sheet_exists(sheet) -> None:
     in this codebase — the read-ACL lives on the COLUMN axis
     (``acl.can_read_column``), which is what bounds what a view can name."""
     if not frappe.db.exists("Tree Sheet", sheet):
+        frappe.local.response["http_status_code"] = 404
         frappe.throw(_("No such sheet {0}").format(sheet), exc=frappe.DoesNotExistError)
 
 
@@ -2210,6 +2211,7 @@ def save_sheet_view(sheet=None, label=None, view=None, visibility=None, name=Non
     try:
         if name:
             if not frappe.db.exists(_SAVED_VIEW_DT, name):
+                frappe.local.response["http_status_code"] = 404
                 frappe.throw(
                     _("No such saved view {0}").format(name), exc=frappe.DoesNotExistError
                 )
@@ -2231,6 +2233,7 @@ def save_sheet_view(sheet=None, label=None, view=None, visibility=None, name=Non
                 _SAVED_VIEW_DT, {"author": actor.user, "sheet": sheet}
             )
             if held >= MAX_VIEWS_PER_SHEET:
+                frappe.local.response["http_status_code"] = 400
                 frappe.throw(
                     _("You already have {0} saved views on this sheet").format(
                         MAX_VIEWS_PER_SHEET
@@ -2245,6 +2248,11 @@ def save_sheet_view(sheet=None, label=None, view=None, visibility=None, name=Non
             doc.visibility = normalize_visibility(visibility)
             doc.insert(ignore_permissions=True)
     except SavedViewError as exc:
+        # 400, set the way every other refusal in this module sets it: a bare
+        # ValidationError answers frappe's 417, and the standalone peer answers
+        # 400 for the same body — the two lanes run the SAME frontend, so the
+        # number the picker shows must not depend on which adapter is deployed.
+        frappe.local.response["http_status_code"] = 400
         frappe.throw(str(exc), exc=frappe.ValidationError)
     return _saved_view_dict(doc, actor, _readable_column_names(repo, doc.sheet, actor))
 
@@ -2277,6 +2285,7 @@ def delete_sheet_view(name):
     nothing."""
     actor = _actor()
     if not frappe.db.exists(_SAVED_VIEW_DT, name):
+        frappe.local.response["http_status_code"] = 404
         frappe.throw(_("No such saved view {0}").format(name), exc=frappe.DoesNotExistError)
     doc = frappe.get_doc(_SAVED_VIEW_DT, name)
     if not _may_administer_view(doc, actor):

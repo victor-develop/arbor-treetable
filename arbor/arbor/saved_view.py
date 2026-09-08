@@ -35,6 +35,7 @@ owner-only cell exists.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 #: Max serialized payload size, in bytes. Same budget as the ``?v=`` share
@@ -133,6 +134,16 @@ def validate_payload(raw: Any) -> dict[str, Any]:
             # bool is an int subclass in python; a boolean width is a shape error.
             if isinstance(val, bool) or not isinstance(val, (int, float)):
                 raise SavedViewError(f"view.width[{key}] must be a number")
+            # Infinity/NaN pass isinstance but are NOT JSON: `json.loads` accepts
+            # the bare `Infinity` token, so a raw request body can smuggle one in
+            # past the shape check, and then the RESPONSE is what breaks — the
+            # standalone lane serializes with allow_nan=False (a 500 instead of
+            # this 400), and a lane that serializes with allow_nan=True stores a
+            # row whose every later listing is unparseable JSON for every viewer.
+            # A width is a pixel count; refusing the non-finite here is the only
+            # place both lanes agree before anything is persisted.
+            if not math.isfinite(val):
+                raise SavedViewError(f"view.width[{key}] must be a finite number")
         out["width"] = {k: v for k, v in width.items()}
 
     collapsed = raw.get("collapsed")

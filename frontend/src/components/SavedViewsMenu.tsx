@@ -65,7 +65,13 @@ export function SavedViewsMenu({
     }
     void Promise.resolve()
       .then(() => list(sheet))
-      .then((r) => setRows(r))
+      .then((r) => {
+        // A successful list clears a previous failure's line — otherwise a
+        // transient network blip leaves the red text sitting under a picker
+        // that is now showing correct rows.
+        setRows(r);
+        setError(null);
+      })
       .catch((e: unknown) => {
         // Surface the server's reason rather than an empty list — an empty
         // picker reads as "you have no saved views", which is a different fact.

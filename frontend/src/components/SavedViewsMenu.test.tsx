@@ -179,6 +179,24 @@ describe("SavedViewsMenu — applying", () => {
     expect(screen.getByTestId("row-P2")).toBeInTheDocument();
   });
 
+  it("applying a view with no collapsed facet expands — a view is applied WHOLE", async () => {
+    // The counterpart to the spec above, and the deliberate answer to "what
+    // happens to the collapse I performed?": a saved arrangement replaces the
+    // whole overlay, so a row that carries no `collapsed` means "nothing
+    // collapsed", not "keep whatever was on screen". Same for "Default view".
+    const { client } = viewClient({
+      rows: [savedView({ name: "SV-1", label: "Flat", view: { v: 1, hidden: [], order: [] } })],
+    });
+    render(<App client={client} sheetName="S" />);
+    const menu = await openPicker();
+
+    fireEvent.click(screen.getByTestId("chevron-P2"));
+    await waitFor(() => expect(screen.queryByTestId("row-Y")).not.toBeInTheDocument());
+
+    fireEvent.click(menu.getByTestId("saved-view-apply-SV-1"));
+    await waitFor(() => expect(screen.getByTestId("row-Y")).toBeInTheDocument());
+  });
+
   it("a shared view can NEVER surface a column the viewer cannot read", async () => {
     // The viewer's snapshot omits col:budget (read-ACL filtered); the shared view
     // still orders and sizes it. resolveColumns starts from the snapshot, so the
@@ -240,6 +258,46 @@ describe("SavedViewsMenu — saving, updating, publishing, deleting", () => {
     expect(sent.visibility).toBeUndefined(); // a save is private; publishing is explicit
     expect(store[0].visibility).toBe("private");
     await waitFor(() => expect((nameField as HTMLInputElement).value).toBe(""));
+  });
+
+  it("Save captures the collapse the user performed in the tree, not the mount-time seed", async () => {
+    // The write half of the collapsed facet, and the reason `collapsed` lives in
+    // the view overlay rather than beside it: collapse is performed on the TREE
+    // (a chevron), not in this picker, so if the two were separate states the
+    // stored arrangement would be whatever the ?v= link seeded at mount — the
+    // saved view would silently not be the arrangement on screen.
+    const { client, calls, store } = viewClient({ rows: [] });
+    render(<App client={client} sheetName="S" />);
+    const menu = await openPicker();
+
+    fireEvent.click(screen.getByTestId("chevron-P2"));
+    await waitFor(() => expect(screen.queryByTestId("row-Y")).not.toBeInTheDocument());
+
+    fireEvent.change(menu.getByTestId("saved-views-name"), { target: { value: "Phases only" } });
+    fireEvent.click(menu.getByTestId("saved-views-save"));
+
+    await waitFor(() => expect(store).toHaveLength(1));
+    const sent = calls.find((c) => c.method === "save")!.args as Record<string, unknown>;
+    expect((sent.view as SheetView).collapsed).toEqual(["P2"]);
+    // And it round-trips: re-applying the row keeps P2 collapsed.
+    fireEvent.click(menu.getByTestId("saved-views-reset"));
+    await waitFor(() => expect(screen.getByTestId("row-Y")).toBeInTheDocument());
+    fireEvent.click(await screen.findByTestId("saved-view-apply-SV-1"));
+    await waitFor(() => expect(screen.queryByTestId("row-Y")).not.toBeInTheDocument());
+  });
+
+  it("Update carries the live collapse too", async () => {
+    const { client, store } = viewClient({
+      rows: [savedView({ name: "SV-1", label: "Mine", view: { v: 1, hidden: [], order: [] } })],
+    });
+    render(<App client={client} sheetName="S" />);
+    const menu = await openPicker();
+
+    fireEvent.click(screen.getByTestId("chevron-P2"));
+    await waitFor(() => expect(screen.queryByTestId("row-Y")).not.toBeInTheDocument());
+    fireEvent.click(menu.getByTestId("saved-view-update-SV-1"));
+
+    await waitFor(() => expect(store[0].view.collapsed).toEqual(["P2"]));
   });
 
   it("Save is disabled without a name (an unnamed view is not a view)", async () => {

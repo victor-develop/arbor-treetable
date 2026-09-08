@@ -22,12 +22,15 @@ one admin.
 from __future__ import annotations
 
 import importlib
+import json
 
 import pytest
 from arbor.arbor.saved_view import (
     MAX_PAYLOAD_BYTES,
     MAX_VIEWS_PER_SHEET,
+    SavedViewError,
     filter_payload_columns,
+    validate_payload,
 )
 from fastapi.testclient import TestClient
 
@@ -248,6 +251,41 @@ def test_a_non_conforming_payload_is_400(client, sheet, bad, why):
     login(client, ALICE)
     assert save(client, sheet=SHEET, label="X", view=bad).status_code == 400, why
     assert msg(listing(client)) == []
+
+
+@pytest.mark.parametrize("token", ["Infinity", "-Infinity", "NaN"])
+def test_a_non_finite_width_is_400_and_never_reaches_the_serializer(client, sheet, token):
+    """The one numeric shape that survives a shape-only check and then breaks
+    SERIALIZATION. ``isinstance(inf, float)`` is True and ``json.loads`` accepts
+    the bare ``Infinity`` token, so a raw body carries it straight into the row;
+    the damage lands on the way out — this lane's response serializer runs with
+    ``allow_nan=False`` (a bare 500 where the module promises 400), and a lane
+    that serializes with ``allow_nan=True`` would commit a row whose every later
+    listing is unparseable JSON for everyone who can read the sheet. The body is
+    raw because httpx itself refuses to encode a non-finite number."""
+    login(client, ALICE)
+    body = json.dumps(
+        {"sheet": SHEET, "label": "inf", "view": view(width={"c1": "@W@"})}
+    ).replace('"@W@"', token)
+    resp = client.post(
+        "/api/method/arbor.save_sheet_view",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400, resp.text
+    # Nothing persisted, and the listing is still parseable.
+    assert msg(listing(client)) == []
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_a_non_finite_width_is_refused_by_the_shared_rule_and_degrades_on_read(bad):
+    """The pure half, so both api lanes inherit it. A row written BEFORE the
+    guard existed must still read back — as the default view, the same way any
+    other legacy non-conforming payload degrades rather than raising on a list."""
+    payload = {"v": 1, "hidden": [], "order": [], "width": {"c1": bad}}
+    with pytest.raises(SavedViewError):
+        validate_payload(payload)
+    assert filter_payload_columns(payload, {"c1"}) == {"v": 1, "hidden": [], "order": []}
 
 
 def test_an_oversize_payload_is_400(client, sheet):
