@@ -3459,6 +3459,146 @@ body {
   color: var(--arbor-muted, #57606a);
 }
 
+/* -------------------------------------------------------------- agent tokens */
+/* The header entry borrows the secondary-button family the Roles button uses,
+   so the two read as siblings. */
+.arbor-agent-tokens-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.arbor-agent-tokens-btn:hover {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--ink-subtle);
+}
+/* A utility surface: same width band as the webhook modal, same quiet body. */
+.arbor-agent-tokens-modal {
+  min-width: 460px;
+  max-width: 620px;
+}
+.arbor-agent-tokens-body {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.arbor-agent-token-error {
+  color: var(--arbor-danger, #b42318);
+  font-size: 13px;
+  margin: 0;
+}
+/* The one-time reveal is the only loud thing here — it has to stop the reader,
+   because dismissing it destroys the only copy of the secret. */
+.arbor-agent-token-reveal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--arbor-warn-border, #e0c060);
+  background: var(--arbor-warn-bg, #fff8e1);
+  border-radius: 6px;
+}
+.arbor-agent-token-warn {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.arbor-agent-token-reveal code,
+.arbor-agent-token-reveal textarea {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  word-break: break-all;
+  background: var(--surface);
+  border: 1px solid var(--arbor-border, #d0d7de);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.arbor-agent-token-reveal textarea {
+  width: 100%;
+  resize: vertical;
+}
+/* Quiet, self-sized action buttons — a full-bleed "Copy token" would read as
+   the primary action of the whole modal. */
+.arbor-agent-token-reveal button {
+  align-self: flex-start;
+}
+.arbor-agent-token-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arbor-agent-token-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--arbor-border, #d0d7de);
+  border-radius: 6px;
+}
+/* The label owns the row's first line; mode/scope/expiry, the state and the
+   revoke control wrap onto the second — a token id or a long label would
+   otherwise squeeze itself into a two-character column. */
+.arbor-agent-token-label {
+  flex: 1 1 100%;
+  font-weight: 500;
+  word-break: break-word;
+}
+.arbor-agent-token-meta {
+  font-size: 12px;
+  color: var(--arbor-muted, #57606a);
+}
+.arbor-agent-token-state {
+  font-size: 12px;
+  font-weight: 600;
+}
+.arbor-agent-token-state[data-state="revoked"] {
+  color: var(--arbor-muted, #57606a);
+  text-decoration: line-through;
+}
+.arbor-agent-token-confirm {
+  display: inline-flex;
+  gap: 6px;
+}
+.arbor-agent-token-empty {
+  font-size: 13px;
+  color: var(--arbor-muted, #57606a);
+  margin: 0;
+}
+.arbor-agent-token-mint {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--outline-subtle, #eaeef2);
+}
+.arbor-agent-token-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--arbor-muted, #57606a);
+}
+.arbor-agent-token-mint button[type="submit"] {
+  align-self: flex-start;
+}
+/* A day count needs no full-width field. */
+.arbor-agent-token-mint .arbor-field-narrow input {
+  max-width: 120px;
+}
+
 /* ------------------------------------------------------------------ comments */
 /* The per-cell comment glyph: a quiet message icon that reveals on cell hover
    (like the edit-pencil), with an open-count badge or an unread dot. It sits in

@@ -424,3 +424,181 @@ describe("platform-admin client", () => {
     expect(reads[0].init?.method).toBeUndefined();
   });
 });
+
+// ---- Arbor Agent Tokens (arbor.issue/list/revoke_agent_token) ---------------
+
+describe("agent-token client", () => {
+  it("issueAgentToken posts the mint payload, omitting an unset label/ttl", async () => {
+    const { calls } = mockFetch({
+      token_id: "AT-1",
+      token: "plaintext",
+      mode: "read",
+      sheets: ["S"],
+      expires_on: "2026-06-01",
+      bootstrap_prompt: "…",
+    });
+    const out = await api.issueAgentToken!({ mode: "read", sheets: ["S"] });
+    expect(calls[0].url).toBe("/api/method/arbor.issue_agent_token");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(lastBody(calls[0].init)).toEqual({ mode: "read", sheets: ["S"] });
+    // the plaintext + bootstrap prompt come back exactly once, here
+    expect(out.token).toBe("plaintext");
+    expect(out.bootstrap_prompt).toBe("…");
+  });
+
+  it("issueAgentToken drops an EMPTY sheets list (which means 'all sheets', not 'no sheets')", async () => {
+    const { calls } = mockFetch({
+      token_id: "AT-2",
+      token: "p",
+      mode: "write",
+      sheets: null,
+      expires_on: null,
+      bootstrap_prompt: "",
+    });
+    await api.issueAgentToken!({ mode: "write", sheets: [], ttl_days: 7, label: "bot" });
+    expect(lastBody(calls[0].init)).toEqual({ mode: "write", label: "bot", ttl_days: 7 });
+  });
+
+  it("listAgentTokens GETs the metadata list and normalizes both adapters' shapes", async () => {
+    // Row 1 is the standalone shape (token_id + parsed sheets + bool revoked);
+    // row 2 is the frappe doctype shape (name + raw JSON sheets + 0/1 revoked).
+    const { calls } = mockFetch([
+      {
+        token_id: "AT-1",
+        label: "reader",
+        mode: "read",
+        sheets: ["S"],
+        expires_on: "2026-01-01",
+        revoked: false,
+        last_used_at: null,
+      },
+      {
+        name: "AT-2",
+        label: null,
+        mode: "write",
+        sheets: '["S", "T"]',
+        expires_on: null,
+        revoked: 1,
+        last_used_at: "2026-02-02",
+      },
+    ]);
+    const out = await api.listAgentTokens!();
+    expect(calls[0].url).toBe("/api/method/arbor.list_agent_tokens");
+    expect(calls[0].init?.method).toBeUndefined();
+    expect(out).toEqual([
+      {
+        token_id: "AT-1",
+        label: "reader",
+        mode: "read",
+        sheets: ["S"],
+        expires_on: "2026-01-01",
+        revoked: false,
+        last_used_at: null,
+      },
+      {
+        token_id: "AT-2",
+        label: null,
+        mode: "write",
+        sheets: ["S", "T"],
+        expires_on: null,
+        revoked: true,
+        last_used_at: "2026-02-02",
+      },
+    ]);
+    // no row ever carries a secret
+    expect(out.some((t) => "token" in t)).toBe(false);
+  });
+
+  it("revokeAgentToken posts the token id", async () => {
+    const { calls } = mockFetch({ token_id: "AT-1", revoked: true });
+    const out = await api.revokeAgentToken!("AT-1");
+    expect(calls[0].url).toBe("/api/method/arbor.revoke_agent_token");
+    expect(lastBody(calls[0].init)).toEqual({ token_id: "AT-1" });
+    expect(out).toEqual({ token_id: "AT-1", revoked: true });
+  });
+
+  it("a refusal surfaces the SERVER's reason, not just the status code", async () => {
+    // A swallowed reason here has been a real bug: the caller must be able to
+    // tell "An agent token cannot mint tokens" (403) from "No such token" (404).
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          json: async () => ({ detail: "An agent token cannot mint tokens" }),
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.issueAgentToken!({ mode: "write" })).rejects.toThrow(
+      /An agent token cannot mint tokens \(403\)/,
+    );
+  });
+
+  it("a frappe refusal is dug out of the doubly-encoded _server_messages", async () => {
+    // frappe.throw packs the user-facing message as a JSON array of JSON strings
+    // — the most fragile parse on this surface, so pin it.
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          json: async () => ({
+            _server_messages: JSON.stringify([JSON.stringify({ message: "not your token" })]),
+          }),
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.revokeAgentToken!("AT-9")).rejects.toThrow(/not your token \(403\)/);
+  });
+
+  it("a malformed _server_messages falls back to the status, it does not blow up", async () => {
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          json: async () => ({ _server_messages: "[not json" }),
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.revokeAgentToken!("AT-9")).rejects.toThrow(
+      /arbor\.revoke_agent_token failed: 403/,
+    );
+  });
+
+  it("a non-JSON `sheets` string is shown as the one scope it names", async () => {
+    // The doctype's Small Text also accepts a bare sheet name (what
+    // _parse_token_sheets tolerates server-side) — display it, don't drop it.
+    mockFetch([
+      {
+        name: "AT-7",
+        label: null,
+        mode: "read",
+        sheets: "Sheet One",
+        expires_on: null,
+        revoked: 0,
+        last_used_at: null,
+      },
+    ]);
+    const out = await api.listAgentTokens!();
+    expect(out[0].sheets).toEqual(["Sheet One"]);
+    expect(out[0].revoked).toBe(false);
+  });
+
+  it("a refusal with no readable body still throws the status fallback", async () => {
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 404,
+          json: async () => {
+            throw new Error("not json");
+          },
+        }) as unknown as Response,
+    );
+    setFetchImpl(impl as unknown as typeof fetch);
+    await expect(api.revokeAgentToken!("nope")).rejects.toThrow(
+      /arbor\.revoke_agent_token failed: 404/,
+    );
+  });
+});
