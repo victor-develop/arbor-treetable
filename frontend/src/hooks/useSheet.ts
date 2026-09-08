@@ -160,6 +160,18 @@ export function useSheet(
     });
   }, []);
 
+  // Feature: saved views — apply a WHOLE view at once. `setView` alone would
+  // leave the tree's expand/collapse where it was, because `collapsed` is its
+  // own state (seeded from the ?v= link on mount and then owned by `toggle`) —
+  // so a saved view's collapsed seed would be silently dropped. Applying a view
+  // is the one moment both halves must move together. Reveal-impossibility is
+  // untouched: this only writes the overlay, and `resolveColumns` still starts
+  // from the read-ACL-filtered snapshot columns.
+  const applyView = useCallback((next: SheetView) => {
+    setView(next);
+    setCollapsed(new Set(next.collapsed ?? []));
+  }, []);
+
   // The shared dispatch: runs executeAction, applies the Outcome contract, and
   // serializes against the previous in-flight mutation.
   const dispatch = useCallback(
@@ -509,6 +521,8 @@ export function useSheet(
     columns,
     view,
     setView,
+    // Feature: saved views — view + collapsed in one move (see applyView).
+    applyView,
     collapsed,
     banner,
     error,
