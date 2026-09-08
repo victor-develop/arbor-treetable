@@ -207,3 +207,172 @@ describe("ViewMenu — drag-to-reorder", () => {
     );
   });
 });
+
+// "Save order for everyone" — the ONE explicit promotion of a local arrangement
+// to the shared stored order. ViewMenu still issues zero executeAction: it hands
+// the host the resolved order and the host dispatches setColumnOrder.
+describe("ViewMenu — save order for everyone", () => {
+  it("is not offered when the local order matches the shared (snapshot) order", () => {
+    render(
+      <ViewMenu columns={COLS} view={baseView} onChange={vi.fn()} onSaveSharedOrder={vi.fn()} />,
+    );
+    // Nothing to save — a dead button is worse than no button.
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("is not offered when the host passes no handler at all", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("appears once the local order differs, and emits the COMPLETE resolved order", () => {
+    const executeAction = vi.fn();
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+        client={{ executeAction } as never}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    // ViewMenu never mutates; the HOST dispatches what it is handed.
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("emits hidden columns too (the shared order names every non-label column)", () => {
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: ["col:budget"], order: ["col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("never emits the label column", () => {
+    const onSaveSharedOrder = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:name", "col:budget", "col:status"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={onSaveSharedOrder}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-save-order"));
+    expect(onSaveSharedOrder).toHaveBeenCalledWith(["col:budget", "col:status"]);
+  });
+
+  it("is not offered when the override merely names the columns in snapshot order", () => {
+    // A view whose order equals the stored order is not a difference worth a
+    // round-trip, even though `order` is non-empty.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: [], order: ["col:status", "col:budget"] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+
+  it("hiding a column is NOT a reason to offer the shared-order save", () => {
+    // Visibility is personal; only the ORDER is shareable through this button.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={{ v: 1, hidden: ["col:budget"], order: [] }}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+  });
+});
+
+// A read-ACL-filtered viewer cannot satisfy setColumnOrder's contract ("name
+// every non-label column of the SHEET") from a list the server already
+// shortened — including the sheet's own structural owner, who is the only actor
+// with the authority to make the write. The button used to render anyway and
+// 400 every single time, permanently, with no in-UI way out.
+describe("ViewMenu — save order is withdrawn when the column list is filtered", () => {
+  const draggedView: SheetView = {
+    v: 1,
+    hidden: [],
+    order: ["col:budget", "col:status"],
+  };
+
+  it("hides the button and says why when columnsFiltered is set", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+    // Silence would read as a bug; the note explains the arrangement stays local.
+    expect(screen.getByTestId("view-save-order-blocked")).toBeInTheDocument();
+  });
+
+  it("still offers it when nothing was filtered", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered={false}
+      />,
+    );
+    expect(screen.getByTestId("view-save-order")).toBeInTheDocument();
+    expect(screen.queryByTestId("view-save-order-blocked")).not.toBeInTheDocument();
+  });
+
+  it("says nothing at all when the local order matches the shared one", () => {
+    // No difference to save => no button AND no explanation to explain away.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={baseView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("view-save-order-blocked")).not.toBeInTheDocument();
+  });
+
+  it("leaves hide / reorder / resize fully usable — only sharing is withdrawn", () => {
+    const onChange = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={onChange}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-toggle-col:budget"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+});

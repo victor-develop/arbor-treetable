@@ -50,7 +50,7 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "Sheets & columns",
-        ("createSheet", "addColumn", "updateColumn", "deleteColumn"),
+        ("createSheet", "addColumn", "setColumnOrder", "updateColumn", "deleteColumn"),
     ),
     (
         "Change requests (the mutate-or-suggest path)",

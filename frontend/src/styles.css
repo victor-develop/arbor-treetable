@@ -4835,3 +4835,27 @@ th:hover .arbor-ghost-hover, .arbor-ghost-hover:focus-visible { opacity: 1; }
 .arbor-ghost-head { background: var(--paper-muted, #fafaf9); }
 .arbor-ghost-input { width: 100%; font-size: 12px; padding: 4px 6px; box-sizing: border-box; }
 .arbor-ghost-cell { background: var(--paper-muted, #fafaf9); }
+
+/* Column-header drag grip (reorder MY VIEW). Same hover-reveal idiom as the
+   quick-add "+", parked on the LEFT edge so the two never overlap; only the
+   grip is draggable, so the "+" and the gear keep their clicks. The dragged
+   header dims and the hovered one lights a left border — the slot the column
+   will land in. */
+.arbor-col-grip {
+  position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+  cursor: grab; user-select: none;
+  color: var(--ink-muted, #8a8a86); font-size: 12px; line-height: 1;
+  padding: 2px 3px; opacity: 0; transition: opacity 0.12s;
+}
+.arbor-tree thead th:hover .arbor-col-grip { opacity: 1; }
+.arbor-col-grip:active { cursor: grabbing; }
+.arbor-tree thead th.is-dragging-col { opacity: 0.5; }
+.arbor-tree thead th.is-col-drop-target {
+  box-shadow: inset 2px 0 0 0 var(--accent, #2d6cdf);
+}
+/* "Save order for everyone" — the explicit promotion of a local arrangement to
+   the shared stored order. Sits above the column list and only renders when the
+   local order actually differs (a dead button would be worse than none). */
+.arbor-view-share { padding: 2px 2px 6px; }
+.arbor-view-save-order { width: 100%; font-size: 12px; }
+.arbor-view-share-blocked { margin: 0; font-size: 11px; line-height: 1.35; color: var(--ink-subtle); }

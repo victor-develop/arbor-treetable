@@ -39,6 +39,7 @@ create Change Request + emit `CHANGE_PROPOSED`**.
 | `moveNode` | structure | node-structure / move | ✅ | `resolve_structural_approver(src)` **and** `(dest)` | `NODE_MOVED` |
 | `deleteNode` | structure | node-structure / delete | ✅ | `resolve_structural_approver(node)` | `NODE_DELETED` |
 | `addColumn` | meta | column-schema / add | ✅ | sheet `structural_owner` (schema co-design) | `COLUMN_CONFIG_UPDATED` |
+| `setColumnOrder` | meta | column-schema / update | ✅ | sheet `structural_owner` (the order is a sheet-level property) | `COLUMN_CONFIG_UPDATED` |
 | `updateColumn` | meta | column-schema / update | ✅ | `resolve_column_approvers(column)` | `COLUMN_CONFIG_UPDATED` |
 | `deleteColumn` | meta | column-schema / delete | ✅ | `resolve_column_approvers(column)` | `COLUMN_CONFIG_UPDATED` |
 | `suggestChange` | none | *(from payload)* | ✅ | always allowed (creates CR) | `CHANGE_PROPOSED` |
@@ -110,6 +111,23 @@ create Change Request + emit `CHANGE_PROPOSED`**.
     // insert immediately RIGHT of this column (its field key or id); omit = append last.
     // Not in the sheet -> 400, never a Change Request.
     "after": {"type": ["string","null"]}
+  } }
+
+// setColumnOrder  (meta — sheet structural_owner)
+// The SHARED stored order: a viewer's drag reorders only their own view; this is
+// the explicit "save it for everyone".
+{ "type": "object", "required": ["sheet", "order"],
+  "properties": {
+    "sheet": {"type": "string"},
+    // The COMPLETE left-to-right order of the sheet's NON-label columns (field
+    // keys or ids), each exactly once. Unknown / duplicate / incomplete -> 400,
+    // never a Change Request. The label column is always first and is never an
+    // entry (naming it -> 400). Completeness is measured against the WHOLE
+    // sheet, so a read-ACL-filtered caller cannot satisfy it; the 400 names
+    // only the columns that caller may read (the UI withdraws the affordance
+    // off the snapshot's `viewer.columns_filtered` hint rather than offering a
+    // call that can only fail).
+    "order": {"type": "array", "items": {"type": "string"}}
   } }
 
 // updateColumn / deleteColumn  (meta — column approvers)

@@ -30,6 +30,8 @@ EXPECTED_IDS = {
     # sheet bootstrap (self-service create)
     "createSheet",
     "addColumn",
+    # the SHARED stored column order ("save my arrangement for everyone")
+    "setColumnOrder",
     "updateColumn",
     "deleteColumn",
     "suggestChange",
@@ -83,7 +85,7 @@ LLM_HIDDEN = {
 def test_all_capabilities_registered():
     ids = {c.id for c in all_capabilities()}
     assert ids == EXPECTED_IDS
-    assert len(all_capabilities()) == 43
+    assert len(all_capabilities()) == 44
 
 
 def test_get_sheet_definition_is_a_pure_read_llm_tool():
@@ -225,7 +227,7 @@ def test_webhook_registration_methods_are_not_registry_capabilities():
         {"registerWebhook", "listWebhooks", "updateWebhook", "deleteWebhook", "testWebhook"}
     )
     # count is unchanged: the shims added no capability.
-    assert len(all_capabilities()) == 43
+    assert len(all_capabilities()) == 44
     assert ids == EXPECTED_IDS
 
 

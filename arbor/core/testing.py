@@ -442,6 +442,34 @@ class InMemoryRepository:
                 c.idx += 1
         return anchor.idx + 1
 
+    def reorder_columns(self, sheet: str, ordered_ids: list[str]) -> None:
+        """Rewrite the sheet's stored order (see the port docstring).
+
+        Same normalize-then-assign shape as ``_next_idx``: every column of the
+        sheet gets a fresh sequential idx, so a sheet whose columns all still
+        carry the field's default reorders correctly instead of collapsing."""
+        ordered = self.list_columns(sheet)
+        by_id = {c.name: c for c in ordered}
+        named: list[_Column] = []
+        seen: set[str] = set()
+        for cid in ordered_ids:
+            c = by_id.get(cid)
+            # Defensive: the handler resolved these against list_columns just
+            # now. ValueError (not KeyError) so all three repositories agree a
+            # bad entry is a bad param — 400, never a 404.
+            if c is None:
+                raise ValueError(f"unknown column {cid!r} in sheet {sheet!r} (setColumnOrder.order)")
+            if cid in seen:
+                raise ValueError(f"duplicate column {cid!r} (setColumnOrder.order)")
+            if c.is_label:
+                raise ValueError(f"the label column {cid!r} is not reorderable (setColumnOrder.order)")
+            seen.add(cid)
+            named.append(c)
+        labels = [c for c in ordered if c.is_label]
+        tail = [c for c in ordered if not c.is_label and c.name not in seen]
+        for i, c in enumerate(labels + named + tail, start=1):
+            c.idx = i
+
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None:
         c = self.get_column(sheet, column)
         for k, v in patch.items():

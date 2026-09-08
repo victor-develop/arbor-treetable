@@ -411,6 +411,42 @@ class TreeRepoMixin:
         self.session.flush()
         return name
 
+    def reorder_columns(self, sheet: str, ordered_ids: list[str]) -> None:
+        """Rewrite the sheet's stored ``idx`` sequence (see the port docstring).
+
+        Assigns 1..N over the WHOLE sheet in one pass, which doubles as the
+        normalization ``_position_column`` needs: a sheet whose columns all carry
+        ``idx = 0`` (created before positioning existed) comes out with a real
+        order rather than a wall of zeroes."""
+        rows = list(
+            self.session.scalars(
+                sa.select(m.Column)
+                .where(m.Column.sheet == sheet)
+                .order_by(m.Column.idx.asc(), m.Column.creation.asc(), m.Column.name.asc())
+            ).all()
+        )
+        by_id = {r.name: r for r in rows}
+        named = []
+        seen: set[str] = set()
+        for cid in ordered_ids:
+            row = by_id.get(cid)
+            # Defensive: the handler resolved these against list_columns just
+            # now. ValueError (not NotFoundError, which is a 404) so all three
+            # repositories agree a bad entry is a bad param — 400.
+            if row is None:
+                raise ValueError(f"unknown column {cid!r} in sheet {sheet!r} (setColumnOrder.order)")
+            if cid in seen:
+                raise ValueError(f"duplicate column {cid!r} (setColumnOrder.order)")
+            if row.is_label:
+                raise ValueError(f"the label column {cid!r} is not reorderable (setColumnOrder.order)")
+            seen.add(cid)
+            named.append(row)
+        labels = [r for r in rows if r.is_label]
+        tail = [r for r in rows if not r.is_label and r.name not in seen]
+        for i, row in enumerate(labels + named + tail, start=1):
+            row.idx = i
+        self.session.flush()
+
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None:
         """Patch column config. Scalar keys are allow-listed (same set the
         frappe adapter accepts); ``editors``/``readers`` REPLACE the JSON lists

@@ -133,7 +133,7 @@ def execute_action(
         # has to be refused on the suggest branch too, or an unauthorized caller
         # files a Change Request whose approval raises forever (400 on every
         # retry, CR pinned in PROPOSED, Reject the only exit).
-        params = cap.resolve_params(params, repo)
+        params = cap.resolve_params(params, repo, actor)
 
     if action_id in _CONTROL:
         return _dispatch_control(cap, params, actor, repo, sink)
@@ -531,6 +531,14 @@ def _suggest_batch(params: dict, actor: Actor, repo: Repository, sink: EventSink
         if cap is None:
             raise UnknownCapabilityError(change["action"])
         p = dict(change["params"], sheet=sheet)
+        if cap.resolve_params is not None:
+            # Same pre-pass, same reason, as execute_action step 2b — and it has
+            # to be HERE too because this is a second door onto the very same
+            # capabilities. Skipping it let a batch file a CR carrying params a
+            # direct call refuses (an incomplete setColumnOrder.order), which
+            # replay then applied with invented semantics instead of the order
+            # the requester expressed.
+            p = cap.resolve_params(p, repo, actor)
         authority = resolve_authority(cap, p, actor, repo)
         items.append(
             {

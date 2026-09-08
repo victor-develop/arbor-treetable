@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .acl import can_read_column
 from .ports import Repository
 from .types import Actor, EventType, HandlerResult
 
@@ -181,7 +182,9 @@ def _resolve_after_column(sheet: str, after: Any, repo: Repository) -> str:
     raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
 
 
-def resolve_add_column_params(params: dict[str, Any], repo: Repository) -> dict[str, Any]:
+def resolve_add_column_params(
+    params: dict[str, Any], repo: Repository, actor: Actor
+) -> dict[str, Any]:
     """addColumn's pre-pass: rewrite ``after`` to a resolved in-sheet column id.
 
     Runs in ``execute_action`` BEFORE the authorize-or-suggest branch, which is
@@ -233,6 +236,100 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
     return HandlerResult(
         event_payload={"op": "add", "column": column, "field": params["field"]},
         data={"column": column},
+    )
+
+
+def resolve_set_column_order_params(
+    params: dict[str, Any], repo: Repository, actor: Actor
+) -> dict[str, Any]:
+    """setColumnOrder's pre-pass: resolve + fully validate ``order``.
+
+    Same reason addColumn has one (see ``resolve_add_column_params``): the
+    schema promises a bad list is a 400 on EVERY branch, so the check cannot
+    live in the handler — an unauthorized caller would otherwise file a Change
+    Request that raises forever on approval.
+
+    Completeness is required deliberately (the schema says so, and skill.md
+    ships that text to external agents): a partial list has no single obvious
+    meaning, so the contract is "name every non-label column exactly once".
+    The label column is rejected as an entry rather than tolerated — it is
+    always the first grid column, never reorderable, so naming it is a caller
+    bug worth surfacing.
+
+    The completeness message names ONLY columns ``actor`` may read. This pre-pass
+    runs before any authority check, so every authenticated caller reaches it —
+    including one with no relationship to the sheet at all — and naming the
+    missing columns outright handed a stranger the field keys of a restricted
+    column that ``getSheetDefinition`` had just correctly filtered out. A
+    column the actor cannot read is counted toward completeness (the stored
+    order is sheet-wide) but never named or counted out loud."""
+    order = params.get("order")
+    if not isinstance(order, list):
+        raise ValueError("setColumnOrder.order must be a list of column names")
+    sheet = params["sheet"]
+    columns = repo.list_columns(sheet)
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for entry in order:
+        # Same dual spelling (and same first-match rule) as addColumn.after, via
+        # the same list_columns scan — see _resolve_after_column for why a scan
+        # rather than get_column: the adapters disagree on the miss exception.
+        c = next((x for x in columns if entry in (x.name, x.field)), None)
+        if c is None:
+            raise ValueError(
+                f"unknown column {entry!r} in sheet {sheet!r} (setColumnOrder.order)"
+            )
+        if c.is_label:
+            raise ValueError(
+                f"the label column {entry!r} is not reorderable (setColumnOrder.order)"
+            )
+        if c.name in seen:
+            raise ValueError(f"duplicate column {entry!r} (setColumnOrder.order)")
+        seen.add(c.name)
+        resolved.append(c.name)
+    missing = [c for c in columns if not c.is_label and c.name not in seen]
+    if missing:
+        named = sorted(c.field for c in missing if can_read_column(repo, sheet, c, actor))
+        head = f"setColumnOrder.order must list every non-label column of sheet {sheet!r}"
+        if len(named) == len(missing):
+            detail = f"missing: {', '.join(named)}"
+        elif named:
+            detail = f"missing: {', '.join(named)}, plus one or more you cannot read"
+        else:
+            detail = "at least one missing column is not visible to you"
+        raise ValueError(f"{head}; {detail}")
+    return dict(params, order=resolved)
+
+
+def _order_for_write(sheet: str, order: Any, repo: Repository) -> list[str]:
+    """The order to hand the repository: resolved ids, existing columns only.
+
+    On a direct call the pre-pass already produced exactly this. A Change
+    Request is applied LATER though, and replay skips the pre-pass: by approval
+    time a named column may have been deleted, and a column added since is not
+    named at all. Failing hard would trap the CR (approve 400s forever), so
+    replay degrades — unknown entries are dropped, anything unnamed keeps its
+    current relative place after the named ones (the repository appends it).
+    Same precedent as ``_after_for_write``."""
+    columns = repo.list_columns(sheet)
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in order or []:
+        c = next((x for x in columns if entry in (x.name, x.field)), None)
+        if c is None or c.is_label or c.name in seen:
+            continue
+        seen.add(c.name)
+        out.append(c.name)
+    return out
+
+
+def set_column_order_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
+    sheet = params["sheet"]
+    order = _order_for_write(sheet, params.get("order"), repo)
+    repo.reorder_columns(sheet, order)
+    return HandlerResult(
+        event_payload={"op": "reorder", "order": order},
+        data={"order": order},
     )
 
 
