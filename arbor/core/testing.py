@@ -49,6 +49,10 @@ class _Column:
     options: Optional[dict] = None
     read_level: str = "public"
     readers: list[str] = field(default_factory=list)
+    # Stored presentation order (the SQL/frappe ``idx`` analog). Defaults to 0
+    # for every SEEDED column — deliberately: that is the legacy state both
+    # adapters start from, so an insert has to normalize before it positions.
+    idx: int = 0
 
 
 @dataclass
@@ -262,7 +266,13 @@ class InMemoryRepository:
         return self.columns[column]
 
     def list_columns(self, sheet: str) -> list[_Column]:
-        return [c for c in self.columns.values() if c.sheet == sheet]
+        cols = [c for c in self.columns.values() if c.sheet == sheet]
+        # Stored order = idx, insertion order as the tiebreak. sorted() is
+        # stable and ``self.columns`` is insertion-ordered, which matches the
+        # SQL lane's ``ORDER BY idx, creation, name`` as long as creation order
+        # IS insertion order — it is on both real adapters (microsecond
+        # timestamps), so ``name`` only ever breaks a tie that cannot happen.
+        return sorted(cols, key=lambda c: c.idx)
 
     def get_node(self, node: str) -> _Node:
         return self.nodes[node]
@@ -404,13 +414,43 @@ class InMemoryRepository:
             options=spec.get("options"),
             read_level=spec.get("read_level", "public"),
             readers=list(spec.get("readers") or []),
+            idx=self._next_idx(sheet, spec.get("after")),
         )
         return name
+
+    def _next_idx(self, sheet: str, after: Optional[str]) -> int:
+        """Position for a column about to be inserted (see the port docstring).
+
+        Renumbers the sheet's existing columns 1..N in their CURRENT order
+        first: seeded/legacy columns all share idx 0, and positioning off 0s
+        would collapse their relative order. Then ``after`` (already resolved to
+        an in-sheet column id by the handler) takes the slot after that column,
+        shifting everything to its right; no ``after`` appends last."""
+        ordered = self.list_columns(sheet)
+        for i, c in enumerate(ordered, start=1):
+            c.idx = i
+        if not after:
+            return len(ordered) + 1
+        anchor = next((c for c in ordered if c.name == after), None)
+        if anchor is None:
+            # Defensive: the handler resolved this id against list_columns just
+            # now. ValueError (not KeyError) so all three repositories agree the
+            # anchor is a bad param — 400 — and none of them can turn it into a 404.
+            raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
+        for c in ordered:
+            if c.idx > anchor.idx:
+                c.idx += 1
+        return anchor.idx + 1
 
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None:
         c = self.get_column(sheet, column)
         for k, v in patch.items():
-            if hasattr(c, k):
+            # ``idx`` is the stored presentation order, owned by create_column's
+            # positioning pass. BOTH real adapters drop it from a column patch
+            # (their scalar allow-lists exclude it), so the oracle must too —
+            # otherwise an ordering test could go green here and be a no-op in
+            # production, on the exact field this feature depends on.
+            if k != "idx" and hasattr(c, k):
                 setattr(c, k, v)
 
     def delete_column(self, sheet: str, column: str) -> None:

@@ -46,17 +46,36 @@ test("guest is gated, signs in, creates a sheet, lands in the grid", async ({ pa
   await page.getByRole("button", { name: /add node/i }).click();
   await expect(page.getByText("No nodes yet.")).toHaveCount(0);
 
-  // 6b. Quick-add a column via the ghost flow: hovering the LAST column header
-  //     reveals a "+"; clicking it opens the transient inline editor and a
-  //     label-only Enter creates the column with defaults (field slug, type
-  //     text, owner = creator). No blank column is reserved while idle.
-  await page.getByTestId("ghost-col-open").hover();
-  await page.getByTestId("ghost-col-open").click();
-  const ghostInput = page.getByTestId("ghost-col-input");
-  await expect(ghostInput).toBeVisible();
-  await ghostInput.fill("Due Date");
-  await ghostInput.press("Enter");
-  await expect(page.getByRole("columnheader", { name: /due date/i })).toBeVisible();
+  // 6b. Quick-add a column via the ghost flow: hovering a column header reveals
+  //     a "+"; clicking it opens the transient inline editor and a label-only
+  //     Enter creates the column with defaults (field slug, type text, owner =
+  //     creator). No blank column is reserved while idle. With no data columns
+  //     yet, the label header's "+" is the entry point and appends.
+  const quickAdd = async (opener: string, label: string) => {
+    await page.getByTestId(opener).hover();
+    await page.getByTestId(opener).click();
+    const ghostInput = page.getByTestId("ghost-col-input");
+    await expect(ghostInput).toBeVisible();
+    await ghostInput.fill(label);
+    await ghostInput.press("Enter");
+  };
+  // Data column labels in rendered left-to-right order (the label column's
+  // header carries no .arbor-col-head span, so this is the data axis only).
+  const dataHeaders = () => page.locator("table.arbor-tree thead th .arbor-col-head");
+
+  await quickAdd("ghost-col-open-label", "Due Date");
+  await expect(dataHeaders()).toHaveText(["Due Date"]);
+  await quickAdd("ghost-col-open-due_date", "Owner");
+  await expect(dataHeaders()).toHaveText(["Due Date", "Owner"]);
+
+  // 6c. Insert BETWEEN the two: the "+" on the FIRST data column's header means
+  //     "insert to the right of THIS one", so the new column must land second —
+  //     and a reload proves the order came back from the SERVER (one stored
+  //     order everyone reads), not from local state.
+  await quickAdd("ghost-col-open-due_date", "Stage");
+  await expect(dataHeaders()).toHaveText(["Due Date", "Stage", "Owner"]);
+  await page.reload();
+  await expect(dataHeaders()).toHaveText(["Due Date", "Stage", "Owner"]);
 
   // 7. Toggle Live (the app lands in Proposed) — the editable grid must render,
   //    not the tree-table error boundary. Regression: a loosely-shaped select

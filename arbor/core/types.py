@@ -133,6 +133,12 @@ class Capability:
     acl_rule: str  # human-readable name of the resolver branch that decides
     emits: tuple[str, ...]  # Tree Event type(s) emitted on success
     handler: Optional[Any] = None  # callable(params, actor, repo) -> HandlerResult
+    # Optional param pre-pass: callable(params, repo) -> params. Runs in
+    # execute_action after schema validation and BEFORE the authorize-or-suggest
+    # branch, so a param the handler would reject is rejected identically on
+    # both branches (an unauthorized caller cannot file a Change Request whose
+    # approval can only ever fail).
+    resolve_params: Optional[Any] = None
 
     @property
     def emits_primary(self) -> Optional[str]:

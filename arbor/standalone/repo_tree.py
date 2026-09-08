@@ -350,12 +350,46 @@ class TreeRepoMixin:
         self._rebuild_nested_set(sheet)
         return deleted
 
-    def create_column(self, sheet: str, spec: dict[str, Any]) -> str:
-        """Insert a Tree Column from the addColumn spec; appended last in
-        presentation order (idx = current max + 1, the frappe autoset analog)."""
-        next_idx = self.session.scalar(
-            sa.select(sa.func.coalesce(sa.func.max(m.Column.idx), 0)).where(m.Column.sheet == sheet)
+    def _position_column(self, sheet: str, after: Optional[str]) -> int:
+        """Make room in the sheet's ``idx`` sequence and return the new slot.
+
+        Every column predating this feature carries ``idx = 0`` (the field was
+        never populated — only ``creation`` actually ordered them), so the
+        sheet is FIRST renumbered 1..N in its current sorted order; inserting
+        against a wall of 0s would otherwise scramble live sheets. ``after`` is
+        an in-sheet column id (resolved by ``add_column_handler``): the new
+        column takes the slot right after it and everything further right
+        shifts by one. No ``after`` appends last."""
+        rows = list(
+            self.session.scalars(
+                sa.select(m.Column)
+                .where(m.Column.sheet == sheet)
+                .order_by(m.Column.idx.asc(), m.Column.creation.asc(), m.Column.name.asc())
+            ).all()
         )
+        for i, row in enumerate(rows, start=1):
+            row.idx = i
+        if not after:
+            self.session.flush()
+            return len(rows) + 1
+        anchor = next((r for r in rows if r.name == after), None)
+        if anchor is None:
+            # Defensive: the handler resolved this id against list_columns just
+            # now. ValueError (not NotFoundError, which is a 404) so all three
+            # repositories agree a bad anchor is a bad param — 400.
+            raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
+        slot = anchor.idx + 1
+        for row in rows:
+            if row.idx >= slot:
+                row.idx += 1
+        self.session.flush()
+        return slot
+
+    def create_column(self, sheet: str, spec: dict[str, Any]) -> str:
+        """Insert a Tree Column from the addColumn spec at the position
+        ``spec["after"]`` asks for (see ``_position_column``); appended last
+        when ``after`` is absent (today's behavior)."""
+        idx = self._position_column(sheet, spec.get("after"))
         name = m.new_id()
         self.session.add(
             m.Column(
@@ -371,7 +405,7 @@ class TreeRepoMixin:
                 editable=True,
                 read_level=spec.get("read_level") or "public",
                 readers=list(spec.get("readers") or []),
-                idx=int(next_idx or 0) + 1,
+                idx=idx,
             )
         )
         self.session.flush()

@@ -239,7 +239,23 @@ class Repository(Protocol):
         """Delete node (+ descendants if cascade); return deleted ids."""
         ...
 
-    def create_column(self, sheet: str, spec: dict[str, Any]) -> str: ...
+    def create_column(self, sheet: str, spec: dict[str, Any]) -> str:
+        """Create a column from the addColumn spec; return its id.
+
+        ``spec["after"]`` carries the STORED position: the id of an existing
+        column of ``sheet`` (``add_column_handler`` has already resolved a
+        ``field`` key to an id and rejected an anchor that is not in the sheet),
+        and the new column takes the slot immediately to its right — the order
+        everyone reads back from ``list_columns``, not a per-viewer overlay.
+        Absent/None appends last.
+
+        Adapters that persist the order in an integer position field must first
+        normalize the sheet's existing columns to sequential positions in their
+        CURRENT ``list_columns`` order: rows created before positioning existed
+        all share the field's default, so inserting without normalizing first
+        would scramble them."""
+        ...
+
     def update_column(self, sheet: str, column: str, patch: dict[str, Any]) -> None: ...
     def delete_column(self, sheet: str, column: str) -> None: ...
 

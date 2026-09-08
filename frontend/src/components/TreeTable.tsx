@@ -4,7 +4,7 @@
 // dispatch. Move params are computed purely (computeMove) and illegal drops are
 // suppressed before any round-trip (WEB_UI-044/-045).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CellCommentSummary, SnapshotColumn, SnapshotNode } from "../api";
 import { buildVisibleRows, computeMove, type DropPosition } from "../lib/tree";
 import { TreeRow } from "./TreeRow";
@@ -83,11 +83,13 @@ export type TreeTableProps = {
   // In preview, was this node relocated by an open move CR? Drives the row's
   // "moved · proposed" tag.
   movedNode?: (node: string) => boolean;
-  // Quick-add column (the ghost column): called with the LABEL only — the host
-  // derives the field key and lets the server default type/owner. Presence turns
-  // on a hover-revealed "+" on the LAST column header; the ghost column itself
-  // exists only while the inline label editor is open (no reserved blank column).
-  onCreateColumn?: (label: string) => void;
+  // Quick-add column (the ghost column): called with the LABEL and the column
+  // the new one goes immediately to the RIGHT of (its id, or null to append) —
+  // the host derives the field key, passes `after` to addColumn, and lets the
+  // server default type/owner. Presence turns on a hover-revealed "+" on EVERY
+  // data column header; the ghost column itself exists only while the inline
+  // label editor is open (no reserved blank column).
+  onCreateColumn?: (label: string, after: string | null) => void;
 };
 
 export function TreeTable(props: TreeTableProps): JSX.Element {
@@ -122,28 +124,36 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
 
   const dragged = useRef<SnapshotNode | null>(null);
   const [, force] = useState(0);
-  // Ghost-column inline creator state. Activated by the hover "+" on the last
-  // column header; Enter submits the label (everything else defaults), Esc/blur
-  // cancels — and the ghost column vanishes with the editor.
-  const [ghostEditing, setGhostEditing] = useState(false);
+  // Ghost-column inline creator state. Activated by the hover "+" on ANY data
+  // column header ("insert to the right of THIS one"); Enter submits the label
+  // (everything else defaults), Esc/blur cancels — and the ghost column
+  // vanishes with the editor. `after` is the anchor column's id (null = append,
+  // which is what the last column's "+" and the label-column "+" both mean);
+  // `index` is where the ghost column sits AMONG THE DATA COLUMNS, so the
+  // header and every row's pad cell land at the same slot.
+  const [ghost, setGhost] = useState<{ after: string | null; index: number } | null>(null);
   const [ghostLabel, setGhostLabel] = useState("");
   const ghostInputRef = useRef<HTMLInputElement | null>(null);
-  const openGhost = () => {
+  const openGhost = (after: string | null, index: number) => {
     setGhostLabel("");
-    setGhostEditing(true);
+    setGhost({ after, index });
+  };
+  const closeGhost = () => {
+    setGhost(null);
+    setGhostLabel("");
   };
   useEffect(() => {
-    if (ghostEditing && ghostInputRef.current) {
+    if (ghost && ghostInputRef.current) {
       ghostInputRef.current.focus();
       // Optional call: jsdom (vitest) has no scrollIntoView.
       ghostInputRef.current.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     }
-  }, [ghostEditing]);
+  }, [ghost]);
   const submitGhost = () => {
     const label = ghostLabel.trim();
-    setGhostEditing(false);
-    setGhostLabel("");
-    if (label && onCreateColumn) onCreateColumn(label);
+    const after = ghost?.after ?? null;
+    closeGhost();
+    if (label && createColumn) createColumn(label, after);
   };
   // Live drop indicator: which row the drag is currently over + where it would
   // land (before / inside / after), so a horizontal line (or "drop-into" tint)
@@ -177,6 +187,15 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
 
   const rows = buildVisibleRows(nodes, collapsed);
   const dataColumns = columns.filter((c) => !c.is_label);
+  // Proposed preview is READ-ONLY (same reason the per-row cluster is withheld
+  // below): no per-header "+", so the preview offers no way to write.
+  const createColumn = preview ? undefined : onCreateColumn;
+  // Where the ghost header / `<col>` / row pad go, clamped to the columns that
+  // exist right now. `ghost.index` is captured at click time; if the sheet lost
+  // a column since, an unclamped index renders none of the three and `ghost`
+  // stays set — every "+" is gated on `!ghost`, so quick add would disappear
+  // until a remount. Clamping degrades to "ghost at the end" instead.
+  const ghostIndex = ghost ? Math.min(ghost.index, dataColumns.length) : null;
 
   // Predictable per-type column widths (a user-resized width from the view wins).
   // With table-layout:fixed + a horizontal-scroll viewport, the table grows as
@@ -234,6 +253,28 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     </div>
   ) : null;
 
+  // The transient ghost header, rendered at `ghost.index` among the data
+  // columns. One element, spliced in at ONE place, so the header can never
+  // drift from the rows' pad cell (which uses the same index).
+  const ghostHead = ghost ? (
+    <th className="arbor-ghost-head" data-testid="ghost-col-head" key="__ghost">
+      <input
+        ref={ghostInputRef}
+        data-testid="ghost-col-input"
+        className="arbor-ghost-input"
+        placeholder="Column label…"
+        aria-label="New column label"
+        value={ghostLabel}
+        onChange={(e) => setGhostLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submitGhost();
+          if (e.key === "Escape") closeGhost();
+        }}
+        onBlur={closeGhost}
+      />
+    </th>
+  ) : null;
+
   if (rows.length === 0) {
     return (
       <>
@@ -257,88 +298,81 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
     <table className="arbor-tree" data-testid="tree-table">
       <colgroup>
         <col className="arbor-col-label" />
-        {dataColumns.map((c) => (
-          <col key={c.name} style={{ width: colWidth(c) }} />
+        {dataColumns.map((c, i) => (
+          <Fragment key={c.name}>
+            {ghostIndex === i && <col className="arbor-col-ghost" style={{ width: 180 }} />}
+            <col style={{ width: colWidth(c) }} />
+          </Fragment>
         ))}
-        {onCreateColumn && ghostEditing && <col className="arbor-col-ghost" style={{ width: 180 }} />}
+        {ghostIndex === dataColumns.length && (
+          <col className="arbor-col-ghost" style={{ width: 180 }} />
+        )}
       </colgroup>
       <thead>
         <tr>
           <th className="arbor-label-head">
             {labelColumn ? columns.find((c) => c.name === labelColumn)?.label : "Name"}
-            {onCreateColumn && !ghostEditing && dataColumns.length === 0 && (
+            {createColumn && !ghost && dataColumns.length === 0 && (
               <button
                 type="button"
                 className="arbor-ghost-hover"
-                data-testid="ghost-col-open"
+                data-testid="ghost-col-open-label"
                 title="Add column"
                 aria-label="Add column"
-                onClick={openGhost}
+                onClick={() => openGhost(null, 0)}
               >
                 +
               </button>
             )}
           </th>
           {dataColumns.map((c, i) => (
-            <th
-              key={c.name}
-              data-testid={`col-head-${c.name}`}
-              className={c.type === "number" ? "is-numeric" : undefined}
-              style={{ width: c.width }}
-            >
-              <span className="arbor-col-head">
-                {c.label}
-                {onColumnSettings && (
+            <Fragment key={c.name}>
+              {ghostIndex === i && ghostHead}
+              <th
+                data-testid={`col-head-${c.name}`}
+                className={c.type === "number" ? "is-numeric" : undefined}
+                style={{ width: c.width }}
+              >
+                <span className="arbor-col-head">
+                  {c.label}
+                  {onColumnSettings && (
+                    <button
+                      type="button"
+                      className="arbor-col-settings-open"
+                      data-testid={`col-settings-open-${c.name}`}
+                      title={`Configure ${c.label}`}
+                      aria-label={`Configure ${c.label}`}
+                      onClick={() => onColumnSettings(c)}
+                    >
+                      <GearIcon size={14} />
+                    </button>
+                  )}
+                </span>
+                {/* Every data column gets its own "+": insert to the right of
+                    THIS one. The anchor is always the column itself — on the
+                    last column that IS an append, and naming it keeps the
+                    promise literal even if the sheet gained a column since
+                    this render. */}
+                {createColumn && !ghost && (
                   <button
                     type="button"
-                    className="arbor-col-settings-open"
-                    data-testid={`col-settings-open-${c.name}`}
-                    title={`Configure ${c.label}`}
-                    aria-label={`Configure ${c.label}`}
-                    onClick={() => onColumnSettings(c)}
+                    className="arbor-ghost-hover"
+                    // Keyed on `field`, not the column id: the id is a random
+                    // server autoname, so an e2e that just created a column
+                    // could not address its "+". The field key is stable, unique
+                    // within the sheet, and derived from the label.
+                    data-testid={`ghost-col-open-${c.field}`}
+                    title={`Insert column to the right of ${c.label}`}
+                    aria-label={`Insert column to the right of ${c.label}`}
+                    onClick={() => openGhost(c.name, i + 1)}
                   >
-                    <GearIcon size={14} />
+                    +
                   </button>
                 )}
-              </span>
-              {onCreateColumn && !ghostEditing && i === dataColumns.length - 1 && (
-                <button
-                  type="button"
-                  className="arbor-ghost-hover"
-                  data-testid="ghost-col-open"
-                  title="Add column"
-                  aria-label="Add column"
-                  onClick={openGhost}
-                >
-                  +
-                </button>
-              )}
-            </th>
+              </th>
+            </Fragment>
           ))}
-          {onCreateColumn && ghostEditing && (
-            <th className="arbor-ghost-head" data-testid="ghost-col-head">
-              <input
-                  ref={ghostInputRef}
-                  data-testid="ghost-col-input"
-                  className="arbor-ghost-input"
-                  placeholder="Column label…"
-                  aria-label="New column label"
-                  value={ghostLabel}
-                  onChange={(e) => setGhostLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitGhost();
-                    if (e.key === "Escape") {
-                      setGhostEditing(false);
-                      setGhostLabel("");
-                    }
-                  }}
-                  onBlur={() => {
-                    setGhostEditing(false);
-                    setGhostLabel("");
-                  }}
-              />
-            </th>
-          )}
+          {ghostIndex === dataColumns.length && ghostHead}
         </tr>
       </thead>
       <tbody>
@@ -376,7 +410,7 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
             preview={preview}
             proposedCell={proposedCell}
             moved={preview ? movedNode?.(row.node.name) : undefined}
-            ghostPad={Boolean(onCreateColumn && ghostEditing)}
+            ghostPadIndex={ghostIndex}
           />
         ))}
       </tbody>
