@@ -95,6 +95,24 @@ describe("App — keeps the URL in sync via replaceState", () => {
     expect(decodeView(token!)).not.toBeNull();
   });
 
+  it("a collapse the user performs lands in the ?v= token (not just the mount seed)", async () => {
+    // `collapsed` is a facet OF the view, so the share link carries a collapse
+    // the recipient can see. It was write-once for a while — the token only ever
+    // echoed what it was seeded with — which also made a saved view store the
+    // seed instead of the arrangement on screen.
+    const replaceSpy = vi.spyOn(window.history, "replaceState");
+    const { client } = mockClient({ snapshot: loginAs("A") });
+    render(<App client={client} sheetName="S" />);
+    await screen.findByTestId("tree-table");
+
+    fireEvent.click(screen.getByTestId("chevron-P2"));
+    await waitFor(() => expect(screen.queryByTestId("row-Y")).not.toBeInTheDocument());
+
+    const lastUrl = String(replaceSpy.mock.calls.at(-1)![2]);
+    const token = new URL(lastUrl, "http://localhost").searchParams.get("v");
+    expect(decodeView(token!)?.collapsed).toEqual(["P2"]);
+  });
+
   it("does NOT issue an executeAction for any view change (presentation only)", async () => {
     const { client, calls } = mockClient({ snapshot: loginAs("A") });
     render(<App client={client} sheetName="S" />);

@@ -46,6 +46,7 @@ import { SubscriptionControl, NotificationItem } from "./components/Subscription
 import { GearIcon } from "./components/icons";
 import { DelegationControl } from "./components/DelegationControl";
 import { ViewMenu, reorderByDrag } from "./components/ViewMenu";
+import { SavedViewsMenu } from "./components/SavedViewsMenu";
 import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
 import { decodeView, resolveColumnOrder } from "./lib/view";
 import { applyProposedOverlay } from "./lib/overlay";
@@ -1161,6 +1162,19 @@ function ConnectedShell({
                   // order setColumnOrder demands, so the affordance is
                   // withdrawn rather than offered and failed.
                   columnsFiltered={snap.viewer?.columns_filtered}
+                />
+              </details>
+              {/* Feature: saved views — NAMED arrangements persisted server-side
+                  (private by default, publishable to the sheet). Sits next to
+                  "View" because it is the same overlay, just remembered. Nothing
+                  is auto-applied: the list loads, the user picks. */}
+              <details className="arbor-view-disclosure" data-testid="saved-views-disclosure">
+                <summary>Saved views</summary>
+                <SavedViewsMenu
+                  sheet={sheetName}
+                  view={sheet.view}
+                  onApply={sheet.applyView}
+                  client={client}
                 />
               </details>
               {/* Row-density control: clamp long-text cells to 2/3 lines or

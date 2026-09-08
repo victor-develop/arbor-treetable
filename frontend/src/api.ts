@@ -3,6 +3,8 @@
 // / agentChat, mirroring the server's single executeAction path (ARCHITECTURE
 // §4). Affordances (edit vs suggest) come from the snapshot's ACL hints.
 
+import type { SheetView } from "./lib/view";
+
 export type OutcomeKind = "executed" | "suggested" | "read";
 
 export type Outcome = {
@@ -647,6 +649,76 @@ function normalizeAgentToken(raw: Record<string, unknown>): AgentTokenView {
   };
 }
 
+// ---- Named saved views (Feature: saved views) ------------------------------
+// One saved arrangement of a sheet: a named, server-persisted SheetView overlay
+// so hidden/order/width/collapsed survives a reload, a new browser, and a new
+// machine. Ownership is HYBRID — `private` is author-only (what a save creates),
+// `sheet` is published and pickable by everyone who can read the sheet. The `?v=`
+// share token is a SEPARATE, orthogonal mechanism over the same overlay.
+export type SavedViewVisibility = "private" | "sheet";
+
+export type SavedViewView = {
+  name: string;
+  sheet: string;
+  label: string;
+  author: string;
+  visibility: SavedViewVisibility;
+  // Whether the VIEWER wrote it — drives the "My views" / "Shared" split and
+  // which rows offer publish / update / delete. Server-computed: the UI never
+  // re-derives authority (the server still 403s a stranger's write).
+  is_mine: boolean;
+  view: SheetView;
+};
+
+// The two adapters spell one saved-view row differently — the frappe face
+// returns its `payload` JSON as TEXT and booleans as 0/1, the standalone face
+// returns a parsed object and real booleans. Normalize HERE (as
+// normalizeAgentToken does) so the picker sees ONE shape and neither adapter has
+// to move. A payload that doesn't parse or doesn't conform degrades to the
+// default view rather than throwing mid-render: the row is still pickable, it
+// just applies nothing.
+function normalizeSavedView(raw: Record<string, unknown>): SavedViewView {
+  let parsed: unknown = raw.view;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      parsed = null;
+    }
+  }
+  return {
+    name: String(raw.name ?? ""),
+    sheet: String(raw.sheet ?? ""),
+    label: String(raw.label ?? ""),
+    author: String(raw.author ?? ""),
+    visibility: raw.visibility === "sheet" ? "sheet" : "private",
+    is_mine: Boolean(raw.is_mine),
+    view: asSheetView(parsed),
+  };
+}
+
+// A stored payload → a SheetView, defaulting anything non-conforming. Kept here
+// rather than reusing lib/view's decoder: that one is the ?v= TOKEN decoder
+// (base64url), and this is already-decoded JSON.
+function asSheetView(x: unknown): SheetView {
+  const fallback: SheetView = { v: 1, hidden: [], order: [] };
+  if (!x || typeof x !== "object") return fallback;
+  const o = x as Record<string, unknown>;
+  if (o.v !== 1) return fallback;
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+  const out: SheetView = { v: 1, hidden: strings(o.hidden), order: strings(o.order) };
+  if (o.width && typeof o.width === "object") {
+    const width: Record<string, number> = {};
+    for (const [k, v] of Object.entries(o.width as Record<string, unknown>)) {
+      if (typeof v === "number") width[k] = v;
+    }
+    out.width = width;
+  }
+  if (Array.isArray(o.collapsed)) out.collapsed = strings(o.collapsed);
+  return out;
+}
+
 // Why this exists next to `post`: on the token surface the REASON for a refusal
 // IS the actionable content — "An agent token cannot mint tokens" (403),
 // "not your token" (403), "No such token" (404). `post`'s "<method> failed:
@@ -854,6 +926,25 @@ export type ArborClient = {
   }) => Promise<AgentTokenMinted>;
   listAgentTokens?: () => Promise<AgentTokenView[]>;
   revokeAgentToken?: (token_id: string) => Promise<{ token_id: string; revoked: boolean }>;
+  // Named saved views (Feature: saved views). PRESENTATION endpoints, not
+  // capabilities: they emit no Tree Event and file no Change Request, so a
+  // refusal here is a real rejection (400 validation / 403 not-yours / 409
+  // duplicate name) that MUST be shown, never a "suggested" outcome. All
+  // optional so the many mocked test clients keep type-checking.
+  //  * listSheetViews  — the caller's own views + the sheet-published ones.
+  //  * saveSheetView   — create (sheet+label+view) or patch an existing one by
+  //    `name`; on a patch only the passed fields are written, so publishing is
+  //    just {name, visibility} and no arrangement has to be resent.
+  //  * deleteSheetView — remove one (author / admin / sheet owner only).
+  listSheetViews?: (sheet: string) => Promise<SavedViewView[]>;
+  saveSheetView?: (params: {
+    sheet?: string;
+    label?: string;
+    view?: SheetView;
+    visibility?: SavedViewVisibility;
+    name?: string;
+  }) => Promise<SavedViewView>;
+  deleteSheetView?: (name: string) => Promise<{ ok: boolean }>;
   // Streams Re-Act frames; onFrame is invoked per parsed frame. Resolves when
   // the stream completes (final frame). The default reads an NDJSON body.
   // `sheet` is nullable: a falsy sheet is a WORKSPACE session (the sheet-less
@@ -1155,6 +1246,36 @@ export const api: ArborClient = {
 
   revokeAgentToken: (token_id) =>
     postDetailed<{ token_id: string; revoked: boolean }>("arbor.revoke_agent_token", { token_id }),
+
+  // Saved views — every call goes through the DETAILED lane: on this surface the
+  // refusal reason IS the actionable content ("You already have a view named X",
+  // "Only the view's author may change it", "This view is too large to save"),
+  // and `post`'s "<method> failed: <status>" would throw it away.
+  listSheetViews: async (sheet) => {
+    const headers = await authHeaderProvider();
+    const qs = new URLSearchParams({ sheet }).toString();
+    const res = await fetchImpl(`/api/method/arbor.list_sheet_views?${qs}`, { headers });
+    if (!res.ok) throw new Error(await serverMessage(res, "list_sheet_views"));
+    return unwrap<Record<string, unknown>[]>(await res.json()).map(normalizeSavedView);
+  },
+
+  // Only send the keys the caller actually passed: the server treats a PRESENT
+  // key as "write this field", so blindly sending `view: undefined` on a publish
+  // would be indistinguishable from "reset the arrangement" on a lane that
+  // coerces missing values.
+  saveSheetView: async ({ sheet, label, view, visibility, name }) =>
+    normalizeSavedView(
+      await postDetailed<Record<string, unknown>>("arbor.save_sheet_view", {
+        ...(name === undefined ? {} : { name }),
+        ...(sheet === undefined ? {} : { sheet }),
+        ...(label === undefined ? {} : { label }),
+        ...(view === undefined ? {} : { view }),
+        ...(visibility === undefined ? {} : { visibility }),
+      }),
+    ),
+
+  deleteSheetView: (name) =>
+    postDetailed<{ ok: boolean }>("arbor.delete_sheet_view", { name }),
 
   agentChat: async (sheet, message, onFrame) => {
     const headers = {

@@ -2310,6 +2310,107 @@ body {
   min-height: 28px !important;
 }
 
+/* ── Saved views (Feature: saved views) ───────────────────────────────────
+   The named-arrangement peer of the View menu: same disclosure chrome
+   (.arbor-view-disclosure supplies the popover), a sectioned list inside. */
+.arbor-view-disclosure > .arbor-saved-views {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  margin-top: 6px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-md, var(--shadow-modal));
+  padding: 8px;
+  max-height: 60vh;
+  overflow: auto;
+  width: min(92vw, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.arbor-saved-views-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.arbor-saved-view-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* name | Update | Publish | Delete — the name takes the slack so the actions
+   line up down the list. */
+.arbor-saved-view {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 6px;
+}
+.arbor-saved-view-apply {
+  width: 100%;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  padding: 4px 6px !important;
+  min-height: 28px !important;
+  color: var(--ink-2);
+  border-radius: var(--r-sm) !important;
+}
+.arbor-saved-view-apply:hover:not(:disabled) {
+  background: var(--surface-2) !important;
+}
+.arbor-saved-view-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "shared" pill + "by <author>" — quiet provenance, never louder than the name. */
+.arbor-saved-view-pill {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+}
+.arbor-saved-view-author {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+.arbor-saved-view-confirm {
+  display: inline-flex;
+  gap: 4px;
+}
+.arbor-saved-views-save {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--outline);
+  padding-top: 8px;
+}
+.arbor-saved-views-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+.arbor-saved-views-error {
+  margin: 0;
+  color: var(--danger, #b3261e);
+  font-size: 12px;
+}
+
 /* ----------------------------------------------------- sticky agent rail --- */
 /* The rail pins below the header and runs the FULL viewport height (not just a
    max), so the agent card fills the column beside BOTH the tree table and the

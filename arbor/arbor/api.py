@@ -37,6 +37,14 @@ from urllib.parse import urlsplit
 import frappe
 from frappe import _
 
+from arbor.arbor.saved_view import (
+    MAX_VIEWS_PER_SHEET,
+    SavedViewError,
+    filter_payload_columns,
+    normalize_label,
+    normalize_visibility,
+    validate_payload,
+)
 from arbor.core import executor, registry
 from arbor.core.agent_scope import (
     AgentScope,
@@ -2128,6 +2136,175 @@ def submit_cell_drafts(sheet):
         frappe.delete_doc("Arbor Cell Draft", r.name, ignore_permissions=True)
 
     return _outcome_dict(outcome)
+
+
+# ---------------------------------------------------------------------------
+# Named SAVED VIEWS (Feature: saved views) — the frappe peer of the standalone
+# ``arbor.{save,list,delete}_sheet_view`` endpoints, kept in lockstep so the SAME
+# built frontend runs on both adapters.
+#
+# PRESENTATION state, not governed domain state: like the cell-draft box these
+# are plain whitelisted endpoints, NOT registry capabilities. Nothing here
+# reaches the executor, so no Tree Event is emitted and no Change Request is
+# ever filed, and a refusal is a hard 403/400 rather than a suggestion.
+#
+# Ownership is HYBRID: a save creates a PRIVATE view (author-only) and
+# publishing it to the sheet (visibility='sheet') is an explicit second step
+# after which everyone who can read the sheet may pick it. The ``?v=`` share
+# token is untouched and orthogonal — that stays the share-BY-LINK mechanism.
+#
+# The payload rules (shape, unknown-key refusal, the 4096-byte cap, and the
+# read-ACL column redaction that keeps a published view from leaking the NAME of
+# a column the reader cannot read) live in the shared pure
+# ``arbor.arbor.saved_view`` module, so neither adapter can drift.
+# ---------------------------------------------------------------------------
+_SAVED_VIEW_DT = "Arbor Sheet Saved View"
+
+
+def _require_sheet_exists(sheet) -> None:
+    """404 for a sheet that does not exist.
+
+    "A sheet the caller can read" is exactly this today: authenticated (the
+    ``_actor()`` Guest gate) + the sheet exists. There is no per-sheet read ACL
+    in this codebase — the read-ACL lives on the COLUMN axis
+    (``acl.can_read_column``), which is what bounds what a view can name."""
+    if not frappe.db.exists("Tree Sheet", sheet):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such sheet {0}").format(sheet), exc=frappe.DoesNotExistError)
+
+
+def _readable_column_names(repo: FrappeRepository, sheet: str, actor: Actor) -> set:
+    """The columns ``actor`` may READ, by name — the redaction set applied to
+    every saved-view payload on the way out."""
+    sheet_view = repo.get_sheet(sheet)
+    return {c.name for c in visible_columns(repo, sheet_view, actor, repo.list_columns(sheet))}
+
+
+def _may_administer_view(doc, actor: Actor) -> bool:
+    """Who may update / publish / unpublish / delete one saved view: its author,
+    a platform admin, or the sheet's structural owner (the Axis-1 root authority
+    over what the view describes). Everyone else gets a 403, never a silent
+    no-op."""
+    if doc.author in {actor.user, actor.real_user or actor.user}:
+        return True
+    if getattr(actor, "is_admin", False):
+        return True
+    owner = frappe.db.get_value("Tree Sheet", doc.sheet, "structural_owner")
+    return bool(owner) and owner == actor.user
+
+
+def _saved_view_dict(doc, actor: Actor, readable: set) -> dict[str, Any]:
+    return {
+        "name": doc.name,
+        "sheet": doc.sheet,
+        "label": doc.label,
+        "author": doc.author,
+        "visibility": doc.visibility,
+        "is_mine": doc.author == actor.user,
+        # The stored field is JSON TEXT here (and a JSON column in the
+        # standalone lane) — the client normalizes both, so hand back exactly
+        # what this adapter holds rather than pretending.
+        "view": frappe.as_json(filter_payload_columns(doc.payload, readable)),
+    }
+
+
+@frappe.whitelist()
+def save_sheet_view(sheet=None, label=None, view=None, visibility=None, name=None):
+    """Create a named saved view, or patch an existing one.
+
+    Create (``sheet``, ``label``, ``view``, optional ``visibility``): the row is
+    PRIVATE unless a visibility is passed; a label the caller already used on
+    this sheet is a duplicate error. Patch (``name`` + any of the rest): only the
+    passed fields are written, so publish/unpublish is just ``name`` +
+    ``visibility`` — no separate endpoint and no need to resend the arrangement.
+    403 unless ``_may_administer_view``.
+    """
+    repo = _repo()
+    actor = _actor(repo)
+    try:
+        if name:
+            if not frappe.db.exists(_SAVED_VIEW_DT, name):
+                frappe.local.response["http_status_code"] = 404
+                frappe.throw(
+                    _("No such saved view {0}").format(name), exc=frappe.DoesNotExistError
+                )
+            doc = frappe.get_doc(_SAVED_VIEW_DT, name)
+            if not _may_administer_view(doc, actor):
+                raise frappe.PermissionError(_("Only the view's author may change it"))
+            if label is not None:
+                doc.label = normalize_label(label)
+            if view is not None:
+                doc.payload = frappe.as_json(validate_payload(_coerce(view)))
+            if visibility is not None:
+                doc.visibility = normalize_visibility(visibility, default=doc.visibility)
+            doc.save(ignore_permissions=True)
+        else:
+            _require_sheet_exists(sheet)
+            # Bound how many views one author may keep on one sheet: the only
+            # limit on an otherwise unbounded per-user write.
+            held = frappe.db.count(
+                _SAVED_VIEW_DT, {"author": actor.user, "sheet": sheet}
+            )
+            if held >= MAX_VIEWS_PER_SHEET:
+                frappe.local.response["http_status_code"] = 400
+                frappe.throw(
+                    _("You already have {0} saved views on this sheet").format(
+                        MAX_VIEWS_PER_SHEET
+                    ),
+                    exc=frappe.ValidationError,
+                )
+            doc = frappe.new_doc(_SAVED_VIEW_DT)
+            doc.sheet = sheet
+            doc.author = actor.user
+            doc.label = normalize_label(label)
+            doc.payload = frappe.as_json(validate_payload(_coerce(view)))
+            doc.visibility = normalize_visibility(visibility)
+            doc.insert(ignore_permissions=True)
+    except SavedViewError as exc:
+        # 400, set the way every other refusal in this module sets it: a bare
+        # ValidationError answers frappe's 417, and the standalone peer answers
+        # 400 for the same body — the two lanes run the SAME frontend, so the
+        # number the picker shows must not depend on which adapter is deployed.
+        frappe.local.response["http_status_code"] = 400
+        frappe.throw(str(exc), exc=frappe.ValidationError)
+    return _saved_view_dict(doc, actor, _readable_column_names(repo, doc.sheet, actor))
+
+
+@frappe.whitelist()
+def list_sheet_views(sheet):
+    """The saved views the caller may pick for ``sheet``: their OWN (any
+    visibility) PLUS every ``sheet``-published view, whoever wrote it. Another
+    user's PRIVATE view is never listed."""
+    repo = _repo()
+    actor = _actor(repo)
+    _require_sheet_exists(sheet)
+    names = frappe.get_all(
+        _SAVED_VIEW_DT,
+        filters={"sheet": sheet},
+        or_filters={"author": actor.user, "visibility": "sheet"},
+        pluck="name",
+        order_by="creation asc",
+    )
+    readable = _readable_column_names(repo, sheet, actor)
+    return [
+        _saved_view_dict(frappe.get_doc(_SAVED_VIEW_DT, n), actor, readable) for n in names
+    ]
+
+
+@frappe.whitelist()
+def delete_sheet_view(name):
+    """Delete one saved view. 404 unknown, 403 for anyone but
+    ``_may_administer_view`` — a stranger's delete must FAIL, not quietly do
+    nothing."""
+    actor = _actor()
+    if not frappe.db.exists(_SAVED_VIEW_DT, name):
+        frappe.local.response["http_status_code"] = 404
+        frappe.throw(_("No such saved view {0}").format(name), exc=frappe.DoesNotExistError)
+    doc = frappe.get_doc(_SAVED_VIEW_DT, name)
+    if not _may_administer_view(doc, actor):
+        raise frappe.PermissionError(_("Only the view's author may delete it"))
+    frappe.delete_doc(_SAVED_VIEW_DT, name, ignore_permissions=True)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

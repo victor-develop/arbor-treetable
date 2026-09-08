@@ -369,6 +369,32 @@ def test_comment_mutations_are_capabilities_list_stays_read_shim():
     assert "list_cell_comments" not in set(REST_METHODS.values())
 
 
+def test_saved_views_are_plain_endpoints_not_capabilities():
+    """Feature: saved views. A named saved view is PRESENTATION state, so its
+    three endpoints are whitelisted adapter methods (like the cell-draft box and
+    ``list_cell_comments``) and must NEVER become registry capabilities or LLM
+    tools: they emit no Tree Event and file no Change Request, so routing them
+    through the executor would be the one thing that could give a view overlay
+    governed-write semantics it has no business having."""
+    from arbor import hooks
+
+    aliases = {
+        "arbor.save_sheet_view",
+        "arbor.list_sheet_views",
+        "arbor.delete_sheet_view",
+    }
+    assert aliases <= set(hooks.override_whitelisted_methods)
+    for alias in aliases:
+        assert hooks.override_whitelisted_methods[alias].startswith("arbor.arbor.api.")
+
+    cap_ids = {c.id for c in all_capabilities()}
+    tool_names = {t["function"]["name"] for t in get_llm_tools()}
+    for camel in ("saveSheetView", "listSheetViews", "deleteSheetView"):
+        assert camel not in cap_ids
+        assert camel not in tool_names
+    assert not (set(REST_METHODS.values()) & {"save_sheet_view", "list_sheet_views"})
+
+
 def test_internal_reset_absent_from_llm_tools():
     """API-149 + AGENT-002 (core half): internalReset never appears among the
     tools the agent surface offers; it exists in the registry but is filtered."""

@@ -64,6 +64,14 @@ from arbor.arbor.dispatch.notify import NotificationDispatcher
 from arbor.arbor.dispatch.ports import TransportTimeout
 from arbor.arbor.dispatch.serializer import serialize_notification_bytes
 from arbor.arbor.dispatch.webhook import WebhookDispatcher
+from arbor.arbor.saved_view import (
+    MAX_VIEWS_PER_SHEET,
+    SavedViewError,
+    filter_payload_columns,
+    normalize_label,
+    normalize_visibility,
+    validate_payload,
+)
 from arbor.core import executor
 from arbor.core import process as process_machine
 from arbor.core.acl import can_read_column, resolve_column_approvers
@@ -114,7 +122,7 @@ from .auth import (
 )
 from .db import create_all, make_engine, make_session_factory
 from .errors import ConflictError, StaleMoveError, StaleVersionError
-from .repository import CellDraft, SQLEventSink, SQLRepository
+from .repository import CellDraft, SheetSavedView, SQLEventSink, SQLRepository
 from .snapshot import build_sheet_snapshot
 
 # ---------------------------------------------------------------------------
@@ -1769,6 +1777,206 @@ def submit_cell_drafts(
         session.delete(r)
     session.flush()
     return _msg(body)
+
+
+# ---- named saved views (Feature: saved views) -------------------------------------
+# PRESENTATION state, not governed domain state: these are plain adapter
+# endpoints like the cell-draft box and the comment shims — NOT registry
+# capabilities. They emit no Tree Event, file no Change Request, and never reach
+# the executor, so a refusal here is a hard 403/400 and never a suggestion.
+#
+# Ownership is hybrid: a save creates a PRIVATE view (author-only); publishing
+# it to the sheet (visibility='sheet') is an explicit second step that makes it
+# pickable by everyone who can read the sheet. The ``?v=`` share token is
+# untouched and orthogonal — that remains the share-BY-LINK mechanism.
+def _require_sheet(session: Session, sheet: Any) -> m.Sheet:
+    """The sheet the caller wants, or 404.
+
+    "A sheet the caller can read" is exactly this today: authenticated (the
+    ``_actor`` gate above) + the sheet exists. There is no per-sheet read ACL in
+    this codebase — ``list_sheets`` returns every sheet to every authenticated
+    user and ``get_sheet_snapshot`` only 404s — the read-ACL lives on the COLUMN
+    axis (``acl.can_read_column``), which is what filters what a view can name."""
+    row = session.get(m.Sheet, str(sheet or ""))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such sheet {sheet}")
+    return row
+
+
+def _readable_column_names(repo: SQLRepository, sheet: str, actor: Actor) -> set[str]:
+    """The columns ``actor`` may READ, by name — the redaction set applied to
+    every saved-view payload on the way out (see ``saved_view`` module docs)."""
+    sheet_view = repo.get_sheet(sheet)
+    cols = repo.list_columns(sheet)
+    return {c.name for c in cols if can_read_column(repo, sheet_view, c, actor)}
+
+
+def _may_administer_view(
+    session: Session, row: SheetSavedView, actor: Actor
+) -> bool:
+    """Who may update / publish / unpublish / delete one saved view: its author,
+    a platform admin, or the sheet's structural owner (the sheet's Axis-1 root
+    authority — the same principal who can restructure what the view describes).
+    Everyone else gets a 403, never a silent no-op."""
+    if row.author == actor.user or row.author == (actor.real_user or actor.user):
+        return True
+    if getattr(actor, "is_admin", False):
+        return True
+    sheet_row = session.get(m.Sheet, row.sheet)
+    return sheet_row is not None and sheet_row.structural_owner == actor.user
+
+
+def _saved_view_out(
+    row: SheetSavedView, actor: Actor, readable: set[str]
+) -> dict[str, Any]:
+    return {
+        "name": row.name,
+        "sheet": row.sheet,
+        "label": row.label,
+        "author": row.author,
+        "visibility": row.visibility,
+        "is_mine": row.author == actor.user,
+        "view": filter_payload_columns(row.payload, readable),
+    }
+
+
+@app.post("/api/method/arbor.save_sheet_view")
+def save_sheet_view(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Create a named saved view, or patch an existing one.
+
+    Create (``{sheet, label, view, visibility?}``): the caller must be able to
+    read the sheet; the row is PRIVATE unless a visibility is passed. A label
+    the caller already used on this sheet is a 409.
+
+    Patch (``{name, label?, view?, visibility?}``): only the fields present are
+    written, so flipping visibility ("publish" / "unpublish") is just
+    ``{name, visibility}`` — no separate endpoint, no need to resend the
+    arrangement. 403 unless ``_may_administer_view``."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+
+    name = str(payload.get("name") or "")
+    existing = session.get(SheetSavedView, name) if name else None
+    if name and existing is None:
+        raise HTTPException(status_code=404, detail=f"No such saved view {name}")
+    if existing is not None and not _may_administer_view(session, existing, actor):
+        raise HTTPException(status_code=403, detail="Only the view's author may change it")
+
+    # Validate EVERY field first, and only then touch the session: the
+    # duplicate-label probe below would autoflush a half-applied row and turn
+    # the unique constraint into a bare 500 instead of the 409 below.
+    try:
+        if existing is not None:
+            author, sheet_name = existing.author, existing.sheet
+            label = (
+                normalize_label(payload.get("label"))
+                if "label" in payload
+                else existing.label
+            )
+            view = (
+                validate_payload(payload.get("view")) if "view" in payload else None
+            )
+            visibility = (
+                normalize_visibility(payload.get("visibility"), default=existing.visibility)
+                if "visibility" in payload
+                else existing.visibility
+            )
+        else:
+            author, sheet_name = actor.user, _require_sheet(session, payload.get("sheet")).name
+            label = normalize_label(payload.get("label"))
+            view = validate_payload(payload.get("view"))
+            visibility = normalize_visibility(payload.get("visibility"))
+    except SavedViewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Surface the (author, sheet, label) collision as a 409 the picker can read,
+    # rather than letting the flush blow up as a bare 500.
+    dupe = sa.select(SheetSavedView.name).where(
+        SheetSavedView.author == author,
+        SheetSavedView.sheet == sheet_name,
+        SheetSavedView.label == label,
+    )
+    if existing is not None:
+        dupe = dupe.where(SheetSavedView.name != existing.name)
+    if session.scalar(dupe):
+        raise HTTPException(status_code=409, detail=f"You already have a view named {label}")
+
+    if existing is not None:
+        row = existing
+        row.label = label
+        row.visibility = visibility
+        if view is not None:
+            row.payload = view
+    else:
+        # Bound how many views one author may keep on one sheet: this is the only
+        # limit on an otherwise unbounded per-user write (see MAX_VIEWS_PER_SHEET).
+        held = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(SheetSavedView)
+            .where(SheetSavedView.author == author, SheetSavedView.sheet == sheet_name)
+        )
+        if int(held or 0) >= MAX_VIEWS_PER_SHEET:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You already have {MAX_VIEWS_PER_SHEET} saved views on this sheet",
+            )
+        row = SheetSavedView(
+            sheet=sheet_name,
+            author=author,
+            label=label,
+            payload=view,
+            visibility=visibility,
+        )
+        session.add(row)
+
+    session.flush()
+    return _msg(_saved_view_out(row, actor, _readable_column_names(repo, row.sheet, actor)))
+
+
+@app.get("/api/method/arbor.list_sheet_views")
+def list_sheet_views(request: Request, sheet: str, session: Session = Depends(get_db)):
+    """The saved views the caller may pick for ``sheet``: their OWN (any
+    visibility) PLUS every ``sheet``-published view, whoever wrote it. Another
+    user's PRIVATE view is never listed. 404 for a sheet that does not exist."""
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    _require_sheet(session, sheet)
+    rows = session.scalars(
+        sa.select(SheetSavedView)
+        .where(
+            SheetSavedView.sheet == sheet,
+            sa.or_(
+                SheetSavedView.author == actor.user,
+                SheetSavedView.visibility == "sheet",
+            ),
+        )
+        .order_by(SheetSavedView.creation.asc())
+    ).all()
+    readable = _readable_column_names(repo, sheet, actor)
+    return _msg([_saved_view_out(r, actor, readable) for r in rows])
+
+
+@app.post("/api/method/arbor.delete_sheet_view")
+def delete_sheet_view(
+    request: Request, payload: dict | None = Body(None), session: Session = Depends(get_db)
+):
+    """Delete one saved view. 404 unknown, 403 for anyone but
+    ``_may_administer_view`` — a stranger's delete must FAIL, not quietly do
+    nothing (the caller's picker would otherwise show the row as gone)."""
+    payload = payload or {}
+    repo = _repo(session)
+    actor = _actor(request, repo)
+    row = session.get(SheetSavedView, str(payload.get("name") or ""))
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such saved view")
+    if not _may_administer_view(session, row, actor):
+        raise HTTPException(status_code=403, detail="Only the view's author may delete it")
+    session.delete(row)
+    session.flush()
+    return _msg({"ok": True})
 
 
 # ---- per-cell comments (Area 2) ---------------------------------------------------

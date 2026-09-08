@@ -152,6 +152,14 @@ override_whitelisted_methods = {
     "arbor.discard_cell_draft": "arbor.arbor.api.discard_cell_draft",
     "arbor.discard_cell_drafts": "arbor.arbor.api.discard_cell_drafts",
     "arbor.submit_cell_drafts": "arbor.arbor.api.submit_cell_drafts",
+    # Named saved views (Feature: saved views) — per-user PRESENTATION state with
+    # hybrid ownership (private by default, publishable to the sheet). NOT
+    # registry capabilities: no Tree Event, no Change Request. Listing returns
+    # the caller's own views plus the sheet-published ones; update/publish/delete
+    # are author-or-admin-or-sheet-owner (a hard 403, never a silent no-op).
+    "arbor.save_sheet_view": "arbor.arbor.api.save_sheet_view",
+    "arbor.list_sheet_views": "arbor.arbor.api.list_sheet_views",
+    "arbor.delete_sheet_view": "arbor.arbor.api.delete_sheet_view",
     # Per-cell comments drawer (Feature: comments, Area 2) — threaded, cell-keyed
     # collaboration metadata. NOT registry capabilities and NOT Tree Events; read/
     # post gated by can_read_column, resolve by column approvers, delete by

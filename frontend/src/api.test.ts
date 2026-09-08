@@ -602,3 +602,154 @@ describe("agent-token client", () => {
     );
   });
 });
+
+describe("saved-views client", () => {
+  it("listSheetViews GETs the sheet's views and normalizes both adapters' shapes", async () => {
+    // Row 1 is the standalone shape (parsed payload object + real booleans);
+    // row 2 is the frappe doctype shape (payload as JSON TEXT + 0/1 is_mine).
+    const { calls } = mockFetch([
+      {
+        name: "SV-1",
+        sheet: "S",
+        label: "Mine",
+        author: "a@example.com",
+        visibility: "private",
+        is_mine: true,
+        view: { v: 1, hidden: ["col:budget"], order: [], width: { "col:status": 200 } },
+      },
+      {
+        name: "SV-2",
+        sheet: "S",
+        label: "Team",
+        author: "d@example.com",
+        visibility: "sheet",
+        is_mine: 0,
+        view: '{"v": 1, "hidden": [], "order": ["col:status"], "collapsed": ["P2"]}',
+      },
+    ]);
+    const out = await api.listSheetViews!("S");
+    expect(calls[0].url).toBe("/api/method/arbor.list_sheet_views?sheet=S");
+    expect(calls[0].init?.method).toBeUndefined();
+    expect(out).toEqual([
+      {
+        name: "SV-1",
+        sheet: "S",
+        label: "Mine",
+        author: "a@example.com",
+        visibility: "private",
+        is_mine: true,
+        view: { v: 1, hidden: ["col:budget"], order: [], width: { "col:status": 200 } },
+      },
+      {
+        name: "SV-2",
+        sheet: "S",
+        label: "Team",
+        author: "d@example.com",
+        visibility: "sheet",
+        is_mine: false,
+        view: { v: 1, hidden: [], order: ["col:status"], collapsed: ["P2"] },
+      },
+    ]);
+  });
+
+  it("a stored payload that cannot be parsed or does not conform degrades to the default view", async () => {
+    // The row must stay PICKABLE (it just applies nothing) rather than throwing
+    // mid-render — an unknown `v` is exactly what a rolled-back client writes.
+    mockFetch([
+      {
+        name: "SV-3",
+        sheet: "S",
+        label: "Broken",
+        author: "a",
+        visibility: "private",
+        is_mine: 1,
+        view: "{oops",
+      },
+      {
+        name: "SV-4",
+        sheet: "S",
+        label: "Future",
+        author: "a",
+        visibility: "private",
+        is_mine: 1,
+        view: { v: 2 },
+      },
+    ]);
+    const out = await api.listSheetViews!("S");
+    expect(out.map((r) => r.view)).toEqual([
+      { v: 1, hidden: [], order: [] },
+      { v: 1, hidden: [], order: [] },
+    ]);
+    expect(out[0].label).toBe("Broken"); // still listed, still pickable
+  });
+
+  it("saveSheetView sends ONLY the keys it was given (a publish carries no arrangement)", async () => {
+    const { calls } = mockFetch({
+      name: "SV-1",
+      sheet: "S",
+      label: "Mine",
+      author: "a",
+      visibility: "sheet",
+      is_mine: true,
+      view: { v: 1, hidden: [], order: [] },
+    });
+    const out = await api.saveSheetView!({ name: "SV-1", visibility: "sheet" });
+    expect(calls[0].url).toBe("/api/method/arbor.save_sheet_view");
+    expect(lastBody(calls[0].init)).toEqual({ name: "SV-1", visibility: "sheet" });
+    expect(out.visibility).toBe("sheet");
+  });
+
+  it("saveSheetView posts sheet + label + view when creating one", async () => {
+    const view = { v: 1 as const, hidden: ["col:budget"], order: [] };
+    const { calls } = mockFetch({
+      name: "SV-9",
+      sheet: "S",
+      label: "No budget",
+      author: "a",
+      visibility: "private",
+      is_mine: true,
+      view,
+    });
+    await api.saveSheetView!({ sheet: "S", label: "No budget", view });
+    expect(lastBody(calls[0].init)).toEqual({ sheet: "S", label: "No budget", view });
+  });
+
+  it("deleteSheetView posts the view id", async () => {
+    const { calls } = mockFetch({ ok: true });
+    const out = await api.deleteSheetView!("SV-1");
+    expect(calls[0].url).toBe("/api/method/arbor.delete_sheet_view");
+    expect(lastBody(calls[0].init)).toEqual({ name: "SV-1" });
+    expect(out).toEqual({ ok: true });
+  });
+
+  it("a refusal surfaces the SERVER's reason on every saved-view call", async () => {
+    // 400 (bad payload), 403 (not yours), 409 (name taken) and 404 (no such
+    // sheet) are all actionable and all distinct — the bare status would hide
+    // which one happened, and a swallowed one would look like a no-op.
+    const cases = [
+      {
+        status: 400,
+        detail: "This view is too large to save",
+        call: () => api.saveSheetView!({ sheet: "S", label: "x" }),
+      },
+      {
+        status: 403,
+        detail: "Only the view's author may delete it",
+        call: () => api.deleteSheetView!("SV-1"),
+      },
+      {
+        status: 409,
+        detail: "You already have a view named Mine",
+        call: () => api.saveSheetView!({ sheet: "S", label: "Mine" }),
+      },
+      { status: 404, detail: "No such sheet S", call: () => api.listSheetViews!("S") },
+    ];
+    for (const { status, detail, call } of cases) {
+      const impl = vi.fn(
+        async () => ({ ok: false, status, json: async () => ({ detail }) }) as unknown as Response,
+      );
+      setFetchImpl(impl as unknown as typeof fetch);
+      await expect(call()).rejects.toThrow(`${detail} (${status})`);
+    }
+  });
+});

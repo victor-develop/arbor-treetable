@@ -18,9 +18,10 @@ Two small seams keep the api layer's dispatch fan-out out of the storage layer
 
 Both default to None (pure storage, exactly ``InMemoryRepository`` behavior).
 
-``CellDraft`` lives here rather than in ``models.py``: drafts are API-layer
-staging (frappe's ``Arbor Cell Draft``), not a Repository-port doctype — the
-Repository protocol never touches them; only ``app.py`` does.
+``CellDraft`` and ``SheetSavedView`` live here rather than in ``models.py``:
+both are API-layer state (frappe's ``Arbor Cell Draft`` / ``Arbor Sheet Saved
+View``), not Repository-port doctypes — the Repository protocol never touches
+them; only ``app.py`` does.
 """
 
 from __future__ import annotations
@@ -59,6 +60,40 @@ class CellDraft(m.NamedRow, m.Base):
     column: Mapped[str] = mapped_column(sa.String(140))
     value: Mapped[Any | None] = mapped_column(sa.JSON, default=None)
     base_version: Mapped[int | None] = mapped_column(sa.Integer, default=None)
+
+
+class SheetSavedView(m.NamedRow, m.Base):
+    """Arbor Sheet Saved View — a NAMED, server-persisted ``SheetView`` overlay
+    (hidden / order / width / collapsed) so an arrangement survives a reload, a
+    new browser, and a new machine (Feature: saved views).
+
+    Ownership is HYBRID, which is why one table carries both cases:
+    ``visibility='private'`` (the default a save creates) is visible only to its
+    ``author``; ``visibility='sheet'`` is visible to everyone who can read the
+    sheet. Only the author (or an admin / the sheet's structural owner) may
+    update, publish, unpublish, or delete a row.
+
+    Like ``CellDraft`` this is PRESENTATION state, not governed domain state: it
+    is not a Repository-port table, emits no Tree Event, and files no Change
+    Request — only the saved-view endpoints in ``app.py`` read/write it.
+
+    ``(author, sheet, label)`` is unique so the picker can never show one user
+    two identically-named views of the same sheet (a save on a taken name is a
+    409; updating the existing row is the explicit "Update" affordance)."""
+
+    __tablename__ = "sheet_saved_views"
+    __table_args__ = (
+        sa.UniqueConstraint("author", "sheet", "label", name="uq_sheet_saved_views_label"),
+        sa.Index("ix_sheet_saved_views_sheet", "sheet"),
+    )
+
+    sheet: Mapped[str] = mapped_column(sa.String(140))
+    author: Mapped[str] = mapped_column(sa.String(140))
+    label: Mapped[str] = mapped_column(sa.String(140))
+    # The SheetView payload, shape-validated at the endpoint (frontend/src/lib/
+    # view.ts owns the same shape).
+    payload: Mapped[dict[str, Any]] = mapped_column(sa.JSON, default=dict)
+    visibility: Mapped[str] = mapped_column(sa.String(10), default="private")  # private|sheet
 
 
 class SQLRepository(TreeRepoMixin, GovernanceRepoMixin, CollabRepoMixin, ProcessRepoMixin):
