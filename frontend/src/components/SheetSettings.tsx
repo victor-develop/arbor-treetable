@@ -105,11 +105,17 @@ export function SheetSettings({
   const [def, setDef] = useState<SheetDefinition | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
+  // Bumped by "Try again". The seed read used to be strictly one-shot, so ONE
+  // transient failure — a rolling deploy swapping the container, a VPN blip —
+  // left the panel stuck on its loading line or a dead error banner until the
+  // whole page was reloaded. Every tab still renders; only the body waits.
+  const [attempt, setAttempt] = useState(0);
 
   // ONE governance read seeds every tab (columns + process). No snapshot needed.
   useEffect(() => {
     let live = true;
     if (!client.getSheetDefinition) return;
+    setError(null);
     void client
       .getSheetDefinition(sheet)
       .then((d) => {
@@ -121,7 +127,7 @@ export function SheetSettings({
     return () => {
       live = false;
     };
-  }, [client, sheet]);
+  }, [client, sheet, attempt]);
 
   const columns = useMemo(
     () => (def?.columns ?? []).map(toSnapshotColumn),
@@ -173,6 +179,14 @@ export function SheetSettings({
         {error && (
           <p className="arbor-banner is-error" role="alert" data-testid="settings-error">
             {error}
+            <button
+              type="button"
+              className="arbor-settings-retry"
+              data-testid="settings-retry"
+              onClick={() => setAttempt((a) => a + 1)}
+            >
+              Try again
+            </button>
           </p>
         )}
         {!def && !error && (
