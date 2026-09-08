@@ -4819,9 +4819,10 @@ body {
   margin: 10px 0;
 }
 /* Ghost column (quick-add): NO reserved blank column. A "+" overlays the
-   right edge of the LAST column header, revealed on header hover; clicking it
-   materializes a transient ghost column holding the inline label editor
-   (Enter creates with defaults, Esc/blur dissolves it). */
+   right edge of EVERY data column header, revealed on that header's hover;
+   clicking it materializes a transient ghost column — immediately to the right
+   of the hovered column — holding the inline label editor (Enter creates with
+   defaults at that position, Esc/blur dissolves it). */
 .arbor-tree thead th { position: relative; }
 .arbor-ghost-hover {
   position: absolute; right: 2px; top: 50%; transform: translateY(-50%);

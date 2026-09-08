@@ -106,7 +106,10 @@ create Change Request + emit `CHANGE_PROPOSED`**.
     "type":   {"enum": ["text","multiline-text","number","single-select-split","multi-select-split"]},
     "options":{"type": ["object","null"]},
     "column_owner": {"type": "string"},
-    "is_label": {"type": "boolean", "default": false}
+    "is_label": {"type": "boolean", "default": false},
+    // insert immediately RIGHT of this column (its field key or id); omit = append last.
+    // Not in the sheet -> 400, never a Change Request.
+    "after": {"type": ["string","null"]}
   } }
 
 // updateColumn / deleteColumn  (meta — column approvers)

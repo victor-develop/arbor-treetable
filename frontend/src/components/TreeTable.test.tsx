@@ -312,50 +312,152 @@ describe("TreeTable drag-and-drop → moveNode", () => {
     expect(p2).not.toHaveAttribute("data-drop");
   });
 });
-describe("ghost column quick-add", () => {
+describe("ghost column quick-add (insert to the right)", () => {
+  // Header cells of the rendered <thead>, in DOM order — the ghost column has
+  // to land at the right INDEX among them, not merely somewhere in the row.
+  const headOrder = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("thead th")).map(
+      (th) => th.getAttribute("data-testid") ?? "label",
+    );
+
   it("renders no ghost affordance without onCreateColumn", () => {
     renderTable();
-    expect(screen.queryByTestId("ghost-col-open")).toBeNull();
+    expect(screen.queryByTestId(/^ghost-col-open/)).toBeNull();
     expect(screen.queryByTestId("ghost-col-head")).toBeNull();
   });
 
-  it("idle state reserves NO blank column — only the hover + on the last header", () => {
-    renderTable({ onCreateColumn: vi.fn() });
+  it("idle state reserves NO blank column — one hover + per data column header", () => {
+    const { container } = renderTable({ onCreateColumn: vi.fn() });
     expect(screen.queryByTestId("ghost-col-head")).toBeNull();
-    // Exactly one opener, and it lives inside the last data column's header.
-    const opener = screen.getByTestId("ghost-col-open");
-    const lastHead = screen.getAllByTestId(/^col-head-/).at(-1)!;
-    expect(lastHead).toContainElement(opener);
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(0);
+    // Every data column carries its own opener, each inside its own header.
+    // Openers are keyed on `field` (stable + predictable), headers on the id.
+    const dataCols = loginAs("D").columns.filter((c) => !c.is_label);
+    expect(screen.getAllByTestId(/^ghost-col-open-/)).toHaveLength(dataCols.length);
+    dataCols.forEach((c) => {
+      expect(screen.getByTestId(`col-head-${c.name}`)).toContainElement(
+        screen.getByTestId(`ghost-col-open-${c.field}`),
+      );
+    });
+    // Named for the column it inserts after, so each one is distinguishable.
+    expect(screen.getByTestId("ghost-col-open-budget")).toHaveAttribute(
+      "aria-label",
+      "Insert column to the right of Budget",
+    );
   });
 
-  it("the hover + opens the inline editor; Enter submits the trimmed label", () => {
+  it("the hover + opens the inline editor; Enter submits the trimmed label + the anchor", () => {
     const onCreateColumn = vi.fn();
     renderTable({ onCreateColumn });
-    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    fireEvent.click(screen.getByTestId("ghost-col-open-status"));
     const input = screen.getByTestId("ghost-col-input");
     fireEvent.change(input, { target: { value: "  Due Date  " } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(onCreateColumn).toHaveBeenCalledWith("Due Date");
+    expect(onCreateColumn).toHaveBeenCalledWith("Due Date", "col:status");
     // Editor + its transient column dissolve after submit.
     expect(screen.queryByTestId("ghost-col-head")).toBeNull();
+  });
+
+  it("the LAST column's + still means append (its own name is the rightmost anchor)", () => {
+    const onCreateColumn = vi.fn();
+    const { container } = renderTable({ onCreateColumn });
+    fireEvent.click(screen.getByTestId("ghost-col-open-tags"));
+    expect(headOrder(container).at(-1)).toBe("ghost-col-head");
+    fireEvent.change(screen.getByTestId("ghost-col-input"), { target: { value: "Due" } });
+    fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Enter" });
+    expect(onCreateColumn).toHaveBeenCalledWith("Due", "col:tags");
+  });
+
+  it("the ghost column materializes immediately to the RIGHT of the hovered column", () => {
+    const { container } = renderTable({ onCreateColumn: vi.fn() });
+    fireEvent.click(screen.getByTestId("ghost-col-open-status"));
+    expect(headOrder(container)).toEqual([
+      "label",
+      "col-head-col:status",
+      "ghost-col-head",
+      "col-head-col:budget",
+      "col-head-col:notes",
+      "col-head-col:tags",
+    ]);
+    // The colgroup grows in lockstep, so the transient column has a width.
+    expect(container.querySelectorAll("colgroup col.arbor-col-ghost")).toHaveLength(1);
+  });
+
+  it("each row's pad cell sits at the SAME index as the ghost header", () => {
+    const { container } = renderTable({ onCreateColumn: vi.fn() });
+    fireEvent.click(screen.getByTestId("ghost-col-open-status"));
+    const ghostIndex = headOrder(container).indexOf("ghost-col-head");
+    const rows = screen.getAllByTestId(/^row-/);
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(rows.length);
+    rows.forEach((row) => {
+      const cells = Array.from(row.querySelectorAll("td"));
+      expect(cells[ghostIndex]).toHaveClass("arbor-ghost-cell");
+    });
   });
 
   it("Escape dissolves the ghost column without creating; empty label creates nothing", () => {
     const onCreateColumn = vi.fn();
     renderTable({ onCreateColumn });
-    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    fireEvent.click(screen.getByTestId("ghost-col-open-notes"));
     fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Escape" });
     expect(screen.queryByTestId("ghost-col-head")).toBeNull();
-    fireEvent.click(screen.getByTestId("ghost-col-open"));
+    fireEvent.click(screen.getByTestId("ghost-col-open-notes"));
     fireEvent.keyDown(screen.getByTestId("ghost-col-input"), { key: "Enter" });
     expect(onCreateColumn).not.toHaveBeenCalled();
   });
 
-  it("while editing, each row gains one alignment pad cell", () => {
-    const { container } = renderTable({ onCreateColumn: vi.fn() });
-    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(0);
-    fireEvent.click(screen.getByTestId("ghost-col-open"));
-    const rows = screen.getAllByTestId(/^row-/);
-    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(rows.length);
+  it("a sheet with no data columns keeps its label-header +, which appends", () => {
+    const onCreateColumn = vi.fn();
+    const labelOnly = loginAs("D").columns.filter((c) => c.is_label);
+    renderTable({ onCreateColumn, columns: labelOnly });
+    expect(screen.queryAllByTestId(/^ghost-col-open-(?!label$)/)).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("ghost-col-open-label"));
+    const input = screen.getByTestId("ghost-col-input");
+    fireEvent.change(input, { target: { value: "Status" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // No anchor exists yet, so the new column can only be appended.
+    expect(onCreateColumn).toHaveBeenCalledWith("Status", null);
+  });
+
+  it("keeps the open ghost visible when the sheet loses a column under it", () => {
+    // `ghost.index` is captured at click time. Unclamped, a shrunk column list
+    // renders no ghost <th>/<col>/pad while `ghost` stays set — and since every
+    // "+" is gated on !ghost, quick add would disappear until a remount.
+    const snap = loginAs("D");
+    const table = (columns: typeof snap.columns) => (
+      <TreeTable
+        columns={columns}
+        nodes={snap.nodes}
+        labelColumn={snap.label_column}
+        collapsed={new Set<string>()}
+        onToggle={vi.fn()}
+        pendingCell={() => false}
+        isPendingMove={() => false}
+        onCommitCell={vi.fn()}
+        onMove={vi.fn()}
+        onCreateColumn={vi.fn()}
+      />
+    );
+    const { container, rerender } = render(table(snap.columns));
+    const last = snap.columns.filter((c) => !c.is_label).at(-1)!;
+    fireEvent.click(screen.getByTestId(`ghost-col-open-${last.field}`));
+    expect(headOrder(container).at(-1)).toBe("ghost-col-head");
+    rerender(table(snap.columns.filter((c) => c.name !== last.name)));
+    expect(headOrder(container).at(-1)).toBe("ghost-col-head");
+    expect(container.querySelectorAll("colgroup col.arbor-col-ghost")).toHaveLength(1);
+    expect(container.querySelectorAll("td.arbor-ghost-cell")).toHaveLength(
+      screen.getAllByTestId(/^row-/).length,
+    );
+  });
+
+  it("preview is read-only: no + on any header, label header included", () => {
+    // Same rule as the per-row cluster above. Before this gate the Proposed
+    // preview offered one "+" per data column — every one of them a write.
+    const onCreateColumn = vi.fn();
+    renderTable({ onCreateColumn, preview: true });
+    expect(screen.queryByTestId(/^ghost-col-open/)).toBeNull();
+    const labelOnly = loginAs("D").columns.filter((c) => c.is_label);
+    renderTable({ onCreateColumn, preview: true, columns: labelOnly });
+    expect(screen.queryByTestId("ghost-col-open-label")).toBeNull();
   });
 });

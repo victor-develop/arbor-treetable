@@ -404,11 +404,16 @@ function ConnectedShell({
   // minted for the viewer's own identity, so every authenticated user gets the
   // button. Same header-launched, mounted-only-when-open shape as rolesOpen.
   const [agentTokensOpen, setAgentTokensOpen] = useState(false);
-  // Ghost-column quick add (entry: hover "+" on the last column header): the
-  // submit derives the field key and lets the server default type/owner.
-  const quickAddColumn = (label: string) => {
+  // Ghost-column quick add (entry: hover "+" on ANY column header): the submit
+  // derives the field key and lets the server default type/owner. `after` is
+  // the column the new one goes immediately to the right of — a STORED position
+  // everyone reads back, so it goes to the server rather than into view state;
+  // null appends (the label-column "+" on a sheet with no data columns).
+  const quickAddColumn = (label: string, after: string | null) => {
     const field = uniqueField((snap?.columns ?? []).map((c) => c.field), label);
-    void sheet.dispatch("addColumn", { sheet: sheetName, field, label, type: "text" }).then((o) => {
+    const params: Record<string, unknown> = { sheet: sheetName, field, label, type: "text" };
+    if (after) params.after = after;
+    void sheet.dispatch("addColumn", params).then((o) => {
       // Mirror columnOp: executed re-renders the schema; a governed downgrade
       // files a CR (refresh the inbox); both surface in Activity.
       if (o.kind === "executed") void sheet.refetch();
