@@ -40,10 +40,18 @@ export type ViewMenuProps = {
   // resolved left-to-right order (complete, non-label, column ids, exactly what
   // setColumnOrder requires) and the HOST dispatches. Omitted => no button.
   onSaveSharedOrder?: (order: string[]) => void;
+  // Server hint `snapshot.viewer.columns_filtered`: the read-ACL dropped at
+  // least one column from `columns`. setColumnOrder's contract is "name every
+  // non-label column of the SHEET", so a filtered viewer cannot satisfy it from
+  // what they can see — including the sheet's own structural owner, who is the
+  // one actor with the authority to make the write. Offering the button then is
+  // offering a permanent 400, so we explain instead. (Nothing here reveals the
+  // hidden column: the hint is a bare boolean.)
+  columnsFiltered?: boolean;
 };
 
 export function ViewMenu(props: ViewMenuProps): JSX.Element {
-  const { columns, view, onChange, onSaveSharedOrder } = props;
+  const { columns, view, onChange, onSaveSharedOrder, columnsFiltered } = props;
   // Only NON-label, snapshot-present columns are user-configurable (the label is
   // always visible and never reorderable).
   const dataColumns = columns.filter((c) => !c.is_label);
@@ -113,7 +121,15 @@ export function ViewMenu(props: ViewMenuProps): JSX.Element {
 
   return (
     <div className="arbor-view-menu" data-testid="view-menu">
-      {onSaveSharedOrder && differsFromShared && (
+      {onSaveSharedOrder && differsFromShared && columnsFiltered && (
+        <div className="arbor-view-share">
+          <p className="arbor-view-share-blocked" data-testid="view-save-order-blocked">
+            The shared order covers every column on this sheet, and not all of
+            them are visible to you — so this arrangement stays yours alone.
+          </p>
+        </div>
+      )}
+      {onSaveSharedOrder && differsFromShared && !columnsFiltered && (
         <div className="arbor-view-share">
           <button
             type="button"

@@ -241,3 +241,46 @@ describe("App — save order for everyone", () => {
     expect(screen.getByTestId("view-save-order")).toBeInTheDocument();
   });
 });
+
+// The affordance is withdrawn for a read-filtered viewer, because setColumnOrder
+// demands the COMPLETE non-label set and a filtered snapshot cannot express it.
+// The victim of the old behaviour was the STRUCTURAL OWNER: the one actor with
+// the authority to make the write got a button that 400'd every time, forever,
+// with no in-UI way to recover.
+describe("App — save order is withdrawn when the snapshot was read-filtered", () => {
+  const filteredOwnerSnapshot = () => {
+    const snap = loginAs("A");
+    return {
+      ...snap,
+      // col:budget is owner-only and A is not its owner: dropped server-side.
+      columns: snap.columns.filter((c) => c.name !== "col:budget"),
+      viewer: { ...snap.viewer, columns_filtered: true },
+    };
+  };
+
+  it("offers no button after a drag, and dispatches nothing", async () => {
+    const { calls } = await mountGrid({ snapshot: filteredOwnerSnapshot() });
+    dragHeader("notes", "col:status");
+    // The drag itself still works — the arrangement is simply personal.
+    await waitFor(() => expect(headerOrder()).toEqual(["col:notes", "col:status", "col:tags"]));
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+    expect(screen.getByTestId("view-save-order-blocked")).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still offers it when the server says nothing was filtered", async () => {
+    const snap = loginAs("A");
+    await mountGrid({
+      snapshot: { ...snap, viewer: { ...snap.viewer, columns_filtered: false } },
+    });
+    dragHeader("notes", "col:status");
+    await waitFor(() => expect(screen.getByTestId("view-save-order")).toBeInTheDocument());
+  });
+
+  it("the blocked note reveals nothing about the hidden column", async () => {
+    await mountGrid({ snapshot: filteredOwnerSnapshot() });
+    dragHeader("notes", "col:status");
+    const note = await screen.findByTestId("view-save-order-blocked");
+    expect(note.textContent).not.toMatch(/budget/i);
+  });
+});

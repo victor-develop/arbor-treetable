@@ -94,3 +94,105 @@ def test_a_non_string_entry_is_400_from_the_schema(client):
     resp = act(client, "setColumnOrder", {"sheet": "s5", "order": [7]})
     assert resp.status_code == 400, resp.text
     assert sheet_fields(client, "s5") == ["title", "status"]
+
+
+# --- read-ACL: the 400 must not leak, and the affordance must not be offered --
+# The pre-pass that produces this 400 runs BEFORE any authority check, so a
+# caller with no relationship to the sheet reaches it. It used to answer with
+# the field keys of every missing column — including ones getSheetDefinition
+# had just filtered out for that same caller, one request earlier.
+ALICE = "alice@example.com"
+STRANGER = "stranger@example.com"
+
+
+def _sheet_with_a_restricted_column(client: TestClient, name: str) -> None:
+    """OWNER's sheet with a public column and one ALICE owns and hides. Nobody
+    but ALICE (and a platform admin) can read `secret_salary` — not even the
+    sheet's structural owner."""
+    _sheet_with_columns(client, name, "public_a")
+    resp = act(
+        client,
+        "addColumn",
+        {
+            "sheet": name,
+            "field": "secret_salary",
+            "label": "Salary",
+            "type": "text",
+            "column_owner": ALICE,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    login(client, ALICE)
+    resp = act(
+        client,
+        "updateColumn",
+        {"sheet": name, "column": "secret_salary", "patch": {"read_level": "owner-only"}},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_the_incomplete_order_400_never_leaks_an_unreadable_field_key(client):
+    _sheet_with_a_restricted_column(client, "r1")
+    login(client, STRANGER)
+    # Baseline: the read surface already hides it correctly.
+    assert sheet_fields(client, "r1") == ["title", "public_a"]
+    resp = act(client, "setColumnOrder", {"sheet": "r1", "order": []})
+    assert resp.status_code == 400, resp.text
+    assert "secret_salary" not in resp.text
+    assert "public_a" in resp.text
+
+
+def test_the_structural_owner_gets_the_same_redacted_400(client):
+    # The owner is the one actor who could execute the write, and cannot read
+    # every column either — same redaction, no special case.
+    _sheet_with_a_restricted_column(client, "r2")
+    login(client, OWNER)
+    assert sheet_fields(client, "r2") == ["title", "public_a"]
+    resp = act(client, "setColumnOrder", {"sheet": "r2", "order": ["public_a"]})
+    assert resp.status_code == 400, resp.text
+    assert "secret_salary" not in resp.text
+
+
+def test_the_snapshot_tells_a_filtered_viewer_its_column_list_is_incomplete(client):
+    """The hint that suppresses "save order for everyone" in the UI. A bare
+    boolean: no name, no field key, no count, so it reveals nothing beyond
+    "this is not the whole schema"."""
+    _sheet_with_a_restricted_column(client, "r3")
+    login(client, OWNER)
+    snap = client.get("/api/method/arbor.get_sheet_snapshot", params={"sheet": "r3"})
+    assert snap.status_code == 200, snap.text
+    viewer = snap.json()["message"]["viewer"]
+    assert viewer["columns_filtered"] is True
+    assert "secret_salary" not in snap.text
+
+    # ALICE reads everything, so for her the affordance stays available.
+    login(client, ALICE)
+    snap = client.get("/api/method/arbor.get_sheet_snapshot", params={"sheet": "r3"})
+    assert snap.json()["message"]["viewer"]["columns_filtered"] is False
+
+
+def test_an_unfiltered_sheet_reports_columns_filtered_false(client):
+    _sheet_with_columns(client, "r4", "status", "due")
+    snap = client.get("/api/method/arbor.get_sheet_snapshot", params={"sheet": "r4"})
+    assert snap.status_code == 200, snap.text
+    assert snap.json()["message"]["viewer"]["columns_filtered"] is False
+
+
+def test_an_incomplete_order_inside_suggest_changes_is_400_not_a_filed_cr(client):
+    # The batch door onto the same capability. A 200 here would file a CR whose
+    # approval applies a partial order — the exact semantics the contract refuses.
+    _sheet_with_columns(client, "r5", "status", "due", "risk")
+    login(client, STRANGER)
+    resp = act(
+        client,
+        "suggestChanges",
+        {
+            "sheet": "r5",
+            "changes": [
+                {"action": "setColumnOrder", "params": {"sheet": "r5", "order": ["risk"]}}
+            ],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    login(client, OWNER)
+    assert sheet_fields(client, "r5") == ["title", "status", "due", "risk"]

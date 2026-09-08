@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .acl import can_read_column
 from .ports import Repository
 from .types import Actor, EventType, HandlerResult
 
@@ -181,7 +182,9 @@ def _resolve_after_column(sheet: str, after: Any, repo: Repository) -> str:
     raise ValueError(f"unknown column {after!r} in sheet {sheet!r} (addColumn.after)")
 
 
-def resolve_add_column_params(params: dict[str, Any], repo: Repository) -> dict[str, Any]:
+def resolve_add_column_params(
+    params: dict[str, Any], repo: Repository, actor: Actor
+) -> dict[str, Any]:
     """addColumn's pre-pass: rewrite ``after`` to a resolved in-sheet column id.
 
     Runs in ``execute_action`` BEFORE the authorize-or-suggest branch, which is
@@ -236,7 +239,9 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
     )
 
 
-def resolve_set_column_order_params(params: dict[str, Any], repo: Repository) -> dict[str, Any]:
+def resolve_set_column_order_params(
+    params: dict[str, Any], repo: Repository, actor: Actor
+) -> dict[str, Any]:
     """setColumnOrder's pre-pass: resolve + fully validate ``order``.
 
     Same reason addColumn has one (see ``resolve_add_column_params``): the
@@ -249,7 +254,15 @@ def resolve_set_column_order_params(params: dict[str, Any], repo: Repository) ->
     meaning, so the contract is "name every non-label column exactly once".
     The label column is rejected as an entry rather than tolerated — it is
     always the first grid column, never reorderable, so naming it is a caller
-    bug worth surfacing."""
+    bug worth surfacing.
+
+    The completeness message names ONLY columns ``actor`` may read. This pre-pass
+    runs before any authority check, so every authenticated caller reaches it —
+    including one with no relationship to the sheet at all — and naming the
+    missing columns outright handed a stranger the field keys of a restricted
+    column that ``getSheetDefinition`` had just correctly filtered out. A
+    column the actor cannot read is counted toward completeness (the stored
+    order is sheet-wide) but never named or counted out loud."""
     order = params.get("order")
     if not isinstance(order, list):
         raise ValueError("setColumnOrder.order must be a list of column names")
@@ -274,12 +287,17 @@ def resolve_set_column_order_params(params: dict[str, Any], repo: Repository) ->
             raise ValueError(f"duplicate column {entry!r} (setColumnOrder.order)")
         seen.add(c.name)
         resolved.append(c.name)
-    missing = [c.field for c in columns if not c.is_label and c.name not in seen]
+    missing = [c for c in columns if not c.is_label and c.name not in seen]
     if missing:
-        raise ValueError(
-            "setColumnOrder.order must list every non-label column of sheet "
-            f"{sheet!r}; missing: {', '.join(sorted(missing))}"
-        )
+        named = sorted(c.field for c in missing if can_read_column(repo, sheet, c, actor))
+        head = f"setColumnOrder.order must list every non-label column of sheet {sheet!r}"
+        if len(named) == len(missing):
+            detail = f"missing: {', '.join(named)}"
+        elif named:
+            detail = f"missing: {', '.join(named)}, plus one or more you cannot read"
+        else:
+            detail = "at least one missing column is not visible to you"
+        raise ValueError(f"{head}; {detail}")
     return dict(params, order=resolved)
 
 

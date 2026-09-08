@@ -122,7 +122,11 @@ create Change Request + emit `CHANGE_PROPOSED`**.
     // The COMPLETE left-to-right order of the sheet's NON-label columns (field
     // keys or ids), each exactly once. Unknown / duplicate / incomplete -> 400,
     // never a Change Request. The label column is always first and is never an
-    // entry (naming it -> 400).
+    // entry (naming it -> 400). Completeness is measured against the WHOLE
+    // sheet, so a read-ACL-filtered caller cannot satisfy it; the 400 names
+    // only the columns that caller may read (the UI withdraws the affordance
+    // off the snapshot's `viewer.columns_filtered` hint rather than offering a
+    // call that can only fail).
     "order": {"type": "array", "items": {"type": "string"}}
   } }
 

@@ -297,3 +297,41 @@ describe("resolveColumnOrder — the complete non-label ordering", () => {
     expect(resolveColumnOrder(SNAPSHOT_COLS, view)).not.toContain("col:name");
   });
 });
+
+// App.reorderColumnsInView folds a drag over the VISIBLE headers back into the
+// COMPLETE order by walking `resolveColumnOrder` and handing every visible slot
+// the next dragged name. That positional walk is only correct because
+// resolveColumns' visible non-label sequence is always a SUBSEQUENCE of
+// resolveColumnOrder's — an invariant that lives implicitly in two separate
+// functions, so a future edit to either part-1/part-2 split could break the fold
+// with nothing failing. Pin it here.
+describe("view — resolveColumns' visible order is a subsequence of resolveColumnOrder", () => {
+  const isSubsequence = (sub: string[], full: string[]): boolean => {
+    let k = 0;
+    for (const name of full) if (k < sub.length && sub[k] === name) k++;
+    return k === sub.length;
+  };
+
+  const VIEWS: SheetView[] = [
+    { v: 1, hidden: [], order: [] },
+    { v: 1, hidden: [], order: ["col:notes", "col:status", "col:budget"] },
+    { v: 1, hidden: ["col:budget"], order: [] },
+    { v: 1, hidden: ["col:budget"], order: ["col:notes", "col:budget", "col:status"] },
+    { v: 1, hidden: ["col:status", "col:notes"], order: ["col:notes", "col:budget"] },
+    // A forwarded token naming a column this viewer cannot read, plus the label.
+    { v: 1, hidden: [], order: ["col:secret", "col:name", "col:notes"] },
+    // Every non-label column hidden — the degenerate end of the range.
+    { v: 1, hidden: ["col:status", "col:budget", "col:notes"], order: ["col:budget"] },
+  ];
+
+  it.each(VIEWS.map((v, i) => [i, v] as const))("holds for view %i", (_i, view) => {
+    const complete = resolveColumnOrder(SNAPSHOT_COLS, view);
+    const visible = resolveColumns(SNAPSHOT_COLS, view)
+      .filter((c) => !c.is_label)
+      .map((c) => c.name);
+    expect(isSubsequence(visible, complete)).toBe(true);
+    // The fold's other precondition: every visible name is present in the
+    // complete order, so the walk consumes exactly `visible.length` slots.
+    expect(complete.filter((n) => visible.includes(n))).toEqual(visible);
+  });
+});

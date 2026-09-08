@@ -100,6 +100,7 @@ override_whitelisted_methods = {
     "arbor.move_node": "arbor.arbor.api.move_node",
     "arbor.delete_node": "arbor.arbor.api.delete_node",
     "arbor.add_column": "arbor.arbor.api.add_column",
+    "arbor.set_column_order": "arbor.arbor.api.set_column_order",
     "arbor.update_column": "arbor.arbor.api.update_column",
     "arbor.delete_column": "arbor.arbor.api.delete_column",
     "arbor.suggest_change": "arbor.arbor.api.suggest_change",

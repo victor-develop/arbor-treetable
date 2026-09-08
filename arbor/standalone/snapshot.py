@@ -167,7 +167,8 @@ def build_sheet_snapshot(
     sheet_view = repo.get_sheet(sheet)
     # Read-ACL (Feature 3): filter BEFORE building values/hints, so a forbidden
     # column drops from headers AND every node's cells together.
-    columns = visible_columns(repo, sheet_view, actor, repo.list_columns(sheet))
+    all_columns = repo.list_columns(sheet)
+    columns = visible_columns(repo, sheet_view, actor, all_columns)
     nodes = repo.list_nodes(sheet)
 
     # Bulk-load every cell for the sheet in ONE query (never N+1), filtered to
@@ -195,6 +196,10 @@ def build_sheet_snapshot(
     comments = _cell_comment_marks(session, sheet, visible_col_names, node_names)
 
     acl_hints = _acl_hints(session, repo, actor, sheet, columns, nodes)
+    # Boolean-only "your column list is not the whole schema" hint (see
+    # serialize_snapshot). Computed HERE, next to the filter itself, so the two
+    # can never disagree about what was dropped.
+    acl_hints["columns_filtered"] = len(columns) != len(all_columns)
     snap = serialize_snapshot(
         sheet_view, columns, nodes, values, acl_hints, versions=versions, pending=pending
     )

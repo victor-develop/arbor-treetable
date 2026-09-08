@@ -434,6 +434,13 @@ function ConnectedShell({
     // complete order and hand every visible slot to the dragged sequence, so a
     // hidden column keeps its place instead of being shuffled by a drag that
     // could not even see it.
+    //
+    // The positional walk is safe because `visible` is always a SUBSEQUENCE of
+    // `complete`: both put `view.order` ∩ (visible | present) first and the
+    // remainder in snapshot order, and visible ⊆ present. So `complete` holds
+    // exactly `dragged.length` visible slots and `k` never runs off the end.
+    // The invariant spans resolveColumns AND resolveColumnOrder, so it is pinned
+    // by a test of its own (lib/view.test.ts) rather than left to inspection.
     const complete = resolveColumnOrder(snap?.columns ?? [], sheet.view);
     const visibleSet = new Set(visible);
     let k = 0;
@@ -1150,6 +1157,10 @@ function ConnectedShell({
                   // The one place a column order becomes SHARED. ViewMenu still
                   // dispatches nothing itself — it hands us the resolved order.
                   onSaveSharedOrder={saveSharedColumnOrder}
+                  // A read-filtered column list cannot express the COMPLETE
+                  // order setColumnOrder demands, so the affordance is
+                  // withdrawn rather than offered and failed.
+                  columnsFiltered={snap.viewer?.columns_filtered}
                 />
               </details>
               {/* Row-density control: clamp long-text cells to 2/3 lines or

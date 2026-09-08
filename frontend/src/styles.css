@@ -4847,7 +4847,7 @@ th:hover .arbor-ghost-hover, .arbor-ghost-hover:focus-visible { opacity: 1; }
   color: var(--ink-muted, #8a8a86); font-size: 12px; line-height: 1;
   padding: 2px 3px; opacity: 0; transition: opacity 0.12s;
 }
-th:hover .arbor-col-grip { opacity: 1; }
+.arbor-tree thead th:hover .arbor-col-grip { opacity: 1; }
 .arbor-col-grip:active { cursor: grabbing; }
 .arbor-tree thead th.is-dragging-col { opacity: 0.5; }
 .arbor-tree thead th.is-col-drop-target {
@@ -4858,3 +4858,4 @@ th:hover .arbor-col-grip { opacity: 1; }
    local order actually differs (a dead button would be worse than none). */
 .arbor-view-share { padding: 2px 2px 6px; }
 .arbor-view-save-order { width: 100%; font-size: 12px; }
+.arbor-view-share-blocked { margin: 0; font-size: 11px; line-height: 1.35; color: var(--ink-subtle); }

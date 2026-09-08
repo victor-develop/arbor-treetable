@@ -278,3 +278,185 @@ def test_a_legacy_sheet_reorder_survives_a_later_partial_rearrangement():
     # Move just "b" to the front; everything else keeps its relative order.
     _reorder(repo, sink, actor, ["b", "d", "c", "a"])
     assert _fields(repo) == ["title", "b", "d", "c", "a"]
+
+
+# --- the completeness 400 must not disclose a column the caller cannot read --
+# The pre-pass runs BEFORE any authority check (that is the whole point of it),
+# so every authenticated caller reaches it — including one with no relationship
+# to the sheet whatsoever. Enumerating the missing columns therefore handed a
+# stranger the field keys of a restricted column that `getSheetDefinition` had
+# just correctly filtered out, one call earlier.
+ALICE = "alice@example.com"
+
+
+def _sheet_with_a_secret():
+    """OWNER's sheet: label `title`, public `public_a`, and `secret_salary`
+    which only its own column owner (ALICE) may read."""
+    repo = InMemoryRepository()
+    repo.add_sheet("S", structural_owner=OWNER)
+    repo.add_column("c-title", "S", "title", OWNER, is_label=True)
+    repo.add_column("c-public", "S", "public_a", OWNER)
+    repo.add_column("c-secret", "S", "secret_salary", ALICE, read_level="owner-only")
+    return repo, RecordingEventSink()
+
+
+@pytest.mark.parametrize("who", [OUTSIDER, OWNER])
+def test_the_incomplete_order_error_never_names_an_unreadable_column(who):
+    """Both the stranger and the sheet's own structural owner: neither may read
+    `secret_salary`, so neither may be told by name that it exists."""
+    repo, sink = _sheet_with_a_secret()
+    with pytest.raises(ValueError) as exc:
+        execute_action(
+            "setColumnOrder", {"sheet": "S", "order": []}, Actor(who, ActorType.HUMAN), repo, sink
+        )
+    msg = str(exc.value)
+    assert "secret_salary" not in msg
+    assert "c-secret" not in msg
+    # The readable one IS named — the message stays useful to the caller.
+    assert "public_a" in msg
+    assert repo.change_requests == {}
+
+
+def test_the_incomplete_order_error_names_a_column_its_reader_may_read():
+    # ALICE owns the restricted column, so for HER it is readable and nameable.
+    repo, sink = _sheet_with_a_secret()
+    with pytest.raises(ValueError) as exc:
+        execute_action(
+            "setColumnOrder", {"sheet": "S", "order": []}, Actor(ALICE, ActorType.HUMAN), repo, sink
+        )
+    assert "secret_salary" in str(exc.value)
+
+
+def test_the_error_does_not_count_the_unreadable_columns_either():
+    # Two hidden columns, one readable: the message must not become an
+    # arithmetic oracle for how many columns the sheet really has.
+    repo, sink = _sheet_with_a_secret()
+    repo.add_column("c-secret2", "S", "secret_bonus", ALICE, read_level="owner-only")
+    with pytest.raises(ValueError) as exc:
+        execute_action(
+            "setColumnOrder", {"sheet": "S", "order": []}, Actor(OUTSIDER, ActorType.HUMAN), repo, sink
+        )
+    msg = str(exc.value)
+    assert "secret_bonus" not in msg and "secret_salary" not in msg
+    assert "2" not in msg
+
+
+def test_an_all_unreadable_remainder_still_refuses_without_naming_anything():
+    repo, sink = _sheet_with_a_secret()
+    order = [repo.get_column("S", "public_a").name]
+    with pytest.raises(ValueError) as exc:
+        execute_action(
+            "setColumnOrder", {"sheet": "S", "order": order}, Actor(OUTSIDER, ActorType.HUMAN), repo, sink
+        )
+    msg = str(exc.value)
+    assert "secret_salary" not in msg
+    # Completeness is still SHEET-wide: naming only the readable columns is not
+    # enough, or the stored order would silently drop the rest.
+    assert "must list every non-label column" in msg
+
+
+def test_the_complete_order_including_an_unreadable_column_still_works():
+    # The contract itself is unchanged: a caller who does name every column (an
+    # admin, or a client that already holds the ids) reorders as before.
+    repo, sink = _sheet_with_a_secret()
+    ids = [repo.get_column("S", f).name for f in ("secret_salary", "public_a")]
+    out = execute_action(
+        "setColumnOrder", {"sheet": "S", "order": ids}, Actor(OWNER, ActorType.HUMAN), repo, sink
+    )
+    assert out.kind == "executed"
+    assert _fields(repo) == ["title", "secret_salary", "public_a"]
+
+
+# --- the pre-pass also guards the BATCH suggest door -------------------------
+# suggestChanges is a SECOND entrypoint onto the same capabilities and it used to
+# skip the pre-pass entirely: an incomplete `order` sailed through as a Change
+# Request, and replay (which degrades by design) then applied a partial list with
+# invented "prepend" semantics — a stored order nobody had asked for.
+def test_suggest_changes_refuses_an_incomplete_order_like_a_direct_call():
+    repo, sink, _ = _sheet_with("public_a", "public_b", "public_c")
+    outsider = Actor(OUTSIDER, ActorType.HUMAN)
+    with pytest.raises(ValueError):
+        execute_action(
+            "suggestChanges",
+            {
+                "sheet": "S",
+                "changes": [
+                    {"action": "setColumnOrder", "params": {"sheet": "S", "order": ["public_b"]}}
+                ],
+            },
+            outsider,
+            repo,
+            sink,
+        )
+    assert repo.change_requests == {}
+    assert _fields(repo) == ["title", "public_a", "public_b", "public_c"]
+
+
+def test_suggest_changes_refuses_an_unknown_column_in_the_order():
+    repo, sink, _ = _sheet_with("a", "b")
+    with pytest.raises(ValueError):
+        execute_action(
+            "suggestChanges",
+            {
+                "sheet": "S",
+                "changes": [
+                    {"action": "setColumnOrder", "params": {"sheet": "S", "order": ["a", "nope"]}}
+                ],
+            },
+            Actor(OUTSIDER, ActorType.HUMAN),
+            repo,
+            sink,
+        )
+    assert repo.change_requests == {}
+
+
+def test_a_complete_order_inside_suggest_changes_stores_resolved_ids_and_applies():
+    repo, sink, owner = _sheet_with("a", "b", "c")
+    out = execute_action(
+        "suggestChanges",
+        {
+            "sheet": "S",
+            "changes": [
+                {"action": "setColumnOrder", "params": {"sheet": "S", "order": ["c", "b", "a"]}}
+            ],
+        },
+        Actor(OUTSIDER, ActorType.HUMAN),
+        repo,
+        sink,
+    )
+    assert out.kind == "suggested"
+    # Resolved ids, exactly like the single-capability suggest branch.
+    stored = repo.change_requests[out.change_request]["changes"][0]["payload"]["order"]
+    assert stored == [repo.get_column("S", f).name for f in ("c", "b", "a")]
+    execute_action("approveChange", {"change_request": out.change_request}, owner, repo, sink)
+    assert _fields(repo) == ["title", "c", "b", "a"]
+
+
+def test_suggest_changes_refuses_a_bad_addColumn_anchor_too():
+    # The same door, the same pre-pass: addColumn.after shares the bypass. Its
+    # replay degrades harmlessly (append), but a caller who named a nonexistent
+    # anchor still deserves the 400 the schema promises on every branch.
+    repo, sink, _ = _sheet_with("a")
+    with pytest.raises(ValueError):
+        execute_action(
+            "suggestChanges",
+            {
+                "sheet": "S",
+                "changes": [
+                    {
+                        "action": "addColumn",
+                        "params": {
+                            "sheet": "S",
+                            "field": "n",
+                            "label": "N",
+                            "type": "text",
+                            "after": "nope",
+                        },
+                    }
+                ],
+            },
+            Actor(OUTSIDER, ActorType.HUMAN),
+            repo,
+            sink,
+        )
+    assert repo.change_requests == {}

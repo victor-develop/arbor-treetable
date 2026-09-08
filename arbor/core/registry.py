@@ -204,7 +204,11 @@ _S_SET_COLUMN_ORDER = {
                 "error (400), never a suggestion — a partial list has no single "
                 "obvious meaning, so the contract is deterministic instead of "
                 "convenient. The label column is always the first column and is "
-                "never reorderable, so naming it here is also a 400."
+                "never reorderable, so naming it here is also a 400. "
+                "Completeness is measured against the WHOLE sheet, so a caller "
+                "who cannot read every column cannot satisfy it — the error "
+                "then names only the columns you may read, and says the rest "
+                "exist without identifying them."
             ),
         },
     },

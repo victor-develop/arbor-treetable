@@ -104,6 +104,13 @@ export type Snapshot = {
     can_add_column?: boolean;
     // platform-admin hint — the ONLY gate for the admin Roles panel (Feature: roles)
     is_admin?: boolean;
+    // True when the server's read-ACL dropped at least one column from
+    // `columns`. A boolean and nothing else — no name, no count — so it cannot
+    // help reveal a column the viewer may not read. Gates "save order for
+    // everyone": setColumnOrder requires the COMPLETE non-label set, which a
+    // filtered viewer can never assemble, so offering the button would offer a
+    // guaranteed 400.
+    columns_filtered?: boolean;
     // the viewer's own sheet subscription state (for the subscribe/unsubscribe control)
     subscribed?: boolean;
     subscription?: string | null;

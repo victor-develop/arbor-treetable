@@ -288,6 +288,25 @@ def test_every_llm_capability_has_a_named_rest_method():
         assert has_capability(cap_id)
 
 
+def test_every_named_rest_method_is_whitelisted_in_hooks():
+    """API-013 (routing): the manifest above only names methods — what makes
+    ``/api/method/arbor.<verb>`` actually resolve on a bench is the
+    ``override_whitelisted_methods`` alias, and nothing used to assert it.
+    ``arbor.set_column_order`` shipped missing for exactly that reason: the
+    capability, the manifest and the api attribute were all present, so every
+    existing check passed while the documented collapsed path 404'd.
+
+    Frappe-free on purpose (``hooks`` imports no frappe), so the gap is caught
+    in the default lane rather than only on a bench."""
+    from arbor import hooks
+
+    whitelist = hooks.override_whitelisted_methods
+    for method in REST_METHODS.values():
+        alias = f"arbor.{method}"
+        assert alias in whitelist, alias
+        assert whitelist[alias] == f"arbor.arbor.api.{method}", alias
+
+
 def test_named_rest_methods_exist_on_api_when_importable():
     """API-013 (binding): when the adapter API module imports (frappe present),
     each named method is a real attribute. Bench-free, this asserts the manifest

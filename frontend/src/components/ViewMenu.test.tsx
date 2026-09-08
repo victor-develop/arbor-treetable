@@ -304,3 +304,75 @@ describe("ViewMenu — save order for everyone", () => {
     expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
   });
 });
+
+// A read-ACL-filtered viewer cannot satisfy setColumnOrder's contract ("name
+// every non-label column of the SHEET") from a list the server already
+// shortened — including the sheet's own structural owner, who is the only actor
+// with the authority to make the write. The button used to render anyway and
+// 400 every single time, permanently, with no in-UI way out.
+describe("ViewMenu — save order is withdrawn when the column list is filtered", () => {
+  const draggedView: SheetView = {
+    v: 1,
+    hidden: [],
+    order: ["col:budget", "col:status"],
+  };
+
+  it("hides the button and says why when columnsFiltered is set", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+    // Silence would read as a bug; the note explains the arrangement stays local.
+    expect(screen.getByTestId("view-save-order-blocked")).toBeInTheDocument();
+  });
+
+  it("still offers it when nothing was filtered", () => {
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered={false}
+      />,
+    );
+    expect(screen.getByTestId("view-save-order")).toBeInTheDocument();
+    expect(screen.queryByTestId("view-save-order-blocked")).not.toBeInTheDocument();
+  });
+
+  it("says nothing at all when the local order matches the shared one", () => {
+    // No difference to save => no button AND no explanation to explain away.
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={baseView}
+        onChange={vi.fn()}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    expect(screen.queryByTestId("view-save-order")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("view-save-order-blocked")).not.toBeInTheDocument();
+  });
+
+  it("leaves hide / reorder / resize fully usable — only sharing is withdrawn", () => {
+    const onChange = vi.fn();
+    render(
+      <ViewMenu
+        columns={COLS}
+        view={draggedView}
+        onChange={onChange}
+        onSaveSharedOrder={vi.fn()}
+        columnsFiltered
+      />,
+    );
+    fireEvent.click(screen.getByTestId("view-toggle-col:budget"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+});

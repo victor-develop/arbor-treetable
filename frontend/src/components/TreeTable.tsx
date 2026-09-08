@@ -355,17 +355,30 @@ export function TreeTable(props: TreeTableProps): JSX.Element {
               <th
                 data-testid={`col-head-${c.name}`}
                 className={
-                  (c.type === "number" ? "is-numeric" : "") +
-                  (dragCol === c.name ? " is-dragging-col" : "") +
-                  (overCol === c.name && dragCol && dragCol !== c.name
-                    ? " is-col-drop-target"
-                    : "") || undefined
+                  [
+                    c.type === "number" ? "is-numeric" : "",
+                    dragCol === c.name ? "is-dragging-col" : "",
+                    overCol === c.name && dragCol && dragCol !== c.name
+                      ? "is-col-drop-target"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
                 }
                 style={{ width: c.width }}
                 // The whole header is the DROP target (a wide, forgiving
                 // landing zone); only the grip below starts a drag, so the "+"
                 // and the gear keep their clicks.
-                onDragEnter={reorderColumns ? () => setOverCol(c.name) : undefined}
+                // Only a COLUMN drag marks a drop target. A row drag crossing
+                // the header used to set it and nothing cleared it, so the next
+                // column drag flashed a stale border before its first dragEnter.
+                onDragEnter={
+                  reorderColumns
+                    ? () => {
+                        if (dragCol) setOverCol(c.name);
+                      }
+                    : undefined
+                }
                 onDragOver={
                   reorderColumns
                     ? (e) => {
