@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .acl import can_read_column
+from .acl import can_read_column, is_domain_principal, is_valid_domain_principal
 from .ports import Repository
 from .types import Actor, EventType, HandlerResult
 
@@ -196,6 +196,7 @@ def resolve_add_column_params(
     validation error (400), never a suggestion" true on BOTH branches, and the
     CR that does get stored carries an id rather than a field key.
     """
+    validate_column_principals(params)  # same branch-independent reason as above
     after = params.get("after")
     if not after:
         return params
@@ -220,6 +221,66 @@ def _after_for_write(sheet: str, after: Any, repo: Repository) -> Any:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Principal validation for the column ACL slots.
+# ---------------------------------------------------------------------------
+#: The slots that feed the APPROVER set. A ``domain:`` principal cannot be
+#: enumerated, so one placed here would confer nothing while looking like a
+#: grant — the granter would believe they had opened the column and the grantee's
+#: writes would keep degrading to Change Requests. Rejecting it loudly is the
+#: only honest option; domains belong in ``readers``, which is a pure membership
+#: test (read, and with it comment + suggest).
+_APPROVER_SLOTS = ("column_owner", "editors")
+
+
+def validate_column_principals(spec: dict[str, Any]) -> None:
+    """Reject a ``domain:`` principal in an approver slot, and a malformed one
+    anywhere. Raises ``ValueError`` (400 at both API seams)."""
+    for slot in _APPROVER_SLOTS:
+        value = spec.get(slot)
+        candidates = value if isinstance(value, list) else [value]
+        for principal in candidates:
+            if is_domain_principal(principal):
+                raise ValueError(
+                    f"{slot} cannot be an email domain ({principal!r}): a domain has no "
+                    "enumerable membership, so it cannot own or approve. Put it in "
+                    "'readers' instead — that grants read, and with it commenting and "
+                    "suggesting changes."
+                )
+    if "readers" in spec:
+        readers = spec.get("readers")
+        if readers is not None and not isinstance(readers, list):
+            # A bare string would be stored by ``list(readers)`` one CHARACTER
+            # per reader, and a single-letter "user" can then match a real one.
+            # The shape gate has to reject it, not step over it.
+            raise ValueError("readers must be a list of principals")
+        for principal in readers or []:
+            if is_domain_principal(principal) and not is_valid_domain_principal(principal):
+                raise ValueError(
+                    f"malformed domain principal {principal!r}: expected 'domain:<host>' "
+                    "(e.g. 'domain:example.com') with no '@', no port and no local part"
+                )
+
+
+def resolve_column_principal_params(
+    params: dict[str, Any], repo: Repository, actor: Actor
+) -> dict[str, Any]:
+    """Pre-pass: refuse a principal no slot can honor, on EVERY branch.
+
+    Validating inside the handler only covered the authorized branch. An
+    unauthorized caller's bad principal was stored in a Change Request instead,
+    and approving it then raised from the handler — 400 on every retry, the CR
+    pinned in PROPOSED with Reject as the only exit, and (because a domain
+    reader can suggest) anyone in the domain able to plant one. Same trap
+    ``resolve_add_column_params`` documents; the fix belongs in the same place.
+    """
+    validate_column_principals(params)
+    patch = params.get("patch")
+    if isinstance(patch, dict):
+        validate_column_principals(patch)
+    return params
+
+
 def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
     spec = {
@@ -232,6 +293,8 @@ def add_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -
         # Position, resolved to a column id (None => append last).
         "after": _after_for_write(sheet, params.get("after"), repo),
     }
+    validate_column_principals(params)  # spec drops editors/readers; params has them
+    validate_column_principals(spec)
     column = repo.create_column(sheet, spec)
     return HandlerResult(
         event_payload={"op": "add", "column": column, "field": params["field"]},
@@ -337,6 +400,7 @@ def update_column_handler(params: dict[str, Any], actor: Actor, repo: Repository
     sheet = params["sheet"]
     column = repo.get_column(sheet, params["column"])
     patch = dict(params.get("patch") or {})
+    validate_column_principals(patch)
     if "options" in patch:
         # Same normalization as add: the ONE write path keeps stored options canonical.
         patch["options"] = normalize_select_options(patch["options"])
@@ -393,6 +457,7 @@ def revoke_delegation_handler(params: dict[str, Any], actor: Actor, repo: Reposi
 def grant_column_handler(params: dict[str, Any], actor: Actor, repo: Repository) -> HandlerResult:
     sheet = params["sheet"]
     column = repo.get_column(sheet, params["column"])
+    validate_column_principals(params)
     repo.set_column_authority(
         sheet,
         column.name,

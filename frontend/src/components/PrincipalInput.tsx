@@ -1,7 +1,13 @@
-// PrincipalInput — the ONE control for entering an ACL principal (a column owner
-// or editor). A principal is either a concrete user (an email) OR a role
-// reference of the form `role:<key>` that the server expands to the role's
-// current grantees at check time (see arbor.core.acl `_expand_principals`).
+// PrincipalInput — the ONE control for entering an ACL principal. A principal is
+// a concrete user (an email), a role reference `role:<key>` that the server
+// expands to the role's current grantees at check time, or — where the slot
+// allows it — a whole email domain `domain:<host>` (see arbor.core.acl).
+//
+// Domain mode is opt-in per slot (`allowDomain`) and NOT offered for owner or
+// editor, because a domain has no enumerable membership: it can answer "is this
+// actor in?" but can never be listed as an approver or notified. The server
+// rejects one in those slots, and offering a control that always errors would
+// be worse than not offering it.
 //
 // Before this, both spots were a bare text box and the `role:` prefix was an
 // undiscoverable convention. This surfaces the choice explicitly: a User / Role
@@ -19,6 +25,7 @@ export function PrincipalInput({
   testid,
   ariaLabel,
   placeholder = "name@example.com",
+  allowDomain = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -31,19 +38,30 @@ export function PrincipalInput({
   // Mirrored onto whichever control is active so getByLabelText / a11y resolve.
   ariaLabel?: string;
   placeholder?: string;
+  // Offer the Domain tab. Only slots whose check is a pure membership test may
+  // set this — today that means a column's READERS.
+  allowDomain?: boolean;
 }): JSX.Element {
   const isRole = value.startsWith("role:");
-  const [mode, setMode] = useState<"user" | "role">(isRole ? "role" : "user");
+  const isDomain = value.startsWith("domain:");
+  const [mode, setMode] = useState<"user" | "role" | "domain">(
+    isRole ? "role" : isDomain ? "domain" : "user",
+  );
 
-  // Switching kind clears the value so a stale email can't leak into a role slot
-  // (or vice versa); the caller sees the field go empty until re-entered.
+  // Switching kind clears the value so a stale email can't leak into a role or
+  // domain slot (or vice versa); the caller sees the field go empty until
+  // re-entered.
   const toUser = () => {
     setMode("user");
-    if (isRole) onChange("");
+    if (isRole || isDomain) onChange("");
   };
   const toRole = () => {
     setMode("role");
     if (!isRole) onChange("");
+  };
+  const toDomain = () => {
+    setMode("domain");
+    if (!isDomain) onChange("");
   };
 
   return (
@@ -67,14 +85,39 @@ export function PrincipalInput({
         >
           Role
         </button>
+        {allowDomain && (
+          <button
+            type="button"
+            className={`arbor-principal-tab${mode === "domain" ? " is-active" : ""}`}
+            aria-pressed={mode === "domain"}
+            data-testid={testid ? `${testid}-mode-domain` : undefined}
+            onClick={toDomain}
+          >
+            Domain
+          </button>
+        )}
       </div>
-      {mode === "user" ? (
+      {mode === "domain" ? (
+        <input
+          className="arbor-principal-input"
+          data-testid={testid ? `${testid}-domain` : undefined}
+          aria-label={ariaLabel}
+          placeholder="example.com"
+          value={isDomain ? value.slice("domain:".length) : ""}
+          // The stored shape carries the prefix; the box shows only the host so
+          // nobody has to know the convention (and cannot half-type it).
+          onChange={(e) => {
+            const host = e.target.value.trim();
+            onChange(host ? `domain:${host}` : "");
+          }}
+        />
+      ) : mode === "user" ? (
         <input
           className="arbor-principal-input"
           data-testid={testid}
           aria-label={ariaLabel}
           placeholder={placeholder}
-          value={isRole ? "" : value}
+          value={isRole || isDomain ? "" : value}
           onChange={(e) => onChange(e.target.value)}
         />
       ) : (

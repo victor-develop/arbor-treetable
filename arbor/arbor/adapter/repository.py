@@ -251,6 +251,24 @@ class _CommentView:
     deleted: bool = False
 
 
+def _has_non_user_principal(*groups) -> bool:
+    """Whether any principal in ``groups`` addresses something other than a User.
+
+    ``Tree Column Editor.user`` / ``Tree Column Reader.user`` are Link → User
+    fields, so a ``role:<key>`` or ``domain:<host>`` principal fails the Link
+    check even though ACL addressing stores it as a literal string (the resolver
+    expands or matches it at decision time). The demo seed already had to bypass
+    the check for exactly this reason; the adapter needs the same escape or the
+    capability is unreachable on a bench.
+    """
+    for group in groups:
+        for p in group or []:
+            if isinstance(p, str) and (p.startswith("role:") or p.startswith("domain:")):
+                return True
+    return False
+
+
+
 class FrappeRepository:
     """``Repository`` implemented over the Frappe ORM + NestedSet.
 
@@ -697,6 +715,11 @@ class FrappeRepository:
             doc.append("editors", {"user": u})
         for u in spec.get("readers") or []:
             doc.append("readers", {"user": u})
+        # A role/domain principal is not a User row, so the child Link check has
+        # to be bypassed for it (see _has_non_user_principal). Real-user
+        # editors/readers in the same column keep their Link validation.
+        if _has_non_user_principal(spec.get("editors"), spec.get("readers")):
+            doc.flags.ignore_links = True
         doc.insert(ignore_permissions=True)  # (sheet, field) unique + single-label enforced by DocType
         return doc.name
 
@@ -748,6 +771,8 @@ class FrappeRepository:
             doc.set("readers", [])
             for u in readers:
                 doc.append("readers", {"user": u})
+        if _has_non_user_principal(editors, readers):
+            doc.flags.ignore_links = True  # see create_column
         doc.save(ignore_permissions=True)
 
     def delete_column(self, sheet: str, column: str) -> None:

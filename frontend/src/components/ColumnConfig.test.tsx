@@ -277,3 +277,174 @@ describe("ColumnSettings", () => {
     expect(screen.getByTestId("cs-delete")).toHaveAttribute("data-mode", "direct");
   });
 });
+
+describe("ColumnSettings — read access (Feature 3, first UI for it)", () => {
+  // read_level/readers were server-only until now: the only way to lock a column
+  // down, or open it to a whole company, was the API.
+  const render3 = (over?: { readLevel?: string; readers?: string[]; onUpdate?: () => void }) => {
+    const onUpdate = over?.onUpdate ?? vi.fn();
+    render(
+      <ColumnSettings
+        sheet="S"
+        column={budget}
+        canConfigure
+        canGrant
+        onUpdate={onUpdate}
+        onDelete={() => {}}
+        onGrant={() => {}}
+        initialReadLevel={over?.readLevel}
+        initialReaders={over?.readers}
+      />,
+    );
+    return onUpdate;
+  };
+
+  it("seeds the level from the governance read, not the snapshot", () => {
+    render3({ readLevel: "explicit-readers", readers: ["a@x.com"] });
+    expect(screen.getByTestId("cs-read-level")).toHaveValue("explicit-readers");
+    expect(screen.getByTestId("cs-reader-a@x.com")).toBeInTheDocument();
+  });
+
+  it("shows the readers list only at explicit-readers", () => {
+    // [] not undefined: an approver whose roster is empty, as opposed to a
+    // viewer the server withheld it from (covered in its own describe below).
+    render3({ readLevel: "public", readers: [] });
+    expect(screen.queryByTestId("cs-readers")).toBeNull();
+    fireEvent.change(screen.getByTestId("cs-read-level"), {
+      target: { value: "explicit-readers" },
+    });
+    expect(screen.getByTestId("cs-readers")).toBeInTheDocument();
+  });
+
+  it("adds a whole domain as a reader and dispatches it in the patch", () => {
+    const onUpdate = render3({ readLevel: "explicit-readers", readers: [] });
+    fireEvent.click(screen.getByTestId("cs-reader-draft-mode-domain"));
+    fireEvent.change(screen.getByTestId("cs-reader-draft-domain"), {
+      target: { value: "example.com" },
+    });
+    fireEvent.click(screen.getByTestId("cs-reader-add"));
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith({
+      sheet: "S",
+      column: budget.name,
+      patch: { read_level: "explicit-readers", readers: ["domain:example.com"] },
+    });
+  });
+
+  it("does not add the same reader twice", () => {
+    const onUpdate = render3({ readLevel: "explicit-readers", readers: ["domain:example.com"] });
+    fireEvent.click(screen.getByTestId("cs-reader-draft-mode-domain"));
+    fireEvent.change(screen.getByTestId("cs-reader-draft-domain"), {
+      target: { value: "example.com" },
+    });
+    fireEvent.click(screen.getByTestId("cs-reader-add"));
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ patch: { read_level: "explicit-readers", readers: ["domain:example.com"] } }),
+    );
+  });
+
+  it("removes a reader", () => {
+    const onUpdate = render3({ readLevel: "explicit-readers", readers: ["a@x.com", "domain:x.com"] });
+    fireEvent.click(screen.getByTestId("cs-reader-remove-a@x.com"));
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ patch: { read_level: "explicit-readers", readers: ["domain:x.com"] } }),
+    );
+  });
+
+  it("labels the action as a suggestion for a non-owner", () => {
+    render(
+      <ColumnSettings
+        sheet="S"
+        column={budget}
+        canConfigure={false}
+        canGrant
+        onUpdate={vi.fn()}
+        onDelete={() => {}}
+        onGrant={() => {}}
+        initialReadLevel="public"
+      />,
+    );
+    expect(screen.getByTestId("cs-read-save")).toHaveAttribute("data-mode", "suggest");
+  });
+});
+
+describe("ColumnSettings — a withheld readers roster is never overwritten", () => {
+  // The panel renders for the sheet's structural owner and for an admin too,
+  // but the server sends the roster only to a column approver. Undefined must
+  // not be read as "empty": one Save would then propose wiping everyone's
+  // access, while showing the proposer AND the approver an empty list.
+  const renderWithheld = () => {
+    const onUpdate = vi.fn();
+    render(
+      <ColumnSettings
+        sheet="S"
+        column={budget}
+        canConfigure={false}
+        canGrant
+        onUpdate={onUpdate}
+        onDelete={() => {}}
+        onGrant={() => {}}
+        initialReadLevel="explicit-readers"
+        // no initialReaders: this viewer may configure but not see the roster
+      />,
+    );
+    return onUpdate;
+  };
+
+  it("says so instead of showing an empty list", () => {
+    renderWithheld();
+    expect(screen.getByTestId("cs-readers-withheld")).toBeInTheDocument();
+    expect(screen.queryByTestId("cs-readers")).toBeNull();
+  });
+
+  it("omits readers from the patch entirely", () => {
+    const onUpdate = renderWithheld();
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith({
+      sheet: "S",
+      column: budget.name,
+      patch: { read_level: "explicit-readers" },
+    });
+    const patch = onUpdate.mock.calls[0][0].patch;
+    expect("readers" in patch).toBe(false);
+  });
+
+  it("still lets that viewer change the level", () => {
+    const onUpdate = renderWithheld();
+    fireEvent.change(screen.getByTestId("cs-read-level"), { target: { value: "owner-only" } });
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ patch: { read_level: "owner-only" } }),
+    );
+  });
+
+  it("dedupes a reader case-insensitively", () => {
+    const onUpdate = vi.fn();
+    render(
+      <ColumnSettings
+        sheet="S"
+        column={budget}
+        canConfigure
+        canGrant
+        onUpdate={onUpdate}
+        onDelete={() => {}}
+        onGrant={() => {}}
+        initialReadLevel="explicit-readers"
+        initialReaders={["domain:example.com"]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("cs-reader-draft-mode-domain"));
+    fireEvent.change(screen.getByTestId("cs-reader-draft-domain"), {
+      target: { value: "EXAMPLE.com" },
+    });
+    fireEvent.click(screen.getByTestId("cs-reader-add"));
+    fireEvent.click(screen.getByTestId("cs-read-save"));
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: { read_level: "explicit-readers", readers: ["domain:example.com"] },
+      }),
+    );
+  });
+});

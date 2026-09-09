@@ -373,7 +373,8 @@ def sheet_definition(repo: Repository, sheet: str, actor: Actor) -> dict[str, An
         {
           "sheet": {name, title, structural_owner, label_column, settings},
           "columns": [{name (ID), field, label, type, column_owner, editors,
-                       is_label, options?, can_edit}],   # read-ACL FILTERED
+                       is_label, options?, can_edit, read_level,
+                       readers?}],                       # read-ACL FILTERED
           "process": {enabled, row_scope, rules:[ProcessRuleView...]} | None
         }
 
@@ -387,6 +388,7 @@ def sheet_definition(repo: Repository, sheet: str, actor: Actor) -> dict[str, An
 
     columns = []
     for c in _readable_columns(repo, sheet, actor):
+        can_edit = actor.user in resolve_column_approvers(repo, sheet, c.name)
         entry: dict[str, Any] = {
             "name": c.name,
             "field": c.field,
@@ -395,8 +397,16 @@ def sheet_definition(repo: Repository, sheet: str, actor: Actor) -> dict[str, An
             "column_owner": c.column_owner,
             "editors": list(getattr(c, "editors", []) or []),
             "is_label": bool(c.is_label),
-            "can_edit": actor.user in resolve_column_approvers(repo, sheet, c.name),
+            "can_edit": can_edit,
+            # The read-ACL config, so the Settings panel can actually EDIT it
+            # (it was server-only until now). ``read_level`` is about the reader
+            # themselves and rides along for anyone listed here; the ``readers``
+            # roster is narrower — it names other people, so only an approver,
+            # who needs it to change the list, receives it.
+            "read_level": getattr(c, "read_level", "public") or "public",
         }
+        if can_edit:
+            entry["readers"] = list(getattr(c, "readers", []) or [])
         opts = getattr(c, "options", None)
         if opts is not None:
             entry["options"] = opts
