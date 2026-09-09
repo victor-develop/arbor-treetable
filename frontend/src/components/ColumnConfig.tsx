@@ -228,6 +228,8 @@ export function ColumnSettings({
   onUpdate,
   onDelete,
   onGrant,
+  initialReadLevel,
+  initialReaders,
   roles = [],
 }: {
   sheet: string;
@@ -239,12 +241,29 @@ export function ColumnSettings({
   onGrant: (params: Record<string, unknown>) => void;
   // Site-wide role catalog so an editor can be added as a `role:<key>` principal.
   roles?: RoleView[];
+  // The read-ACL config, from the governance read (getSheetDefinition) rather
+  // than the snapshot: the snapshot deliberately carries no ACL roster, and
+  // `readers` reaches only an approver.
+  initialReadLevel?: string;
+  initialReaders?: string[];
 }): JSX.Element {
   const [label, setLabel] = useState(column.label);
   const [width, setWidth] = useState(column.width ?? 120);
   const [editors, setEditors] = useState<string[]>(column.editors);
   const [editorDraft, setEditorDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Read access (Feature 3). Server-side since forever but never editable from
+  // the UI, so the only way to lock a column down — or open it to a whole
+  // company — was the API. `readers` only bites at explicit-readers.
+  const [readLevel, setReadLevel] = useState(initialReadLevel ?? "public");
+  // The server sends the roster ONLY to an approver, while this panel also
+  // renders for the sheet's structural owner and for an admin. Undefined means
+  // "not mine to see" — which must NOT be read as "empty", or one Save would
+  // file a change that wipes everyone's access while showing the proposer and
+  // the approver an empty list either way.
+  const rosterKnown = initialReaders !== undefined;
+  const [readers, setReaders] = useState<string[]>(initialReaders ?? []);
+  const [readerDraft, setReaderDraft] = useState("");
 
   return (
     <div className="arbor-column-settings" data-testid={`col-settings-${column.name}`}>
@@ -310,6 +329,101 @@ export function ColumnSettings({
             }
           >
             {canConfigure ? "Update editors" : "Suggest editor change"}
+          </button>
+        </section>
+      )}
+
+      {canGrant && (
+        <section data-testid="cs-read-access" className="arbor-cs-read">
+          <span className="arbor-field-label arbor-cs-section-label">Who can read</span>
+          <label className="arbor-field">
+            <select
+              data-testid="cs-read-level"
+              aria-label="Read access"
+              value={readLevel}
+              onChange={(e) => setReadLevel(e.target.value)}
+            >
+              <option value="public">Everyone who can see the sheet</option>
+              <option value="explicit-readers">Only the people I list</option>
+              <option value="owner-only">Only the owner and editors</option>
+            </select>
+          </label>
+
+          {readLevel === "explicit-readers" && !rosterKnown && (
+            <p className="arbor-cs-read-hint" data-testid="cs-readers-withheld" role="note">
+              Only this column&apos;s owner and editors can see or change who is
+              listed. You can still change the level above.
+            </p>
+          )}
+
+          {readLevel === "explicit-readers" && rosterKnown && (
+            <div data-testid="cs-readers">
+              <ul className="arbor-cs-reader-list">
+                {readers.map((r) => (
+                  <li key={r} data-testid={`cs-reader-${r}`}>
+                    <span>{r}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${r}`}
+                      data-testid={`cs-reader-remove-${r}`}
+                      onClick={() => setReaders((rs) => rs.filter((x) => x !== r))}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {/* allowDomain: readers is the one slot whose check is a pure
+                  membership test, so a whole domain can stand in for a list of
+                  people. Read carries commenting and suggesting with it. */}
+              <PrincipalInput
+                value={readerDraft}
+                onChange={setReaderDraft}
+                roles={roles}
+                allowDomain
+                testid="cs-reader-draft"
+                ariaLabel="Add reader"
+                placeholder="add reader"
+              />
+              <button
+                type="button"
+                data-testid="cs-reader-add"
+                onClick={() => {
+                  const next = readerDraft.trim();
+                  // Case-insensitive: the server lowercases a domain when it
+                  // matches, so two spellings of one domain are one grant and
+                  // listing both would just be a confusing duplicate row.
+                  const already = readers.some((r) => r.toLowerCase() === next.toLowerCase());
+                  if (next && !already) setReaders((rs) => [...rs, next]);
+                  setReaderDraft("");
+                }}
+              >
+                + reader
+              </button>
+              <p className="arbor-cs-read-hint">
+                A reader can see this column, comment on its cells, and suggest
+                changes to them. Editing still needs the owner or an editor.
+              </p>
+            </div>
+          )}
+
+          <button
+            type="button"
+            data-testid="cs-read-save"
+            data-mode={canConfigure ? "direct" : "suggest"}
+            onClick={() =>
+              onUpdate({
+                sheet,
+                column: column.name,
+                // Omit `readers` entirely when the roster was withheld: sending
+                // the local [] would replace a list this viewer never saw.
+                patch: rosterKnown
+                  ? { read_level: readLevel, readers }
+                  : { read_level: readLevel },
+              })
+            }
+          >
+            {canConfigure ? "Update read access" : "Suggest read access change"}
           </button>
         </section>
       )}

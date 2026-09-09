@@ -730,7 +730,8 @@ def get_sheet_definition(sheet):
 
     ``GET /api/method/arbor.get_sheet_definition?sheet=…`` →
     ``{kind:"read", data:{sheet:{name,title,structural_owner,label_column,settings},
-    columns:[{name,field,label,type,column_owner,editors,is_label,options?,can_edit}],
+    columns:[{name,field,label,type,column_owner,editors,is_label,options?,can_edit,
+              read_level,readers?}],  # readers only for an approver
     process:{enabled,row_scope,rules:[ProcessRuleView...]}|null}}``. Columns are
     read-ACL FILTERED (a column the viewer cannot read is omitted); the process
     rule labels/keys are redacted per unreadable column, and expected-column owners

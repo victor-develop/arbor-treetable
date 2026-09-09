@@ -210,6 +210,17 @@ The response is a stable envelope:
 - **Two-axis ACL.** Authority is split: *structural* (who owns a branch/row) and
   *column* (who owns a column's values). You may have one, both, or neither on a
   given cell.
+- **Principals.** Wherever a COLUMN's ACL names someone (`column_owner`,
+  `editors`, `readers`) it accepts a user's email, a role reference
+  `role:<key>`, or — for `readers` ONLY — a whole email domain `domain:<host>` (e.g. `domain:example.com`), which covers every
+  user at that domain, including ones who have not signed in yet. A domain is
+  rejected in `column_owner` and `editors`: it has no enumerable membership, so
+  it could never be named as an approver or notified. Granting read to a domain
+  is how you open a column to a whole company — and read carries commenting and
+  suggesting with it, while editing still needs the owner or an editor. The
+  STRUCTURAL axis is different: it compares its owner/grantee string directly,
+  so give it a concrete user — a `role:` or `domain:` there matches nobody and
+  freezes that subtree's structural writes into unapprovable Change Requests.
 - **Mutate-or-suggest.** If you try a write you're not authorized for, it does
   not fail — it becomes a Change Request (`kind: "suggested"`). So prefer just
   attempting the write; fall back to `suggestChange` only when you want to

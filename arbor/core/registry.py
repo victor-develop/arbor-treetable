@@ -643,6 +643,9 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="resolve_column_approvers(column)",
         emits=("COLUMN_CONFIG_UPDATED",),
         handler=handlers.update_column_handler,
+        # A principal no slot can honor is a 400 on BOTH branches, so it cannot
+        # be filed as a Change Request whose approval could only ever raise.
+        resolve_params=handlers.resolve_column_principal_params,
     ),
     Capability(
         id="deleteColumn",
@@ -789,6 +792,7 @@ _CAPABILITIES: tuple[Capability, ...] = (
         acl_rule="current_column_owner_or_sheet_structural_owner",
         emits=("COLUMN_CONFIG_UPDATED",),
         handler=handlers.grant_column_handler,
+        resolve_params=handlers.resolve_column_principal_params,
     ),
     Capability(
         id="internalReset",

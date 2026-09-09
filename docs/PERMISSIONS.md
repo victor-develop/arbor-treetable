@@ -4,6 +4,42 @@
 > [`ARCHITECTURE.md`](./ARCHITECTURE.md) §2 and [`CAPABILITIES.md`](./CAPABILITIES.md).
 > This is the canonical reference for ACL test cases.
 
+## Principal shapes
+
+Wherever the column ACL names someone (`column_owner`, `editors`, `readers`) the
+value is a **principal**, and three shapes resolve:
+
+| shape | example | resolves to | allowed in |
+|---|---|---|---|
+| user | `victor@example.com` | that user | every slot |
+| role | `role:ops` | the role's current grantees (expanded at check time) | every slot |
+| domain | `domain:example.com` | every user whose email is at that domain | **`readers` only** |
+
+A domain is a **membership test, never an expansion**. Membership is open-ended:
+Arbor provisions a user on their first SSO login, so a colleague who has never
+signed in is already at the domain but is not yet a row anywhere. That is also
+why it is confined to `readers` — the owner/editor slots feed the *approver set*,
+and an approver you cannot enumerate is one nobody can name or notify. A domain
+written into an approver slot is refused at the write path (400) rather than
+silently ignored, because a grant that looks applied but confers nothing is the
+worse failure.
+
+Matching is exact and case-insensitive on both sides: `domain:example.com`
+admits `Someone@EXAMPLE.com`, and admits neither `x@evil-example.com` (a suffix
+match would) nor `x@corp.example.com` (a subdomain is a different organization
+boundary). A user with no `@` is never at a domain.
+
+**What a domain reader can do.** Read is the only grant, and it is enough for
+three things, because the rest of the model already keys off it:
+
+- **read** the column's values (`explicit-readers` + the domain in `readers`);
+- **comment** on its cells — `can_add_comment` *is* `can_read_column` ("you may
+  discuss any cell you can read");
+- **suggest changes** — an unauthorized write is not refused, it becomes a
+  Change Request routed to the column owner.
+
+Editing directly still requires the owner or an editor.
+
 ## 1. The resolver (`arbor.acl.resolver`)
 
 Two **orthogonal** axes, resolved independently, composed at the cell level. There is

@@ -11,7 +11,9 @@ Axis 2 (column): horizontal, field-scoped — ``column_owner`` + ``editors``.
 
 from __future__ import annotations
 
-from typing import Optional
+import re
+
+from typing import Any, Optional
 
 from .ports import ColumnView, Repository
 from .types import Actor, Authority, Axis, Capability
@@ -24,11 +26,84 @@ from .types import Actor, Authority, Axis, Capability
 #: names). A plain principal expands to itself.
 ROLE_PRINCIPAL_PREFIX = "role:"
 
+#: A reader principal of the form ``domain:example.com`` addresses EVERY user
+#: whose email is at that domain. Unlike a role it cannot be expanded to a user
+#: set: membership is open-ended (Arbor provisions a user on their first SSO
+#: login, so tomorrow's colleague is already a member of the domain but is not
+#: yet a row anywhere). It is therefore a MEMBERSHIP TEST only, which is also
+#: why it is accepted for READERS alone — the owner/editor slots feed the
+#: approver set, and an approver you cannot enumerate is an approver nobody can
+#: notify or name (see ``_expand_principals``).
+DOMAIN_PRINCIPAL_PREFIX = "domain:"
+
+#: Deliberately strict: at least two dot-separated labels, letters/digits/hyphen
+#: only, no leading "@" and no local part. A typo that silently matches nobody
+#: is the failure mode this guards against — ``domain:victor@x.com`` and
+#: ``domain:@x.com`` are rejected at the write path rather than quietly never
+#: granting anything.
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+
+def is_domain_principal(principal: Any) -> bool:
+    return isinstance(principal, str) and principal.startswith(DOMAIN_PRINCIPAL_PREFIX)
+
+
+def domain_of_principal(principal: str) -> str:
+    """The normalized domain a ``domain:`` principal addresses (lowercased)."""
+    return principal[len(DOMAIN_PRINCIPAL_PREFIX):].strip().lower()
+
+
+def is_valid_domain_principal(principal: str) -> bool:
+    return bool(_DOMAIN_RE.match(domain_of_principal(principal)))
+
+
+def user_is_at_domain(user: str, domain: str) -> bool:
+    """Whether ``user``'s email sits at exactly ``domain``.
+
+    Exact, not suffix: ``domain:aftership.com`` must NOT admit
+    ``someone@evil-aftership.com`` (a suffix match would) nor
+    ``someone@corp.aftership.com`` (a subdomain is a different organization
+    boundary, and admitting it silently widens the grant).
+    """
+    if not isinstance(user, str) or "@" not in user:
+        return False
+    return user.rsplit("@", 1)[1].strip().lower() == domain
+
+
+def principal_matches(repo: Repository, principal: str, user: str) -> bool:
+    """Whether ``user`` is covered by one principal.
+
+    The membership half of the principal contract, and the only half a
+    ``domain:`` principal can answer. Plain principals and roles answer it the
+    same way expansion would, so callers that only need "is this actor in?" can
+    use this uniformly.
+    """
+    if not isinstance(principal, str) or not principal:
+        return False
+    if principal.startswith(ROLE_PRINCIPAL_PREFIX):
+        return user in set(repo.list_active_role_grantees(principal[len(ROLE_PRINCIPAL_PREFIX):]))
+    if is_domain_principal(principal):
+        return user_is_at_domain(user, domain_of_principal(principal))
+    return principal == user
+
+
+def any_principal_matches(repo: Repository, principals, user: str) -> bool:
+    return any(principal_matches(repo, p, user) for p in (principals or []))
+
 
 def _expand_principal(repo: Repository, principal: str) -> set[str]:
     if isinstance(principal, str) and principal.startswith(ROLE_PRINCIPAL_PREFIX):
         role = principal[len(ROLE_PRINCIPAL_PREFIX):]
         return set(repo.list_active_role_grantees(role))
+    if is_domain_principal(principal):
+        # Not enumerable (see DOMAIN_PRINCIPAL_PREFIX), so there is no user set
+        # to contribute. Dropping it rather than yielding the raw string keeps a
+        # non-user out of the approver SET; note that what actually keeps a
+        # domain off the "who approves" and notification surfaces is the write
+        # path refusing it in owner/editors — those read col.column_owner
+        # directly, not this expansion. A legacy row that already carries one
+        # therefore grants nothing, which is the safe direction.
+        return set()
     return {principal} if principal else set()
 
 
@@ -90,7 +165,9 @@ def can_read_column(
       4. dispatch on ``col.read_level``:
            ``public``           -> True
            ``owner-only``       -> False  (only non-approvers reach here)
-           ``explicit-readers`` -> ``actor.user in col.readers``
+           ``explicit-readers`` -> ``actor`` matches one of ``col.readers``
+                                   (a user, a ``role:<key>``, or a whole
+                                   ``domain:<host>``)
     Any unknown/legacy level coalesces to ``public``.
     """
     if getattr(actor, "is_admin", False):
@@ -107,7 +184,9 @@ def can_read_column(
     if level == "public":
         return True
     if level == "explicit-readers":
-        return actor.user in _expand_principals(repo, col.readers or [])
+        # Membership, not expansion: a reader may be a plain user, a role, or a
+        # whole email domain, and the last of those has no user set to expand.
+        return any_principal_matches(repo, col.readers or [], actor.user)
     # owner-only (and any unknown level treated conservatively as owner-only here,
     # because public/explicit are handled above): non-approvers are denied.
     if level == "owner-only":

@@ -456,6 +456,12 @@ export type SheetDefinitionColumn = {
   options?: SelectOptions | null;
   // ACL hint — is the viewer one of this column's approvers (owner or editor)?
   can_edit: boolean;
+  // Read-ACL config. `read_level` is about the viewer themselves so it always
+  // rides along; `readers` names OTHER people, so the server sends it only to
+  // an approver (the one who can change the list). A reader may be a user, a
+  // `role:<key>`, or a whole `domain:<host>`.
+  read_level?: string;
+  readers?: string[];
 };
 
 // The cheap schema/config (governance) READ for a sheet (arbor.get_sheet_definition

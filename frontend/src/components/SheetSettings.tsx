@@ -228,6 +228,10 @@ export function SheetSettings({
                       <ColumnSettings
                         sheet={sheet}
                         column={col}
+                        initialReadLevel={
+                          def.columns.find((c) => c.name === col.name)?.read_level
+                        }
+                        initialReaders={def.columns.find((c) => c.name === col.name)?.readers}
                         canConfigure={col.can_edit}
                         // The current column owner OR the sheet's structural owner may re-grant.
                         canGrant={col.can_edit || isOwner}
